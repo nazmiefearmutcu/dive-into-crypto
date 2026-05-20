@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "Trading Bot Dashboard",
+      "runtimeExecutable": "/Library/Frameworks/Python.framework/Versions/3.13/bin/python3",
+      "runtimeArgs": ["scripts/run_dashboard.py", "--no-supervisor"],
+      "port": 8080
+    }
+  ]
+}

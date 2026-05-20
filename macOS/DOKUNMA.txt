@@ -1,0 +1,11 @@
+==============================
+  TRADING BOT V1 (TBV1)
+  YEDEK KOPYA - DOKUNMA
+==============================
+
+Bu klasor Trading Bot V1'in son halinin degistirilmemesi gereken yedek kopyasidir.
+Yedekleme tarihi: 2026-04-12
+Kaynak: /Users/nazmi/Desktop/Projeler/proje/trading_bot
+
+Bu klasordeki HICBIR dosya degistirilmemelidir.
+Tum yeni gelistirmeler trading_bot/ klasorunde (TBV2) yapilmaktadir.

@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% block title_extra %} - Sinyaller{% endblock %}
+
+{% block content %}
+{% set s = status or {} %}
+{% set decision = s.get("latest_decision") or {} %}
+{% set votes = s.get("indicator_votes", []) %}
+{% set dist = s.get("signal_distribution") or {} %}
+{% set details = s.get("score_details", []) %}
+
+<div class="page-header">
+    <h1>Sinyaller ve İndikatör Detayları</h1>
+    <span class="update-time" id="last-update">Son güncelleme: {{ time_ago(s.get("last_update", "")) }}</span>
+</div>
+
+<!-- Consensus Summary -->
+<div class="card">
+    <h3>Konsensüs Sonucu</h3>
+    <div class="grid grid-4">
+        <div class="metric-box">
+            <span class="label">Son Sinyal</span>
+            <span class="signal-badge signal-{{ (decision.get('signal', 'neutral') | lower) }}">
+                {{ decision.get("signal", "N/A") }}
+            </span>
+        </div>
+        <div class="metric-box">
+            <span class="label">Güven</span>
+            <div class="big-number">{{ decision.get("confidence", 0) }}%</div>
+            <div class="progress-bar">
+                <div class="progress-fill" style="width: {{ decision.get('confidence', 0) }}%"></div>
+            </div>
+        </div>
+        <div class="metric-box">
+            <span class="label">Risk Seviyesi</span>
+            <span class="risk-badge risk-{{ (decision.get('risk_level', 'n/a') | lower) }}">
+                {{ decision.get("risk_level", "N/A") }}
+            </span>
+        </div>
+        <div class="metric-box">
+            <span class="label">Ağırlıklı Skor</span>
+            <div class="big-number {{ 'positive' if (decision.get('weighted_score', 0) or 0) > 0 else 'negative' if (decision.get('weighted_score', 0) or 0) < 0 else '' }}">
+                {{ "%.4f" | format(decision.get("weighted_score", 0) or 0) }}
+            </div>
+        </div>
+    </div>
+    <div class="grid grid-2" style="margin-top: 12px;">
+        <div>
+            <span class="label">Aksiyon</span>
+            <span class="value">{{ decision.get("action", "N/A") }}</span>
+        </div>
+        <div>
+            <span class="label">İşlem Yapılsın mı</span>
+            <span class="value">{{ "Evet" if decision.get("should_trade") else "Hayır" }}</span>
+        </div>
+    </div>
+    {% if decision.get("reason") %}
+    <div class="reason-text" style="margin-top: 8px;">{{ decision.get("reason", "") }}</div>
+    {% endif %}
+</div>
+
+<!-- Signal Distribution Bar -->
+<div class="card">
+    <h3>Sinyal Dağılımı</h3>
+    <div class="dist-bar">
+        {% set total = (dist.get("buy", 0) + dist.get("sell", 0) + dist.get("neutral", 0)) or 1 %}
+        <div class="dist-segment dist-buy" style="width: {{ (dist.get('buy', 0) / total * 100) | int }}%">
+            BUY {{ dist.get("buy", 0) }}
+        </div>
+        <div class="dist-segment dist-neutral" style="width: {{ (dist.get('neutral', 0) / total * 100) | int }}%">
+            NEUTRAL {{ dist.get("neutral", 0) }}
+        </div>
+        <div class="dist-segment dist-sell" style="width: {{ (dist.get('sell', 0) / total * 100) | int }}%">
+            SELL {{ dist.get("sell", 0) }}
+        </div>
+    </div>
+</div>
+
+<!-- Indicator Table -->
+<div class="card">
+    <h3>İndikatör Detayları ({{ votes | length }})</h3>
+    {% if votes %}
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>İndikatör</th>
+                    <th>Sinyal</th>
+                    <th>Skor</th>
+                    <th>Ağırlık</th>
+                    <th>Ağırlıklı Skor</th>
+                    <th>Sebep</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for v in votes %}
+                {% set detail = {} %}
+                {% for d in details %}
+                    {% if d.get("name") == v.get("name") %}
+                        {% set _ = detail.update(d) %}
+                    {% endif %}
+                {% endfor %}
+                <tr>
+                    <td class="mono">{{ v.get("name", "N/A") }}</td>
+                    <td>
+                        <span class="signal-badge signal-{{ v.get('signal', 'NEUTRAL') | lower }}">
+                            {{ v.get("signal", "N/A") }}
+                        </span>
+                    </td>
+                    <td class="mono {{ 'positive' if v.get('score', 0) > 0 else 'negative' if v.get('score', 0) < 0 else '' }}">
+                        {{ "%+d" | format(v.get("score", 0)) }}
+                    </td>
+                    <td class="mono">{{ "%.1f" | format(detail.get("weight", 0)) }}</td>
+                    <td class="mono {{ 'positive' if (detail.get('weighted_score', 0) or 0) > 0 else 'negative' if (detail.get('weighted_score', 0) or 0) < 0 else '' }}">
+                        {{ "%+.2f" | format(detail.get("weighted_score", 0) or 0) }}
+                    </td>
+                    <td class="reason-cell">{{ v.get("reason", "")[:60] }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state">İndikatör verisi yok. İlk bot döngüsü bekleniyor.</div>
+    {% endif %}
+</div>
+
+{% endblock %}

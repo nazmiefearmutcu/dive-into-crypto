@@ -1,0 +1,180 @@
+{% extends "base.html" %}
+{% block title_extra %} - Performans{% endblock %}
+
+{% block content %}
+{% set s = status or {} %}
+{% set perf = s.get("performance") or {} %}
+{% set history = s.get("trade_history", []) %}
+
+<div class="page-header">
+    <h1>Performans Özeti</h1>
+    <span class="update-time" id="last-update">Son güncelleme: {{ time_ago(s.get("last_update", "")) }}</span>
+</div>
+
+<!-- Key Metrics -->
+<div class="grid grid-4">
+    <div class="card metric-box">
+        <span class="label">Toplam İşlem</span>
+        <div class="big-number">{{ perf.get("total_trades", 0) }}</div>
+    </div>
+    <div class="card metric-box">
+        <span class="label">Kazanç / Kayıp</span>
+        <div class="big-number">{{ perf.get("wins", 0) }} / {{ perf.get("losses", 0) }}</div>
+    </div>
+    <div class="card metric-box">
+        <span class="label">Kazanma Oranı</span>
+        <div class="big-number">{{ perf.get("win_rate", 0) }}%</div>
+    </div>
+    <div class="card metric-box">
+        <span class="label">Toplam PnL</span>
+        <div class="big-number {{ 'positive' if perf.get('total_pnl', 0) >= 0 else 'negative' }}">
+            ${{ perf.get("total_pnl", 0) | price }}
+        </div>
+    </div>
+</div>
+
+<!-- Detailed Metrics -->
+{% if perf.get("total_trades", 0) > 0 %}
+<div class="grid grid-3">
+    <div class="card">
+        <h3>PnL Detayları</h3>
+        <div class="metric-row">
+            <span>Ortalama PnL:</span>
+            <span class="{{ 'positive' if perf.get('avg_pnl', 0) >= 0 else 'negative' }}">
+                ${{ perf.get("avg_pnl", 0) | price }}
+            </span>
+        </div>
+        <div class="metric-row">
+            <span>En İyi İşlem:</span>
+            <span class="positive">${{ perf.get("best_trade", 0) | price }}</span>
+        </div>
+        <div class="metric-row">
+            <span>En Kötü İşlem:</span>
+            <span class="negative">${{ perf.get("worst_trade", 0) | price }}</span>
+        </div>
+        <div class="metric-row">
+            <span>Maks. Düşüş:</span>
+            <span class="negative">${{ perf.get("max_drawdown", 0) | price }}</span>
+        </div>
+    </div>
+    <div class="card">
+        <h3>Ortalamalar</h3>
+        <div class="metric-row">
+            <span>Ort. Kazanç:</span>
+            <span class="positive">${{ perf.get("avg_win", 0) | price }}</span>
+        </div>
+        <div class="metric-row">
+            <span>Ort. Kayıp:</span>
+            <span class="negative">${{ perf.get("avg_loss", 0) | price }}</span>
+        </div>
+        <div class="metric-row">
+            <span>Kâr Faktörü:</span>
+            <span>{{ "%.2f" | format(perf.get("profit_factor", 0)) }}</span>
+        </div>
+    </div>
+    <div class="card">
+        <h3>Hesap</h3>
+        <div class="metric-row">
+            <span>Bakiye:</span>
+            <span>${{ s.get("balance", 0) | price }}</span>
+        </div>
+        <div class="metric-row">
+            <span>Günlük PnL:</span>
+            <span class="{{ 'positive' if s.get('daily_pnl', 0) >= 0 else 'negative' }}">
+                ${{ s.get("daily_pnl", 0) | price }}
+            </span>
+        </div>
+        <div class="metric-row">
+            <span>Gerçekleşmemiş:</span>
+            <span class="{{ 'positive' if s.get('unrealized_pnl', 0) >= 0 else 'negative' }}">
+                ${{ s.get("unrealized_pnl", 0) | price }}
+            </span>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Daily Summary Table -->
+<div class="card">
+    <h3>Günlük Özet</h3>
+    {% if daily_summaries %}
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Tarih</th>
+                    <th>İşlemler</th>
+                    <th>Kazanç</th>
+                    <th>Kayıp</th>
+                    <th>Kazanma Oranı</th>
+                    <th>PnL</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for d in daily_summaries | reverse %}
+                <tr>
+                    <td class="mono">{{ d.date }}</td>
+                    <td>{{ d.trades }}</td>
+                    <td class="positive">{{ d.wins }}</td>
+                    <td class="negative">{{ d.losses }}</td>
+                    <td>{{ d.win_rate }}%</td>
+                    <td class="{{ 'positive' if d.pnl >= 0 else 'negative' }}">
+                        ${{ d.pnl | price }}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state">Henüz günlük veri yok</div>
+    {% endif %}
+</div>
+
+<!-- Equity Curve (text-based) -->
+{% if history %}
+<div class="card">
+    <h3>İşlem Bazlı PnL</h3>
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Sembol</th>
+                    <th>Yön</th>
+                    <th>PnL</th>
+                    <th>Kümülatif</th>
+                    <th>Grafik</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% set ns = namespace(cumulative=0.0) %}
+                {% for t in history %}
+                {% set ns.cumulative = ns.cumulative + t.get("pnl", 0) %}
+                <tr>
+                    <td class="mono">{{ loop.index }}</td>
+                    <td>{{ t.get("symbol", "") }}</td>
+                    <td>{{ t.get("side", "") }}</td>
+                    <td class="{{ 'positive' if t.get('pnl', 0) >= 0 else 'negative' }}">
+                        ${{ t.get("pnl", 0) | price }}
+                    </td>
+                    <td class="{{ 'positive' if ns.cumulative >= 0 else 'negative' }}">
+                        ${{ ns.cumulative | price }}
+                    </td>
+                    <td>
+                        {% set pnl_val = t.get("pnl", 0) %}
+                        {% if pnl_val > 0 %}
+                        <span class="pnl-bar pnl-bar-positive" style="width: {{ [pnl_val * 20, 100] | min }}px;"></span>
+                        {% elif pnl_val < 0 %}
+                        <span class="pnl-bar pnl-bar-negative" style="width: {{ [(-pnl_val) * 20, 100] | min }}px;"></span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+{% endblock %}

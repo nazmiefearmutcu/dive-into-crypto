@@ -1,0 +1,236 @@
+{% extends "base.html" %}
+{% block title_extra %} - Pozisyonlar{% endblock %}
+
+{% block content %}
+{% set s = status or {} %}
+{% set positions = s.get("open_positions", []) %}
+{% set history = s.get("trade_history", []) %}
+
+<div class="page-header">
+    <h1>Pozisyonlar ve İşlem Geçmişi</h1>
+    <span class="update-time" id="last-update">Son güncelleme: {{ format_dt(s.get("last_update", "")) }}</span>
+</div>
+
+<!-- Close result toast -->
+<div id="close-toast" class="toast" style="display:none"></div>
+
+<!-- Open Positions — Binance-style cards -->
+<div class="card">
+    <h3>Açık Pozisyonlar ({{ positions | length }})</h3>
+</div>
+
+{% if positions %}
+<div class="pos-grid">
+    {% for p in positions %}
+    {% set pnl = (p.get("unrealized_pnl", 0) or 0) %}
+    {% set pnl_positive = pnl >= 0 %}
+    {% set side = p.get("side", "LONG") %}
+    {% set is_long = side == "LONG" %}
+    {% set entry = p.get("entry_price", 0) %}
+    {% set cur = (p.get("current_price", 0) or 0) %}
+    {% set pnl_pct = ((cur - entry) / entry * 100) if entry > 0 else 0 %}
+    {% if not is_long %}{% set pnl_pct = -pnl_pct %}{% endif %}
+    {% set ts_pct = p.get("trailing_stop") or 0 %}
+    {% set highest = p.get("highest_price") %}
+    {% set is_be = p.get("is_break_even", false) %}
+    {% set sig = p.get("current_signal") %}
+    {% set conf = p.get("current_confidence", 0) or 0 %}
+    {% set warning = p.get("warning") %}
+
+    <div class="pos-card {{ 'pos-card-long' if is_long else 'pos-card-short' }} {{ 'pos-card-warn' if warning }}" id="pos-row-{{ p.get('symbol', '') }}">
+        <!-- Header: Symbol + Side badge + Leverage -->
+        <div class="pos-card-header">
+            <div class="pos-card-title">
+                <span class="pos-symbol">{{ p.get("symbol", "N/A") }}</span>
+                <span class="pos-side-badge {{ 'pos-long' if is_long else 'pos-short' }}">{{ side }}</span>
+                <span class="pos-lev">{{ p.get("leverage", 1) }}x</span>
+            </div>
+            <button class="btn btn-danger btn-sm" onclick="closePosition('{{ p.get('symbol', '') }}')" id="close-btn-{{ p.get('symbol', '') }}">
+                Kapat
+            </button>
+        </div>
+
+        <!-- PnL bar -->
+        <div class="pos-pnl-bar {{ 'pos-pnl-positive' if pnl_positive else 'pos-pnl-negative' }}">
+            <span class="pos-pnl-value">${{ pnl | price }}</span>
+            <span class="pos-pnl-pct">({{ "%+.2f" | format(pnl_pct) }}%)</span>
+        </div>
+
+        <!-- Price info -->
+        <div class="pos-info-grid">
+            <div class="pos-info-item">
+                <span class="pos-info-label">Giriş</span>
+                <span class="pos-info-value">${{ entry | price }}</span>
+            </div>
+            <div class="pos-info-item">
+                <span class="pos-info-label">Güncel</span>
+                <span class="pos-info-value">${{ cur | price }}</span>
+            </div>
+            <div class="pos-info-item">
+                <span class="pos-info-label">Miktar</span>
+                <span class="pos-info-value">{{ "%.4f" | format(p.get("quantity", 0)) }}</span>
+            </div>
+            <div class="pos-info-item">
+                <span class="pos-info-label">Lik. Fiyatı</span>
+                <span class="pos-info-value negative">
+                    {% if p.get("liquidation_price") %}${{ p.get("liquidation_price", 0) | price }}{% else %}—{% endif %}
+                </span>
+            </div>
+        </div>
+
+        <!-- SL / TP / Trailing -->
+        <div class="pos-levels">
+            <div class="pos-level-item pos-level-sl">
+                <span class="pos-level-label">SL</span>
+                <span class="pos-level-value">${{ p.get("stop_loss", 0) | price }}</span>
+            </div>
+            <div class="pos-level-item pos-level-tp">
+                <span class="pos-level-label">TP</span>
+                <span class="pos-level-value">${{ p.get("take_profit", 0) | price }}</span>
+            </div>
+            <div class="pos-level-item pos-level-ts">
+                <span class="pos-level-label">Trailing</span>
+                {% if is_be and highest and ts_pct > 0 %}
+                    {% if is_long %}
+                        {% set ts_price = highest * (1 - ts_pct) %}
+                    {% else %}
+                        {% set ts_price = highest * (1 + ts_pct) %}
+                    {% endif %}
+                    <span class="pos-level-value highlight">${{ ts_price | price }}</span>
+                    <span class="pos-level-sub">{{ "dip" if not is_long else "zirve" }}: ${{ highest | price }}</span>
+                {% else %}
+                    <span class="pos-level-value muted">—</span>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Footer: Signal + Warning + Time -->
+        <div class="pos-card-footer">
+            <div class="pos-signal">
+                {% if sig %}
+                    {% if (is_long and sig in ["SELL", "STRONG_SELL"]) or (not is_long and sig in ["BUY", "STRONG_BUY"]) %}
+                        <span class="warning-badge">⚡ {{ sig }} %{{ conf }}</span>
+                    {% elif (is_long and sig in ["BUY", "STRONG_BUY"]) or (not is_long and sig in ["SELL", "STRONG_SELL"]) %}
+                        <span class="ok-badge">{{ sig }} %{{ conf }}</span>
+                    {% else %}
+                        <span class="signal-badge signal-neutral">{{ sig }} %{{ conf }}</span>
+                    {% endif %}
+                {% endif %}
+
+                {% if warning %}
+                    <span class="warning-badge">⚠ {{ warning | upper }}</span>
+                {% else %}
+                    <span class="ok-badge">Aktif</span>
+                {% endif %}
+            </div>
+            <span class="pos-time muted">{{ format_dt(p.get("open_time", "")) }}</span>
+        </div>
+    </div>
+    {% endfor %}
+
+    <!-- Empty slot placeholder -->
+    <div class="pos-card pos-card-empty">
+        <div class="pos-card-empty-inner">
+            <span class="pos-empty-icon">+</span>
+            <span class="pos-empty-text">Yeni pozisyon bekleniyor</span>
+        </div>
+    </div>
+</div>
+{% else %}
+<div class="pos-grid">
+    <div class="pos-card pos-card-empty">
+        <div class="pos-card-empty-inner">
+            <span class="pos-empty-icon">+</span>
+            <span class="pos-empty-text">Açık pozisyon yok</span>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Trade History -->
+<div class="card" style="margin-top: 24px;">
+    <h3>Son İşlemler ({{ history | length }})</h3>
+    {% if history %}
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Sembol</th>
+                    <th>Yön</th>
+                    <th>Giriş Fiyatı</th>
+                    <th>Çıkış Fiyatı</th>
+                    <th>Miktar</th>
+                    <th>PnL</th>
+                    <th>Komisyon</th>
+                    <th>Sebep</th>
+                    <th>Çıkış Zamanı</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for t in history | reverse %}
+                <tr>
+                    <td>{{ t.get("symbol", "N/A") }}</td>
+                    <td>{{ t.get("side", "N/A") }}</td>
+                    <td>${{ t.get("entry_price", 0) | price }}</td>
+                    <td>${{ (t.get("exit_price", 0) or 0) | price }}</td>
+                    <td>{{ "%.8f" | format(t.get("quantity", 0)) }}</td>
+                    <td class="{{ 'positive' if t.get('pnl', 0) >= 0 else 'negative' }}">
+                        ${{ t.get("pnl", 0) | price }}
+                    </td>
+                    <td>${{ t.get("fee", 0) | price }}</td>
+                    <td class="reason-cell">{{ t.get("reason", "")[:40] }}</td>
+                    <td>{{ format_dt(t.get("exit_time", "")) }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state">Henüz işlem geçmişi yok</div>
+    {% endif %}
+</div>
+
+<script>
+function closePosition(symbol) {
+    var btn = document.getElementById("close-btn-" + symbol);
+    if (!confirm(symbol + " pozisyonunu piyasa fiyatından kapatmak istiyor musunuz?")) return;
+
+    btn.disabled = true;
+    btn.textContent = "Kapatılıyor...";
+
+    var formData = new FormData();
+    formData.append("symbol", symbol);
+
+    fetch("/api/position/close", { method: "POST", body: formData })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            var toast = document.getElementById("close-toast");
+            if (data.status === "closed") {
+                var pnlClass = data.pnl >= 0 ? "toast-success" : "toast-error";
+                toast.className = "toast " + pnlClass;
+                toast.textContent = symbol + " kapatıldı | PnL: $" + data.pnl.toFixed(4) +
+                    " | Exit: $" + data.exit_price.toFixed(2) +
+                    " | Balance: $" + data.balance_after.toFixed(2);
+                toast.style.display = "block";
+                var row = document.getElementById("pos-row-" + symbol);
+                if (row) row.style.opacity = "0.3";
+                setTimeout(function() { window.location.reload(); }, 2000);
+            } else {
+                toast.className = "toast toast-error";
+                toast.textContent = data.error || "Pozisyon kapatılamadı";
+                toast.style.display = "block";
+                btn.disabled = false;
+                btn.textContent = "Kapat";
+            }
+        })
+        .catch(function(err) {
+            var toast = document.getElementById("close-toast");
+            toast.className = "toast toast-error";
+            toast.textContent = "Hata: " + err.message;
+            toast.style.display = "block";
+            btn.disabled = false;
+            btn.textContent = "Kapat";
+        });
+}
+</script>
+{% endblock %}

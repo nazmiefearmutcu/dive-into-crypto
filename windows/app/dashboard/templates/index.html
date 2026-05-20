@@ -1,0 +1,685 @@
+{% extends "base.html" %}
+{% block title_extra %} - Genel Bakış{% endblock %}
+
+{% block content %}
+{% set s = status or {} %}
+{% set decision = s.get("latest_decision") or {} %}
+{% set perf = s.get("performance") or {} %}
+{% set dist = s.get("signal_distribution") or {} %}
+{% set stale = is_stale(s) %}
+
+<div class="page-header">
+    <h1>Genel Bakış</h1>
+    <span class="update-time {% if stale %}stale{% endif %}" id="last-update">
+        Son güncelleme: {{ time_ago(s.get("last_update", "")) }}
+        {% if stale %}<span class="badge badge-red">ESKİ</span>{% endif %}
+    </span>
+</div>
+
+<!-- Bot Control -->
+<div class="bot-control-bar">
+    <div class="bot-control-left">
+        <button id="bot-toggle" class="btn {% if bot_running %}btn-danger{% else %}btn-success{% endif %} btn-lg"
+                onclick="toggleBot()">
+            {% if bot_running %}Botu Durdur{% else %}Botu Başlat{% endif %}
+        </button>
+        <div class="bot-uptime-display">
+            {% if bot_running %}
+            <span class="bot-status-dot dot-running"></span>
+            <span id="bot-uptime-text">Tahmin süresi: <strong id="uptime-value">...</strong></span>
+            {% else %}
+            <span class="bot-status-dot dot-stopped"></span>
+            <span id="bot-uptime-text">Bot durdu</span>
+            {% endif %}
+        </div>
+    </div>
+    <div class="risk-selector">
+        <span class="risk-label">Risk:</span>
+        <div class="risk-buttons" id="risk-buttons">
+            {% for key, preset in risk_presets.items() %}
+            <button class="risk-btn risk-btn-{{ key }} {% if risk_level == key %}active{% endif %}"
+                    onclick="setRisk('{{ key }}')" title="{{ preset.label }}&#10;Bakiye %{{ (preset.risk_per_trade * 100)|int }} | Min Güven %{{ preset.confidence_threshold }}">
+                {{ preset.label }}
+            </button>
+            {% endfor %}
+        </div>
+    </div>
+    <div class="mode-selector">
+        <span class="mode-label">Mode:</span>
+        <div class="mode-buttons" id="mode-buttons">
+            {% for key, mode in trading_modes.items() %}
+            <button class="mode-btn mode-btn-{{ key }} {% if trading_mode == key %}active{% endif %}"
+                    onclick="setTradingMode('{{ key }}')" title="{{ mode.label }}&#10;{{ mode.desc }}&#10;SL %{{ (mode.stop_loss_pct * 100)|round(1) }} | TP %{{ (mode.take_profit_pct * 100)|round(1) }}">
+                {{ mode.label }}
+            </button>
+            {% endfor %}
+        </div>
+    </div>
+    <div class="dll-selector">
+        <span class="dll-label">Daily Limit:</span>
+        <button id="dll-toggle" class="dll-toggle-btn {% if dll_enabled %}dll-on{% else %}dll-off{% endif %}"
+                onclick="toggleDailyLossLimit()" title="Günlük kayıp limiti: %{{ (dll_pct * 100)|round(1) }}">
+            {% if dll_enabled %}ON %{{ (dll_pct * 100)|round(1) }}{% else %}OFF{% endif %}
+        </button>
+    </div>
+    <div class="dll-selector">
+        <span class="dll-label">Oto-Tarama:</span>
+        <button id="autoscan-toggle" class="dll-toggle-btn {% if auto_scan_enabled %}dll-on{% else %}dll-off{% endif %}"
+                onclick="toggleAutoScan()" title="Otomatik piyasa taramasi">
+            {% if auto_scan_enabled %}ON{% else %}OFF{% endif %}
+        </button>
+    </div>
+    <div class="dll-selector">
+        <span class="dll-label">Oto-Secim:</span>
+        <button id="autoselect-toggle" class="dll-toggle-btn {% if auto_select_enabled %}dll-on{% else %}dll-off{% endif %}"
+                onclick="toggleAutoSelect()" title="Otomatik coin secimi">
+            {% if auto_select_enabled %}ON{% else %}OFF{% endif %}
+        </button>
+    </div>
+    <div class="dll-selector">
+        <span class="dll-label">Uyari:</span>
+        <button id="alert-toggle" class="dll-toggle-btn dll-on"
+                onclick="toggleAlertSound()" title="Ters sinyal uyari sesi">
+            ON
+        </button>
+        <button class="btn btn-sm" style="margin-left:4px;padding:3px 8px;font-size:11px;background:var(--purple);color:#fff;border:none;border-radius:4px;cursor:pointer"
+                onclick="testAlert()">Test</button>
+    </div>
+</div>
+<div id="risk-toast" class="toast" style="display:none"></div>
+<div id="mode-toast" class="toast" style="display:none"></div>
+<div id="dll-toast" class="toast" style="display:none"></div>
+
+<!-- Bot Status Bar -->
+<div class="status-bar">
+    <div class="status-item">
+        <span class="label">Durum</span>
+        {% if bot_running %}
+        <span class="value status-running">ÇALIŞIYOR</span>
+        {% else %}
+        <span class="value status-stopped">DURDU</span>
+        {% endif %}
+    </div>
+    <div class="status-item">
+        <span class="label">Mod</span>
+        <span class="value">{{ s.get("mode", "N/A") | upper }}</span>
+    </div>
+    <div class="status-item">
+        <span class="label">Piyasa</span>
+        <span class="value">{{ s.get("market_type", "N/A") }}</span>
+    </div>
+    <div class="status-item">
+        <span class="label">Zaman Dilimi</span>
+        <span class="value">{{ s.get("timeframe", "N/A") }}</span>
+    </div>
+    <div class="status-item">
+        <span class="label">Sembol</span>
+        <span class="value highlight" id="live-symbol">{{ s.get("active_symbol", "N/A") }}</span>
+    </div>
+    <div class="status-item">
+        <span class="label">Fiyat</span>
+        <span class="value" id="live-price">${{ (s.get("current_price", 0) or 0) | price }}</span>
+    </div>
+    <div class="status-item">
+        <span class="label">Kaldıraç</span>
+        <span class="value highlight" id="live-leverage">{{ decision.get("leverage", 1) }}x</span>
+    </div>
+    <div class="status-item">
+        <span class="label">Döngü</span>
+        <span class="value" id="live-cycle">#{{ s.get("cycle_count", 0) }}</span>
+    </div>
+</div>
+
+<!-- Alert Popup Overlay -->
+<div id="alert-overlay" class="alert-overlay" style="display:none">
+    <div class="alert-popup">
+        <div class="alert-icon">&#9888;</div>
+        <div class="alert-title">TERS SINYAL UYARISI</div>
+        <div id="alert-detail" class="alert-detail"></div>
+        <button id="alert-dismiss" class="btn btn-lg alert-dismiss-btn" onclick="dismissAlert()">Buradayim</button>
+    </div>
+</div>
+
+<!-- Live Multi-TF Signals for Active Coin -->
+<div class="card" id="live-tf-signals-card">
+    <div class="scanner-header">
+        <h3 id="live-tf-title">Canli Zaman Dilimi Guvenleri</h3>
+        <span id="live-tf-updated" class="muted"></span>
+    </div>
+    <div id="live-tf-grid" class="live-tf-grid">
+        <div class="empty-state" style="padding:12px;">Veri bekleniyor...</div>
+    </div>
+</div>
+
+<!-- Balance & PnL -->
+<div class="grid grid-3">
+    <div class="card">
+        <h3>Bakiye</h3>
+        <div class="big-number" id="live-balance">${{ s.get("balance", 0) | price }}</div>
+        <div class="sub-text">Günlük Başlangıç: ${{ s.get("daily_start_balance", 0) | price }}</div>
+    </div>
+    <div class="card">
+        <h3>PnL</h3>
+        <div class="metric-row">
+            <span>Günlük:</span>
+            <span id="live-daily-pnl" class="{{ 'positive' if s.get('daily_pnl', 0) >= 0 else 'negative' }}">
+                ${{ s.get("daily_pnl", 0) | price }}
+            </span>
+        </div>
+        <div class="metric-row">
+            <span>Toplam Gerçekleşen:</span>
+            <span id="live-total-pnl" class="{{ 'positive' if s.get('total_pnl', 0) >= 0 else 'negative' }}">
+                ${{ s.get("total_pnl", 0) | price }}
+            </span>
+        </div>
+        <div class="metric-row">
+            <span>Gerçekleşmemiş:</span>
+            <span id="live-unrealized-pnl" class="{{ 'positive' if s.get('unrealized_pnl', 0) >= 0 else 'negative' }}">
+                ${{ s.get("unrealized_pnl", 0) | price }}
+            </span>
+        </div>
+    </div>
+    <div class="card">
+        <h3>Pozisyonlar</h3>
+        <div class="big-number" id="live-positions">{{ s.get("open_positions_count", 0) }}</div>
+        <div class="sub-text">Açık pozisyon</div>
+    </div>
+</div>
+
+<!-- Latest Decision -->
+<div class="card">
+    <h3>Son Karar</h3>
+    <div class="grid grid-4">
+        <div>
+            <span class="label">Sinyal</span>
+            <span id="live-signal" class="signal-badge signal-{{ (decision.get('signal', 'NEUTRAL') | lower) }}">
+                {{ decision.get("signal", "N/A") }}
+            </span>
+        </div>
+        <div>
+            <span class="label">Güven</span>
+            <span class="value" id="live-confidence">{{ decision.get("confidence", 0) }}%</span>
+            <div class="progress-bar">
+                <div id="live-conf-bar" class="progress-fill" style="width: {{ decision.get('confidence', 0) }}%"></div>
+            </div>
+        </div>
+        <div>
+            <span class="label">Risk Seviyesi</span>
+            <span id="live-risk" class="risk-badge risk-{{ (decision.get('risk_level', 'N/A') | lower) }}">
+                {{ decision.get("risk_level", "N/A") }}
+            </span>
+        </div>
+        <div>
+            <span class="label">Aksiyon</span>
+            <span class="value" id="live-action">{{ decision.get("action", "N/A") }}</span>
+        </div>
+    </div>
+    <div class="reason-text" id="live-reason">{{ decision.get("reason", "") }}</div>
+</div>
+
+<!-- Signal Distribution -->
+<div class="card">
+    <h3>Sinyal Dağılımı</h3>
+    <div class="dist-bar">
+        {% set total = (dist.get("buy", 0) + dist.get("sell", 0) + dist.get("neutral", 0)) or 1 %}
+        <div id="live-dist-buy" class="dist-segment dist-buy" style="width: {{ (dist.get('buy', 0) / total * 100) | int }}%">
+            BUY {{ dist.get("buy", 0) }}
+        </div>
+        <div id="live-dist-neutral" class="dist-segment dist-neutral" style="width: {{ (dist.get('neutral', 0) / total * 100) | int }}%">
+            NEUTRAL {{ dist.get("neutral", 0) }}
+        </div>
+        <div id="live-dist-sell" class="dist-segment dist-sell" style="width: {{ (dist.get('sell', 0) / total * 100) | int }}%">
+            SELL {{ dist.get("sell", 0) }}
+        </div>
+    </div>
+</div>
+
+<!-- Quick Performance -->
+{% if perf and perf.get("total_trades", 0) > 0 %}
+<div class="card">
+    <h3>Performans Özeti</h3>
+    <div class="grid grid-4">
+        <div class="metric-box">
+            <span class="label">İşlemler</span>
+            <span class="value">{{ perf.get("total_trades", 0) }}</span>
+        </div>
+        <div class="metric-box">
+            <span class="label">Kazanma Oranı</span>
+            <span class="value">{{ perf.get("win_rate", 0) }}%</span>
+        </div>
+        <div class="metric-box">
+            <span class="label">Ort. PnL</span>
+            <span class="value {{ 'positive' if perf.get('avg_pnl', 0) >= 0 else 'negative' }}">
+                ${{ perf.get("avg_pnl", 0) | price }}
+            </span>
+        </div>
+        <div class="metric-box">
+            <span class="label">Maks. Düşüş</span>
+            <span class="value negative">${{ perf.get("max_drawdown", 0) | price }}</span>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<script>
+var botStartTime = {% if bot_start_time %}"{{ bot_start_time }}"{% else %}null{% endif %};
+var botRunning = {% if bot_running %}true{% else %}false{% endif %};
+
+function formatUptime(ms) {
+    var totalSec = Math.floor(ms / 1000);
+    var hours = Math.floor(totalSec / 3600);
+    var minutes = Math.floor((totalSec % 3600) / 60);
+    var seconds = totalSec % 60;
+    var parts = [];
+    if (hours > 0) parts.push(hours + " saat");
+    if (minutes > 0) parts.push(minutes + " dakika");
+    if (hours === 0 && minutes === 0) parts.push(seconds + " saniye");
+    return parts.join(" ve ");
+}
+
+function updateUptime() {
+    if (!botRunning || !botStartTime) return;
+    var start = new Date(botStartTime).getTime();
+    var now = new Date().getTime();
+    var diff = now - start;
+    var el = document.getElementById("uptime-value");
+    if (el) el.textContent = formatUptime(diff);
+}
+
+function toggleBot() {
+    var btn = document.getElementById("bot-toggle");
+    btn.disabled = true;
+    btn.textContent = botRunning ? "Durduruluyor..." : "Başlatılıyor...";
+
+    var url = botRunning ? "/api/bot/stop" : "/api/bot/start";
+    fetch(url, { method: "POST" })
+        .then(function(r) { return r.json(); })
+        .then(function() { window.location.reload(); })
+        .catch(function() { window.location.reload(); });
+}
+
+if (botRunning && botStartTime) {
+    updateUptime();
+    setInterval(updateUptime, 1000);
+}
+
+function setRisk(level) {
+    var btns = document.querySelectorAll(".risk-btn");
+    btns.forEach(function(b) { b.classList.remove("active"); b.disabled = true; });
+
+    var formData = new FormData();
+    formData.append("level", level);
+
+    fetch("/api/risk-level", { method: "POST", body: formData })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            var toast = document.getElementById("risk-toast");
+            if (data.status === "ok") {
+                toast.className = "toast toast-success";
+                toast.textContent = "Risk: " + data.label +
+                    " | Bakiye %" + (data.applied.risk_per_trade * 100).toFixed(0) +
+                    " | Min Güven %" + data.applied.confidence_threshold;
+                toast.style.display = "block";
+                // Highlight active
+                btns.forEach(function(b) { b.disabled = false; });
+                var active = document.querySelector(".risk-btn-" + level);
+                if (active) active.classList.add("active");
+                setTimeout(function() { toast.style.display = "none"; }, 4000);
+            } else {
+                toast.className = "toast toast-error";
+                toast.textContent = data.error || "Failed";
+                toast.style.display = "block";
+                btns.forEach(function(b) { b.disabled = false; });
+            }
+        })
+        .catch(function() {
+            btns.forEach(function(b) { b.disabled = false; });
+        });
+}
+
+function setTradingMode(mode) {
+    var btns = document.querySelectorAll(".mode-btn");
+    btns.forEach(function(b) { b.classList.remove("active"); b.disabled = true; });
+
+    var formData = new FormData();
+    formData.append("mode", mode);
+
+    fetch("/api/trading-mode", { method: "POST", body: formData })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            var toast = document.getElementById("mode-toast");
+            if (data.status === "ok") {
+                toast.className = "toast toast-success";
+                toast.textContent = "Mode: " + data.label +
+                    " | SL %" + (data.applied.stop_loss_pct * 100).toFixed(1) +
+                    " | TP %" + (data.applied.take_profit_pct * 100).toFixed(1) +
+                    " | Trailing %" + (data.applied.trailing_stop_pct * 100).toFixed(1);
+                toast.style.display = "block";
+                btns.forEach(function(b) { b.disabled = false; });
+                var active = document.querySelector(".mode-btn-" + mode);
+                if (active) active.classList.add("active");
+                setTimeout(function() { toast.style.display = "none"; }, 4000);
+            } else {
+                toast.className = "toast toast-error";
+                toast.textContent = data.error || "Failed";
+                toast.style.display = "block";
+                btns.forEach(function(b) { b.disabled = false; });
+            }
+        })
+        .catch(function() {
+            btns.forEach(function(b) { b.disabled = false; });
+        });
+}
+
+function toggleDailyLossLimit() {
+    var btn = document.getElementById("dll-toggle");
+    var isOn = btn.classList.contains("dll-on");
+    var newState = !isOn;
+    btn.disabled = true;
+
+    var formData = new FormData();
+    formData.append("enabled", newState ? "true" : "false");
+
+    fetch("/api/daily-loss-limit", { method: "POST", body: formData })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            btn.disabled = false;
+            var toast = document.getElementById("dll-toast");
+            if (data.status === "ok") {
+                btn.classList.remove("dll-on", "dll-off");
+                if (data.enabled) {
+                    btn.classList.add("dll-on");
+                    btn.textContent = "ON %" + (data.pct * 100).toFixed(1);
+                } else {
+                    btn.classList.add("dll-off");
+                    btn.textContent = "OFF";
+                }
+                toast.className = "toast toast-success";
+                toast.textContent = "Günlük kayıp limiti: " + (data.enabled ? "Açık (%" + (data.pct * 100).toFixed(1) + ")" : "Kapalı");
+                toast.style.display = "block";
+                setTimeout(function() { toast.style.display = "none"; }, 3000);
+            }
+        })
+        .catch(function() { btn.disabled = false; });
+}
+
+function toggleAutoScan() {
+    var btn = document.getElementById("autoscan-toggle");
+    var isOn = btn.classList.contains("dll-on");
+    var newState = !isOn;
+    btn.disabled = true;
+
+    var formData = new FormData();
+    formData.append("enabled", newState ? "true" : "false");
+
+    fetch("/api/auto-scan-toggle", { method: "POST", body: formData })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            btn.disabled = false;
+            if (data.status === "ok") {
+                btn.classList.remove("dll-on", "dll-off");
+                if (data.enabled) {
+                    btn.classList.add("dll-on");
+                    btn.textContent = "ON";
+                } else {
+                    btn.classList.add("dll-off");
+                    btn.textContent = "OFF";
+                }
+                var toast = document.getElementById("dll-toast");
+                toast.className = "toast toast-success";
+                toast.textContent = "Otomatik tarama: " + (data.enabled ? "Acik" : "Kapali");
+                toast.style.display = "block";
+                setTimeout(function() { toast.style.display = "none"; }, 3000);
+            }
+        })
+        .catch(function() { btn.disabled = false; });
+}
+
+function toggleAutoSelect() {
+    var btn = document.getElementById("autoselect-toggle");
+    var isOn = btn.classList.contains("dll-on");
+    var newState = !isOn;
+    btn.disabled = true;
+
+    var formData = new FormData();
+    formData.append("enabled", newState ? "true" : "false");
+
+    fetch("/api/auto-select", { method: "POST", body: formData })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            btn.disabled = false;
+            if (data.status === "ok") {
+                btn.classList.remove("dll-on", "dll-off");
+                if (data.enabled) {
+                    btn.classList.add("dll-on");
+                    btn.textContent = "ON";
+                } else {
+                    btn.classList.add("dll-off");
+                    btn.textContent = "OFF";
+                }
+                var toast = document.getElementById("dll-toast");
+                toast.className = "toast toast-success";
+                toast.textContent = "Otomatik coin secimi: " + (data.enabled ? "Acik" : "Kapali");
+                toast.style.display = "block";
+                setTimeout(function() { toast.style.display = "none"; }, 3000);
+            }
+        })
+        .catch(function() { btn.disabled = false; });
+}
+
+/* ── Live Multi-TF Signals for Active Coin ── */
+var _liveTfTFS = ["1m","3m","5m","15m","30m","1h","2h","4h","6h","8h","12h","1d"];
+var _alertEnabled = localStorage.getItem("alertEnabled") !== "false"; // default ON
+var _alertLooping = false;
+var _alertDismissed = false; // true after user clicks "Buradayim", reset when signals change
+var _dismissGeneration = 0; // incremented on each dismiss to invalidate pending play() promises
+var _dismissCooldownUntil = 0; // timestamp — no alerts until this time (3 min cooldown)
+
+// Init alert toggle button on load
+(function() {
+    var btn = document.getElementById("alert-toggle");
+    if (btn) {
+        btn.classList.remove("dll-on", "dll-off");
+        btn.classList.add(_alertEnabled ? "dll-on" : "dll-off");
+        btn.textContent = _alertEnabled ? "ON" : "OFF";
+    }
+})();
+
+function _startAlertLoop(detail) {
+    _alertLooping = true;
+    _alertDismissed = false;
+
+    // PRIMARY: Server-side sound via macOS afplay — bypasses ALL browser restrictions
+    fetch("/api/alert/play", { method: "POST" })
+        .then(function(r) { return r.json(); })
+        .then(function(d) { console.log("[Alert] Server sound:", d.status); })
+        .catch(function(e) { console.warn("[Alert] Server sound failed:", e); });
+
+    // Show popup
+    var overlay = document.getElementById("alert-overlay");
+    var detailEl = document.getElementById("alert-detail");
+    if (detailEl) detailEl.textContent = detail || "";
+    overlay.style.display = "flex";
+}
+
+function dismissAlert() {
+    _alertLooping = false;
+    _alertDismissed = true;
+    _dismissGeneration++;
+    _dismissCooldownUntil = Date.now() + 3 * 60 * 1000; // 3 min cooldown
+
+    // Stop server-side sound
+    fetch("/api/alert/stop", { method: "POST" })
+        .then(function(r) { return r.json(); })
+        .then(function(d) { console.log("[Alert] Server sound stopped:", d.status); })
+        .catch(function() {});
+
+    document.getElementById("alert-overlay").style.display = "none";
+}
+
+function testAlert() {
+    _alertDismissed = false;
+    _startAlertLoop("Test uyarisi — ses durdurma testi");
+}
+
+function toggleAlertSound() {
+    _alertEnabled = !_alertEnabled;
+    localStorage.setItem("alertEnabled", _alertEnabled ? "true" : "false");
+    var btn = document.getElementById("alert-toggle");
+    btn.classList.remove("dll-on", "dll-off");
+    if (_alertEnabled) {
+        btn.classList.add("dll-on");
+        btn.textContent = "ON";
+    } else {
+        btn.classList.add("dll-off");
+        btn.textContent = "OFF";
+        dismissAlert();
+    }
+    var toast = document.getElementById("dll-toast");
+    toast.className = "toast toast-success";
+    toast.textContent = "Ters sinyal uyarisi: " + (_alertEnabled ? "Acik" : "Kapali");
+    toast.style.display = "block";
+    setTimeout(function() { toast.style.display = "none"; }, 3000);
+}
+
+function _sigColor(signal) {
+    var s = (signal || "").toUpperCase().replace("STRONG_","");
+    if (s === "BUY") return "buy";
+    if (s === "SELL") return "sell";
+    return "neutral";
+}
+
+function _sigDirection(signal) {
+    var s = (signal || "").toUpperCase();
+    if (s === "BUY" || s === "STRONG_BUY") return "BUY";
+    if (s === "SELL" || s === "STRONG_SELL") return "SELL";
+    return "NEUTRAL";
+}
+
+var _lastDismissedKey = ""; // the reverseKey that was dismissed
+
+function _checkReverseAlert(symbol, timeframes) {
+    if (!_alertEnabled) return;
+    // 3-minute cooldown after dismiss
+    if (Date.now() < _dismissCooldownUntil) return;
+
+    fetch("/api/status")
+        .then(function(r) { return r.json(); })
+        .then(function(s) {
+            // Sinyal dosyasindaki coin, aktif coin ile ayni olmali
+            var activeSymbol = s.active_symbol || "";
+            if (symbol !== activeSymbol) return;
+
+            var positions = s.open_positions || [];
+            var pos = null;
+            for (var i = 0; i < positions.length; i++) {
+                if (positions[i].symbol === symbol) {
+                    pos = positions[i];
+                    break;
+                }
+            }
+            if (!pos || !pos.side) return;
+
+            var side = pos.side.toUpperCase();
+            var reverseTfs = [];
+            _liveTfTFS.forEach(function(tf) {
+                var info = timeframes[tf];
+                if (!info) return;
+                var dir = _sigDirection(info.signal);
+                if (dir === "NEUTRAL") return;
+                if ((side === "LONG" && dir === "SELL") || (side === "SHORT" && dir === "BUY")) {
+                    reverseTfs.push(tf);
+                }
+            });
+
+            if (reverseTfs.length === 0) {
+                // No reverse signals — reset everything
+                _alertDismissed = false;
+                _lastDismissedKey = "";
+                return;
+            }
+
+            var reverseKey = symbol + ":" + side + ":" + reverseTfs.join(",");
+
+            // If user dismissed AND the signals haven't changed, don't re-trigger
+            if (_alertDismissed && reverseKey === _lastDismissedKey) {
+                return;
+            }
+
+            // Signals changed since last dismiss — reset dismiss state and alert again
+            if (_alertDismissed && reverseKey !== _lastDismissedKey) {
+                _alertDismissed = false;
+            }
+
+            // If already alerting (popup visible, sound playing), just update the text
+            if (_alertLooping) {
+                var detailEl = document.getElementById("alert-detail");
+                var oppositeDir = (side === "LONG") ? "SELL" : "BUY";
+                var detail = symbol + " " + side + " pozisyonunda " +
+                    reverseTfs.length + " zaman dilimi " + oppositeDir +
+                    " sinyali veriyor: " + reverseTfs.join(", ");
+                if (detailEl) detailEl.textContent = detail;
+                return;
+            }
+
+            // TRIGGER ALERT — reverse signals detected, not dismissed, not already looping
+            _lastDismissedKey = reverseKey; // save so dismiss can reference it
+            var oppositeDir = (side === "LONG") ? "SELL" : "BUY";
+            var detail = symbol + " " + side + " pozisyonunda " +
+                reverseTfs.length + " zaman dilimi " + oppositeDir +
+                " sinyali veriyor: " + reverseTfs.join(", ");
+            _startAlertLoop(detail);
+        })
+        .catch(function() {});
+}
+
+function pollActiveCoinSignals() {
+    fetch("/api/active-coin-signals")
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            if (!d.symbol || !d.timeframes) return;
+            var titleEl = document.getElementById("live-tf-title");
+            titleEl.textContent = d.symbol + " - Canli Zaman Dilimi Guvenleri";
+
+            var updEl = document.getElementById("live-tf-updated");
+            if (d.updated_at) {
+                var dt = new Date(d.updated_at);
+                updEl.textContent = "Son: " +
+                    String(dt.getHours()).padStart(2,'0') + ":" +
+                    String(dt.getMinutes()).padStart(2,'0') + ":" +
+                    String(dt.getSeconds()).padStart(2,'0');
+            }
+
+            var grid = document.getElementById("live-tf-grid");
+            var html = "";
+            _liveTfTFS.forEach(function(tf) {
+                var info = d.timeframes[tf];
+                if (!info) {
+                    html += '<div class="live-tf-item live-tf-neutral">' +
+                        '<div class="live-tf-label">' + tf + '</div>' +
+                        '<div class="live-tf-conf">-</div>' +
+                        '<div class="live-tf-signal">N/A</div></div>';
+                    return;
+                }
+                var color = _sigColor(info.signal);
+                var conf = info.confidence || 0;
+                var nss = info.nihai_skor || 0;
+                var nssLabel = Math.round(nss) > 0 ? Math.round(nss).toLocaleString() : '0';
+                html += '<div class="live-tf-item live-tf-' + color + '">' +
+                    '<div class="live-tf-label">' + tf + '</div>' +
+                    '<div class="live-tf-conf">' + conf + '% <small style="opacity:.6">(' + nssLabel + ')</small></div>' +
+                    '<div class="live-tf-bar-wrap"><div class="live-tf-bar live-tf-bar-' + color + '" style="width:' + conf + '%"></div></div>' +
+                    '<div class="live-tf-signal">' + info.signal + '</div></div>';
+            });
+            grid.innerHTML = html;
+
+            // Check for reverse signals and play alert
+            _checkReverseAlert(d.symbol, d.timeframes);
+        })
+        .catch(function() {});
+}
+
+setInterval(pollActiveCoinSignals, 10000);
+pollActiveCoinSignals();
+</script>
+{% endblock %}

@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title_extra %} - Loglar{% endblock %}
+
+{% block content %}
+
+<div class="page-header">
+    <h1>Sistem Logları</h1>
+    <span class="update-time">Son {{ entries | length }} kayıt gösteriliyor</span>
+</div>
+
+<!-- Filters -->
+<div class="card log-filters">
+    <form method="get" action="/logs" class="filter-form">
+        <div class="filter-group">
+            <label>Seviye:</label>
+            <a href="/logs" class="filter-btn {% if current_level == 'ALL' %}active{% endif %}">HEPSİ</a>
+            <a href="/logs?level=INFO{% if current_search %}&search={{ current_search }}{% endif %}" class="filter-btn {% if current_level == 'INFO' %}active{% endif %}">INFO</a>
+            <a href="/logs?level=WARNING{% if current_search %}&search={{ current_search }}{% endif %}" class="filter-btn {% if current_level == 'WARNING' %}active{% endif %}">WARNING</a>
+            <a href="/logs?level=ERROR{% if current_search %}&search={{ current_search }}{% endif %}" class="filter-btn {% if current_level == 'ERROR' %}active{% endif %}">ERROR</a>
+        </div>
+        <div class="filter-group">
+            <label for="search">Ara:</label>
+            <input type="text" id="search" name="search" value="{{ current_search }}" placeholder="Log filtrele...">
+            {% if current_level != 'ALL' %}
+            <input type="hidden" name="level" value="{{ current_level }}">
+            {% endif %}
+            <button type="submit" class="filter-btn">Filtrele</button>
+            {% if current_search %}
+            <a href="/logs{% if current_level != 'ALL' %}?level={{ current_level }}{% endif %}" class="filter-btn">Temizle</a>
+            {% endif %}
+        </div>
+    </form>
+</div>
+
+<!-- Log Entries -->
+<div class="card">
+    {% if entries %}
+    <div class="log-container" id="log-container">
+        {% for entry in entries %}
+        <div class="log-line log-{{ entry.level | lower }}">
+            <span class="log-time">{{ entry.timestamp }}</span>
+            <span class="log-level log-level-{{ entry.level | lower }}">{{ entry.level }}</span>
+            <span class="log-module">{{ entry.module }}</span>
+            <span class="log-msg">{{ entry.message }}</span>
+        </div>
+        {% endfor %}
+    </div>
+    <script>
+        // Auto-scroll to bottom on load
+        (function() {
+            var el = document.getElementById('log-container');
+            if (el) el.scrollTop = el.scrollHeight;
+        })();
+    </script>
+    {% else %}
+    <div class="empty-state">Log kaydı bulunamadı{% if current_level != 'ALL' %} seviye {{ current_level }}{% endif %}{% if current_search %} eşleşen "{{ current_search }}"{% endif %}</div>
+    {% endif %}
+</div>
+
+{% endblock %}

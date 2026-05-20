@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trading Bot V1{% block title_extra %}{% endblock %}</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">Trading Bot V1</div>
+        <div class="nav-links">
+            <a href="/" class="{% if page == 'dashboard' %}active{% endif %}">Panel</a>
+            <a href="/tarama" class="{% if page == 'tarama' %}active{% endif %}">Tarama</a>
+            <a href="/positions" class="{% if page == 'positions' %}active{% endif %}">Pozisyonlar</a>
+            <a href="/signals" class="{% if page == 'signals' %}active{% endif %}">Sinyaller</a>
+            <a href="/performance" class="{% if page == 'performance' %}active{% endif %}">Performans</a>
+            <a href="/logs" class="{% if page == 'logs' %}active{% endif %}">Loglar</a>
+            <a href="/settings" class="{% if page == 'settings' %}active{% endif %}">Ayarlar</a>
+        </div>
+        <div class="nav-status">
+            <span id="auto-scan-banner" class="auto-scan-banner" style="display:none">
+                <span class="auto-scan-pulse"></span>
+                <span id="auto-scan-pct" class="auto-scan-pct">0%</span>
+                <span class="auto-scan-bar-wrap">
+                    <span id="auto-scan-bar" class="auto-scan-bar" style="width:0%"></span>
+                </span>
+            </span>
+            <span id="auto-refresh-label">Yenileme: <strong id="refresh-countdown">5</strong>sn</span>
+        </div>
+    </nav>
+
+    <main class="container">
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="footer">
+        <span>Trading Bot V1</span>
+        <span>Ayarlar: <a href="/settings" style="color:var(--accent)">Ayarlar</a></span>
+    </footer>
+
+    {% if page != 'settings' %}
+    <script src="/static/app.js?v=6"></script>
+    {% endif %}
+</body>
+</html>

@@ -1,0 +1,530 @@
+{% extends "base.html" %}
+{% block title_extra %} - Tarama{% endblock %}
+
+{% block content %}
+{% set s = status or {} %}
+
+<div class="page-header">
+    <h1>Tarama</h1>
+</div>
+
+<!-- Manual Multi-Timeframe Scanner -->
+<div class="card scanner-card" id="scanner-card">
+    <div class="scanner-header">
+        <h3>Manuel Tarama</h3>
+        <div class="scanner-controls">
+            <button id="scan-btn" class="btn btn-primary" onclick="startMultiScan()">Taramaya Basla</button>
+            <button id="scan-stop-btn" class="btn btn-danger" onclick="stopMultiScan()" style="display:none">Durdur</button>
+        </div>
+    </div>
+
+    <!-- Progress bars (dynamically generated) -->
+    <div id="multi-scan-status" style="display:none">
+        <div class="multi-progress-grid" id="multi-progress-grid"></div>
+    </div>
+
+    <!-- Timeframe tabs (dynamically generated) -->
+    <div id="multi-scan-result" style="display:none">
+        <div class="tf-tabs" id="tf-tabs-container"></div>
+        <div id="tf-panels-container"></div>
+        <div id="multi-common-info" class="multi-common-info" style="display:none"></div>
+    </div>
+
+    <!-- Cross-timeframe ranking -->
+    <div id="cross-ranking" style="display:none">
+        <h4 class="cross-title">Capraz Zaman Dilimi Siralamasi (Ilk 5)</h4>
+        <div id="cross-ranking-body"></div>
+    </div>
+
+    <!-- Scan time -->
+    <div id="multi-scan-time" class="muted" style="margin-top:8px; font-size:12px; display:none"></div>
+</div>
+<div id="scan-toast" class="toast" style="display:none"></div>
+
+<!-- Auto-scan results (Multi-TF cross-ranking) -->
+<div id="auto-scan-card" class="card" style="{{ '' if s.get('last_auto_scan') else 'display:none' }}">
+    <div class="scanner-header">
+        <h3>Otomatik Tarama Sonuclari</h3>
+        <span id="auto-scan-meta" class="muted">
+            Son: {{ format_dt(s.get("last_auto_scan", "")) }} |
+            {{ s.get("last_scan_total", 0) }} coin | Her 10dk | 12 zaman dilimi
+        </span>
+    </div>
+    <div id="auto-scan-table-wrap" style="overflow-x:auto;">
+    {% set scan_results = s.get("last_scan_results", []) %}
+    {% set all_tfs = ["1m","3m","5m","15m","30m","1h","2h","4h","6h","8h","12h","1d"] %}
+    {% if scan_results %}
+    <table class="cross-table" style="margin-top: 8px;">
+        <thead><tr>
+            <th>#</th><th>Coin</th><th>Yon</th><th>Net NSS</th><th>TF</th>
+            {% for tf in all_tfs %}<th>{{ tf }}</th>{% endfor %}
+            <th>Fiyat</th><th></th>
+        </tr></thead>
+        <tbody>
+        {% for r in scan_results %}
+            {% set cnt = r.get("count", 0) %}
+            {% set total_tfs = all_tfs | length %}
+            {% set signals = r.get("signals", {}) %}
+            {% set all_signals = r.get("all_signals", {}) %}
+            {% set dom_dir = r.get("dominant_dir", "N/A") %}
+            {% set dir_cls = "cross-val-buy" if dom_dir == "BUY" else ("cross-val-sell" if dom_dir == "SELL" else "") %}
+            <tr class="{{ 'cross-row-all' if cnt == total_tfs else ('cross-row-3' if cnt >= total_tfs - 1 else '') }}">
+                <td>{{ loop.index }}</td>
+                <td class="cross-symbol">
+                    {% if cnt == total_tfs %}<span class="common-star">*</span> {% endif %}
+                    {{ r.get("symbol", "") }}
+                </td>
+                <td><span class="cross-val {{ dir_cls }}">{{ dom_dir }}</span></td>
+                <td><strong>{{ r.get("net_nss", r.get("total_nss", 0)) | round(0) | int }}</strong></td>
+                <td><span class="cross-count cross-count-{{ cnt }}">{{ cnt }}/{{ total_tfs }}</span></td>
+                {% for tf in all_tfs %}
+                    {% set sig = all_signals.get(tf) or signals.get(tf) %}
+                    {% if sig %}
+                        {% set is_top15 = sig.get("in_top15", false) or tf in signals %}
+                        {% set dir = sig.get("signal","NEUTRAL").upper().replace("STRONG_","") %}
+                        {% set nss = sig.get("nihai_skor", 0) %}
+                        <td class="{{ 'cross-td-hit' if is_top15 else 'cross-td-dim' }}">
+                            <span class="cross-val cross-val-{{ dir | lower }}">{{ nss | round(0) | int if nss > 0 else (sig.get("confidence", 0) | string + '%') }}</span>
+                        </td>
+                    {% else %}
+                        <td class="muted">-</td>
+                    {% endif %}
+                {% endfor %}
+                <td>${{ r.get("price", 0) }}</td>
+                <td>
+                    <button class="btn btn-success btn-sm" onclick="selectScannedSymbol('{{ r.get('symbol', '') }}')">Sec</button>
+                </td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state" style="padding: 8px;">Henuz tarama sonucu yok</div>
+    {% endif %}
+    </div>
+</div>
+
+<script>
+/* ── Multi-Timeframe Scanner ── */
+var multiPollTimer = null;
+var TFS = [];
+var _multiData = null;
+
+function _buildDynamicUI() {
+    var pgrid = document.getElementById("multi-progress-grid");
+    pgrid.innerHTML = "";
+    TFS.forEach(function(tf) {
+        pgrid.innerHTML += '<div class="multi-progress-item" id="mp-' + tf + '">' +
+            '<span class="multi-tf-label">' + tf + '</span>' +
+            '<div class="scanner-progress-bar"><div class="scanner-progress-fill" id="mp-fill-' + tf + '" style="width:0%"></div></div>' +
+            '<span class="multi-tf-count" id="mp-count-' + tf + '">0/0</span></div>';
+    });
+    var tabsCont = document.getElementById("tf-tabs-container");
+    var panelsCont = document.getElementById("tf-panels-container");
+    tabsCont.innerHTML = "";
+    panelsCont.innerHTML = "";
+    TFS.forEach(function(tf, idx) {
+        tabsCont.innerHTML += '<button class="tf-tab' + (idx === 0 ? ' active' : '') +
+            '" data-tf="' + tf + '" onclick="switchTfTab(\'' + tf + '\')">' + tf + '</button>';
+        panelsCont.innerHTML += '<div id="tf-panel-' + tf + '" class="tf-panel"' +
+            (idx > 0 ? ' style="display:none"' : '') + '></div>';
+    });
+}
+
+function startMultiScan() {
+    var btn = document.getElementById("scan-btn");
+    btn.disabled = true;
+    btn.textContent = "Kontrol ediliyor...";
+
+    fetch("/api/scan-lock-status")
+        .then(function(r) { return r.json(); })
+        .then(function(lock) {
+            if (lock.auto_scan_active) {
+                btn.disabled = false;
+                btn.textContent = "Taramaya Basla";
+                showScanToast("Otomatik tarama devam ediyor, bitmesini bekleyin.", "error");
+                return;
+            }
+            btn.textContent = "Baslatiliyor...";
+            fetch("/api/scanner/multi-start", { method: "POST" })
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    if (data.status === "started") {
+                        TFS = data.timeframes || TFS;
+                        _buildDynamicUI();
+                        btn.style.display = "none";
+                        document.getElementById("scan-stop-btn").style.display = "inline-block";
+                        document.getElementById("multi-scan-status").style.display = "block";
+                        document.getElementById("multi-scan-result").style.display = "none";
+                        multiPollTimer = setInterval(pollMultiProgress, 1500);
+                    } else {
+                        btn.disabled = false;
+                        btn.textContent = "Taramaya Basla";
+                        showScanToast(data.error || "Baslatilamadi", "error");
+                    }
+                })
+                .catch(function() {
+                    btn.disabled = false;
+                    btn.textContent = "Taramaya Basla";
+                });
+        })
+        .catch(function() {
+            btn.disabled = false;
+            btn.textContent = "Taramaya Basla";
+        });
+}
+
+function stopMultiScan() {
+    fetch("/api/scanner/multi-stop", { method: "POST" })
+        .then(function() { resetMultiUI(); })
+        .catch(function() { resetMultiUI(); });
+}
+
+function resetMultiUI() {
+    if (multiPollTimer) { clearInterval(multiPollTimer); multiPollTimer = null; }
+    var btn = document.getElementById("scan-btn");
+    btn.style.display = "inline-block";
+    btn.disabled = false;
+    btn.textContent = "Taramaya Basla";
+    document.getElementById("scan-stop-btn").style.display = "none";
+}
+
+function pollMultiProgress() {
+    fetch("/api/scanner/multi-progress")
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            _multiData = data;
+            var allDone = true;
+
+            TFS.forEach(function(tf) {
+                var d = data.timeframes[tf];
+                var p = d.progress;
+                var pct = p.total > 0 ? Math.round((p.current / p.total) * 100) : 0;
+                var fillEl = document.getElementById("mp-fill-" + tf);
+                var countEl = document.getElementById("mp-count-" + tf);
+
+                if (fillEl) fillEl.style.width = pct + "%";
+                if (countEl) countEl.textContent = p.current + "/" + p.total;
+
+                var item = document.getElementById("mp-" + tf);
+                if (item) {
+                    if (p.status === "complete") {
+                        item.classList.add("mp-done");
+                    } else {
+                        allDone = false;
+                    }
+                }
+                if (d.scanning) allDone = false;
+            });
+
+            if (allDone && !data.any_scanning) {
+                if (multiPollTimer) { clearInterval(multiPollTimer); multiPollTimer = null; }
+                document.getElementById("multi-scan-status").style.display = "none";
+                showMultiResults(data);
+                resetMultiUI();
+            }
+        });
+}
+
+function showMultiResults(data) {
+    var common = data.common_symbols || [];
+    var commonSet = {};
+    common.forEach(function(s) { commonSet[s] = true; });
+
+    document.getElementById("multi-scan-result").style.display = "block";
+
+    TFS.forEach(function(tf) {
+        var panel = document.getElementById("tf-panel-" + tf);
+        var d = data.timeframes[tf];
+        var top15 = d.top15 || [];
+        panel.innerHTML = buildTfList(top15, commonSet, d.total_scanned);
+    });
+
+    var infoEl = document.getElementById("multi-common-info");
+    if (common.length > 0) {
+        infoEl.style.display = "block";
+        infoEl.innerHTML = '<span class="common-icon">*</span> <strong>' + common.length +
+            ' coin</strong> ' + TFS.length + ' zaman diliminde de ilk 15\'te: <strong>' + common.join(", ") + '</strong>';
+    } else {
+        infoEl.style.display = "block";
+        infoEl.innerHTML = '<span class="common-none">' + TFS.length + ' zaman diliminde ortak ilk 15\'e giren coin bulunamadi</span>';
+    }
+
+    var crossRanking = data.cross_ranking || [];
+    var crossEl = document.getElementById("cross-ranking");
+    var crossBody = document.getElementById("cross-ranking-body");
+    if (crossRanking.length > 0) {
+        crossEl.style.display = "block";
+        var thTfs = '';
+        TFS.forEach(function(tf) { thTfs += '<th>' + tf + '</th>'; });
+        var html = '<table class="cross-table"><thead><tr>' +
+            '<th>#</th><th>Coin</th><th>Yon</th><th>Net NSS</th><th>TF</th>' + thTfs + '<th>Fiyat</th><th></th>' +
+            '</tr></thead><tbody>';
+        crossRanking.forEach(function(c, idx) {
+            var isAll = c.count === TFS.length;
+            var rowCls = isAll ? 'cross-row-all' : (c.count >= TFS.length - 1 ? 'cross-row-3' : '');
+            var netNss = c.net_nss || c.total_nss || 0;
+            var domDir = (c.dominant_dir || 'N/A').toUpperCase();
+            var dirCls = domDir === 'BUY' ? 'cross-val-buy' : (domDir === 'SELL' ? 'cross-val-sell' : '');
+            html += '<tr class="' + rowCls + '">';
+            html += '<td>' + (idx + 1) + '</td>';
+            html += '<td class="cross-symbol">' + (isAll ? '<span class="common-star">*</span> ' : '') + c.symbol + '</td>';
+            html += '<td><span class="cross-val ' + dirCls + '">' + domDir + '</span></td>';
+            html += '<td><strong>' + Math.round(netNss).toLocaleString() + '</strong></td>';
+            html += '<td><span class="cross-count cross-count-' + c.count + '">' + c.count + '/' + TFS.length + '</span></td>';
+            TFS.forEach(function(tf) {
+                var allSig = (c.all_signals || {})[tf] || (c.signals || {})[tf];
+                if (allSig) {
+                    var isTop15 = allSig.in_top15 === true || (c.signals && c.signals[tf]);
+                    var tdCls = isTop15 ? 'cross-td-hit' : 'cross-td-dim';
+                    var dir = allSig.signal.toUpperCase().replace("STRONG_","").toLowerCase();
+                    var nss = allSig.nihai_skor || 0;
+                    var label = Math.round(nss) > 0 ? Math.round(nss).toLocaleString() : allSig.confidence + '%';
+                    html += '<td class="' + tdCls + '"><span class="cross-val cross-val-' + dir + '">' + label + '</span></td>';
+                } else {
+                    html += '<td class="muted">-</td>';
+                }
+            });
+            html += '<td>$' + c.price + '</td>';
+            html += '<td><button class="btn btn-success btn-sm" onclick="selectScannedSymbol(\'' + c.symbol + '\')">Sec</button></td>';
+            html += '</tr>';
+        });
+        html += '</tbody></table>';
+        crossBody.innerHTML = html;
+    }
+
+    if (data.scan_time) {
+        var timeEl = document.getElementById("multi-scan-time");
+        var dt = new Date(data.scan_time);
+        var dd = String(dt.getDate()).padStart(2,'0');
+        var mm = String(dt.getMonth()+1).padStart(2,'0');
+        var yy = dt.getFullYear();
+        var hh = String(dt.getHours()).padStart(2,'0');
+        var mi = String(dt.getMinutes()).padStart(2,'0');
+        var ss = String(dt.getSeconds()).padStart(2,'0');
+        timeEl.textContent = "Son tarama: " + dd + "." + mm + "." + yy + " " + hh + ":" + mi + ":" + ss;
+        timeEl.style.display = "block";
+    }
+
+    switchTfTab("15m");
+}
+
+function buildTfList(top15, commonSet, totalScanned) {
+    var html = '<div class="scanner-hot-title">' + totalScanned + ' coin tarandi - ilk 15:</div>';
+    if (top15.length === 0) {
+        return html + '<div class="empty-state">Sonuc yok</div>';
+    }
+    html += '<div class="scanner-hot-list">';
+    top15.forEach(function(r, idx) {
+        var isCommon = commonSet[r.symbol];
+        var isHot = r.confidence >= 55 && r.signal !== "NEUTRAL";
+        var itemCls = isCommon ? 'scanner-hot-item scanner-common' : (isHot ? 'scanner-hot-item' : 'scanner-item');
+        var btnCls = isHot ? 'btn-success' : 'btn-secondary';
+        html += '<div class="' + itemCls + '" onclick="selectScannedSymbol(\'' + r.symbol + '\')">' +
+            '<span class="scanner-rank">#' + (idx + 1) + '</span>' +
+            (isCommon ? '<span class="common-star">*</span>' : '') +
+            '<span class="scanner-symbol">' + r.symbol + '</span>' +
+            '<span class="signal-badge signal-' + r.signal.toLowerCase() + '">' + r.signal + '</span>' +
+            '<span class="scanner-conf">' + r.confidence + '%</span>' +
+            '<span class="scanner-found-price">$' + r.price + '</span>' +
+            '<span class="risk-badge risk-' + r.risk_level.toLowerCase() + '">' + r.risk_level + '</span>' +
+            '<span class="btn ' + btnCls + ' btn-sm">Sec</span>' +
+            '</div>';
+    });
+    html += '</div>';
+    return html;
+}
+
+function switchTfTab(tf) {
+    TFS.forEach(function(t) {
+        var tab = document.querySelector('.tf-tab[data-tf="' + t + '"]');
+        var panel = document.getElementById("tf-panel-" + t);
+        if (t === tf) {
+            tab.classList.add("active");
+            panel.style.display = "block";
+        } else {
+            tab.classList.remove("active");
+            panel.style.display = "none";
+        }
+    });
+}
+
+function selectScannedSymbol(symbol) {
+    var formData = new FormData();
+    formData.append("symbol", symbol);
+    fetch("/api/scanner/select", { method: "POST", body: formData })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.status === "ok") {
+                showScanToast(symbol + " aktif coin olarak ayarlandi!", "success");
+                setTimeout(function() { window.location.reload(); }, 1500);
+            }
+        });
+}
+
+function showScanToast(msg, type) {
+    var toast = document.getElementById("scan-toast");
+    toast.className = "toast toast-" + (type || "success");
+    toast.textContent = msg;
+    toast.style.display = "block";
+    setTimeout(function() { toast.style.display = "none"; }, 6000);
+}
+
+/* On page load: check if multi-scan is running */
+(function initScanner() {
+    fetch("/api/scanner/multi-progress")
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.timeframes) {
+                TFS = Object.keys(data.timeframes);
+                var tfOrder = {"m":1,"h":60,"d":1440};
+                TFS.sort(function(a,b) {
+                    var aMin = parseInt(a) * (tfOrder[a.slice(-1)] || 1);
+                    var bMin = parseInt(b) * (tfOrder[b.slice(-1)] || 1);
+                    return aMin - bMin;
+                });
+            }
+            if (TFS.length === 0) return;
+            _buildDynamicUI();
+
+            var anyActive = data.any_scanning;
+            var anyComplete = false;
+            TFS.forEach(function(tf) {
+                if (data.timeframes[tf] && data.timeframes[tf].progress.status === "complete") anyComplete = true;
+            });
+
+            if (anyActive) {
+                document.getElementById("scan-btn").style.display = "none";
+                document.getElementById("scan-stop-btn").style.display = "inline-block";
+                document.getElementById("multi-scan-status").style.display = "block";
+                multiPollTimer = setInterval(pollMultiProgress, 1500);
+                pollMultiProgress();
+            } else if (anyComplete) {
+                showMultiResults(data);
+            }
+        })
+        .catch(function() {});
+})();
+
+// --- Auto-scan progress polling (bot's 10-minute auto-scan) ---
+var _autoScanWasScanning = false;
+var _lastRenderedScanTime = null;
+var _ALL_TFS = ["1m","3m","5m","15m","30m","1h","2h","4h","6h","8h","12h","1d"];
+
+function _renderAutoScanTable(data) {
+    var results = data.last_scan_results || [];
+    var totalTfs = _ALL_TFS.length;
+    var card = document.getElementById("auto-scan-card");
+    card.style.display = "";
+
+    var meta = document.getElementById("auto-scan-meta");
+    var ts = data.last_auto_scan || data.completed_at || "";
+    var tsStr = "";
+    if (ts) {
+        var dt = new Date(ts);
+        tsStr = String(dt.getDate()).padStart(2,'0') + "." +
+            String(dt.getMonth()+1).padStart(2,'0') + "." + dt.getFullYear() + " " +
+            String(dt.getHours()).padStart(2,'0') + ":" +
+            String(dt.getMinutes()).padStart(2,'0') + ":" +
+            String(dt.getSeconds()).padStart(2,'0');
+    }
+    meta.textContent = "Son: " + tsStr + " | " + (data.last_scan_total || 0) + " coin | Her 10dk | 12 zaman dilimi";
+
+    if (results.length === 0) {
+        document.getElementById("auto-scan-table-wrap").innerHTML =
+            '<div class="empty-state" style="padding:8px">Henuz tarama sonucu yok</div>';
+        return;
+    }
+    var thTfs = "";
+    _ALL_TFS.forEach(function(tf) { thTfs += "<th>" + tf + "</th>"; });
+    var html = '<table class="cross-table" style="margin-top:8px"><thead><tr>' +
+        '<th>#</th><th>Coin</th><th>Yon</th><th>Net NSS</th><th>TF</th>' + thTfs + '<th>Fiyat</th><th></th>' +
+        '</tr></thead><tbody>';
+    results.forEach(function(c, idx) {
+        var isAll = c.count === totalTfs;
+        var rowCls = isAll ? "cross-row-all" : (c.count >= totalTfs - 1 ? "cross-row-3" : "");
+        var netNss = c.net_nss || c.total_nss || 0;
+        var domDir = (c.dominant_dir || 'N/A').toUpperCase();
+        var dirCls = domDir === 'BUY' ? 'cross-val-buy' : (domDir === 'SELL' ? 'cross-val-sell' : '');
+        html += '<tr class="' + rowCls + '">';
+        html += '<td>' + (idx+1) + '</td>';
+        html += '<td class="cross-symbol">' + (isAll ? '<span class="common-star">*</span> ' : '') + c.symbol + '</td>';
+        html += '<td><span class="cross-val ' + dirCls + '">' + domDir + '</span></td>';
+        html += '<td><strong>' + Math.round(netNss).toLocaleString() + '</strong></td>';
+        html += '<td><span class="cross-count cross-count-' + c.count + '">' + c.count + '/' + totalTfs + '</span></td>';
+        var allSig = c.all_signals || {};
+        var signals = c.signals || {};
+        _ALL_TFS.forEach(function(tf) {
+            var s = allSig[tf] || signals[tf];
+            if (s) {
+                var isTop15 = s.in_top15 === true || !!signals[tf];
+                var cls = isTop15 ? "cross-td-hit" : "cross-td-dim";
+                var dir = s.signal.toUpperCase().replace("STRONG_","").toLowerCase();
+                var nss = s.nihai_skor || 0;
+                var label = Math.round(nss) > 0 ? Math.round(nss).toLocaleString() : s.confidence + '%';
+                html += '<td class="' + cls + '"><span class="cross-val cross-val-' + dir + '">' + label + '</span></td>';
+            } else {
+                html += '<td class="muted">-</td>';
+            }
+        });
+        html += '<td>$' + c.price + '</td>';
+        html += '<td><button class="btn btn-success btn-sm" onclick="selectScannedSymbol(\'' + c.symbol + '\')">Sec</button></td>';
+        html += '</tr>';
+    });
+    html += '</tbody></table>';
+    document.getElementById("auto-scan-table-wrap").innerHTML = html;
+}
+
+function pollAutoScanProgress() {
+    fetch("/api/auto-scan-progress")
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            var banner = document.getElementById("auto-scan-banner");
+            var scanBtn = document.getElementById("scan-btn");
+            if (d.scanning) {
+                if (banner) {
+                    banner.style.display = "flex";
+                    banner.classList.remove("auto-scan-done");
+                    var pct = d.pct || 0;
+                    document.getElementById("auto-scan-pct").textContent = pct + "%";
+                    document.getElementById("auto-scan-bar").style.width = pct + "%";
+                }
+                _autoScanWasScanning = true;
+                if (scanBtn && scanBtn.style.display !== "none") {
+                    scanBtn.disabled = true;
+                    scanBtn.textContent = "Oto-tarama devam ediyor...";
+                }
+            } else {
+                if (scanBtn && scanBtn.style.display !== "none" && !multiPollTimer) {
+                    scanBtn.disabled = false;
+                    scanBtn.textContent = "Taramaya Basla";
+                }
+                if (_autoScanWasScanning && d.last_scan_results) {
+                    _autoScanWasScanning = false;
+                    if (banner) {
+                        banner.style.display = "flex";
+                        banner.classList.add("auto-scan-done");
+                        document.getElementById("auto-scan-pct").textContent = "OK";
+                        document.getElementById("auto-scan-bar").style.width = "100%";
+                        setTimeout(function() {
+                            banner.style.display = "none";
+                            banner.classList.remove("auto-scan-done");
+                        }, 3000);
+                    }
+                    _renderAutoScanTable(d);
+                } else {
+                    if (banner) banner.style.display = "none";
+                    if (d.last_scan_results && d.last_auto_scan && d.last_auto_scan !== _lastRenderedScanTime) {
+                        _renderAutoScanTable(d);
+                        _lastRenderedScanTime = d.last_auto_scan;
+                    }
+                }
+            }
+        })
+        .catch(function() {});
+}
+
+setInterval(pollAutoScanProgress, 5000);
+pollAutoScanProgress();
+</script>
+{% endblock %}
