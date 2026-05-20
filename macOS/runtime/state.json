@@ -1,0 +1,2669 @@
+{
+  "active_symbol": "PLAYUSDT",
+  "positions": {
+    "DEXEUSDT": {
+      "symbol": "DEXEUSDT",
+      "side": "LONG",
+      "entry_price": 9.417,
+      "quantity": 197547.63324059,
+      "stop_loss": 13.79049,
+      "take_profit": 10.3587,
+      "trailing_stop": 0.03,
+      "trailing_stop_price": null,
+      "highest_price": 14.217,
+      "open_time": "2026-04-11T06:52:07.661556+00:00",
+      "unrealized_pnl": 923930.2806662393,
+      "realized_pnl": 0.0,
+      "is_break_even": true,
+      "leverage": 8,
+      "liquidation_price": 8.27296687,
+      "warning": "take_profit",
+      "current_signal": "BUY",
+      "current_confidence": 40
+    },
+    "PIPPINUSDT": {
+      "symbol": "PIPPINUSDT",
+      "side": "SHORT",
+      "entry_price": 0.02889,
+      "quantity": 30969626.90412773,
+      "stop_loss": 0.0234325,
+      "take_profit": 0.026001,
+      "trailing_stop": 0.03,
+      "trailing_stop_price": null,
+      "highest_price": 0.02275,
+      "open_time": "2026-04-11T18:44:27.440073+00:00",
+      "unrealized_pnl": 178694.7472368169,
+      "realized_pnl": 0.0,
+      "is_break_even": true,
+      "leverage": 9,
+      "liquidation_price": 0.03197211,
+      "warning": "take_profit",
+      "current_signal": "NEUTRAL",
+      "current_confidence": 34
+    },
+    "HIGHUSDT": {
+      "symbol": "HIGHUSDT",
+      "side": "SHORT",
+      "entry_price": 0.1231,
+      "quantity": 18835894.15808285,
+      "stop_loss": 0.11639,
+      "take_profit": 0.11079,
+      "trailing_stop": 0.03,
+      "trailing_stop_price": null,
+      "highest_price": 0.113,
+      "open_time": "2026-04-12T12:25:24.370316+00:00",
+      "unrealized_pnl": -1222449.530859577,
+      "realized_pnl": 0.0,
+      "is_break_even": true,
+      "leverage": 6,
+      "liquidation_price": 0.14304449,
+      "warning": "liquidation",
+      "current_signal": "NEUTRAL",
+      "current_confidence": 9
+    },
+    "C98USDT": {
+      "symbol": "C98USDT",
+      "side": "SHORT",
+      "entry_price": 0.0206,
+      "quantity": 85080854.5988783,
+      "stop_loss": 0.0193125,
+      "take_profit": 0.01854,
+      "trailing_stop": 0.03,
+      "trailing_stop_price": null,
+      "highest_price": 0.01875,
+      "open_time": "2026-04-12T12:48:41.293432+00:00",
+      "unrealized_pnl": 117411.57934645198,
+      "realized_pnl": 0.0,
+      "is_break_even": true,
+      "leverage": 7,
+      "liquidation_price": 0.02344906,
+      "warning": "trailing_stop",
+      "current_signal": "NEUTRAL",
+      "current_confidence": 11
+    },
+    "TAKEUSDT": {
+      "symbol": "TAKEUSDT",
+      "side": "LONG",
+      "entry_price": 0.02328,
+      "quantity": 17512742.75850704,
+      "stop_loss": 0.0266556,
+      "take_profit": 0.025608,
+      "trailing_stop": 0.03,
+      "trailing_stop_price": null,
+      "highest_price": 0.02748,
+      "open_time": "2026-04-12T17:46:17.228103+00:00",
+      "unrealized_pnl": -13134.55706888023,
+      "realized_pnl": 0.0,
+      "is_break_even": true,
+      "leverage": 6,
+      "liquidation_price": 0.01947791,
+      "warning": "trailing_stop",
+      "current_signal": "NEUTRAL",
+      "current_confidence": 10
+    },
+    "PLAYUSDT": {
+      "symbol": "PLAYUSDT",
+      "side": "LONG",
+      "entry_price": 0.08037,
+      "quantity": 7236053.44432002,
+      "stop_loss": 0.1621743,
+      "take_profit": 0.088407,
+      "trailing_stop": 0.03,
+      "trailing_stop_price": null,
+      "highest_price": 0.16719,
+      "open_time": "2026-04-12T19:59:07.269616+00:00",
+      "unrealized_pnl": 627365.8336225457,
+      "realized_pnl": 0.0,
+      "is_break_even": true,
+      "leverage": 8,
+      "liquidation_price": 0.07060617,
+      "warning": "take_profit",
+      "current_signal": "BUY",
+      "current_confidence": 38
+    }
+  },
+  "last_decision": {
+    "action": "HOLD",
+    "signal": "BUY",
+    "confidence": 38,
+    "risk_level": "LOW",
+    "price": 0.16707,
+    "timestamp": "2026-05-20T12:44:05.602078+00:00"
+  },
+  "last_trade_time": "2026-04-12T22:45:26.392698+00:00",
+  "daily_pnl": -3188483.5546,
+  "daily_start_balance": 285661.4854,
+  "total_realized_pnl": 6917.5967,
+  "trade_history": [
+    {
+      "symbol": "C98USDT",
+      "action": "CLOSE",
+      "side": "SHORT",
+      "entry_price": 0.0238,
+      "exit_price": 0.0236,
+      "quantity": 178716.10882353,
+      "pnl": 27.2721,
+      "fee": 8.4711,
+      "entry_time": "2026-04-06T13:30:55.103938+00:00",
+      "exit_time": "2026-04-06T13:47:00.106400+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "PIPPINUSDT",
+      "action": "CLOSE",
+      "side": "SHORT",
+      "entry_price": 0.03254,
+      "exit_price": 0.03305,
+      "quantity": 165343.03431887,
+      "pnl": -95.1698,
+      "fee": 10.8448,
+      "entry_time": "2026-04-06T15:14:28.209212+00:00",
+      "exit_time": "2026-04-06T15:57:18.455173+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "FOLKSUSDT",
+      "action": "CLOSE",
+      "side": "SHORT",
+      "entry_price": 0.889,
+      "exit_price": 0.882,
+      "quantity": 5982.64,
+      "pnl": 31.2832,
+      "fee": 10.5953,
+      "entry_time": "2026-04-06T14:42:08.271834+00:00",
+      "exit_time": "2026-04-06T15:57:26.597350+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "SCRUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.04374,
+      "exit_price": 0.04345,
+      "quantity": 122311.67626886,
+      "pnl": -46.1347,
+      "fee": 10.6644,
+      "entry_time": "2026-04-06T13:46:21.793624+00:00",
+      "exit_time": "2026-04-06T20:48:24.967311+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "AIOUSDT",
+      "action": "CLOSE",
+      "side": "SHORT",
+      "entry_price": 0.07377,
+      "exit_price": 0.07321,
+      "quantity": 52412.56837522,
+      "pnl": 21.6474,
+      "fee": 7.7036,
+      "entry_time": "2026-04-06T15:48:32.237847+00:00",
+      "exit_time": "2026-04-06T21:32:19.473789+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "ALGOUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.1234,
+      "exit_price": 0.12,
+      "quantity": 36362.90014833,
+      "pnl": -132.4846,
+      "fee": 8.8507,
+      "entry_time": "2026-04-06T18:05:45.787057+00:00",
+      "exit_time": "2026-04-06T23:02:52.520173+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "XPLUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.1242,
+      "exit_price": 0.118,
+      "quantity": 35714.39162641,
+      "pnl": -230.0793,
+      "fee": 8.65,
+      "entry_time": "2026-04-06T16:21:07.962712+00:00",
+      "exit_time": "2026-04-06T23:03:00.444062+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "BRETTUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.006406,
+      "exit_price": 0.006225,
+      "quantity": 559812.01329075,
+      "pnl": -108.397,
+      "fee": 7.071,
+      "entry_time": "2026-04-06T19:10:57.194016+00:00",
+      "exit_time": "2026-04-06T23:05:38.133492+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "SCRTUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.09039,
+      "exit_price": 0.08791,
+      "quantity": 35675.08858083,
+      "pnl": -94.8351,
+      "fee": 6.3609,
+      "entry_time": "2026-04-06T19:11:05.108892+00:00",
+      "exit_time": "2026-04-06T23:05:46.179898+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "HIPPOUSDT",
+      "action": "CLOSE",
+      "side": "SHORT",
+      "entry_price": 0.0003605,
+      "exit_price": 0.0003457,
+      "quantity": 4125230.18030513,
+      "pnl": 58.1402,
+      "fee": 2.9132,
+      "entry_time": "2026-04-06T21:32:11.397743+00:00",
+      "exit_time": "2026-04-06T23:06:00.409787+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "MONUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.02787,
+      "exit_price": 0.02693,
+      "quantity": 91035.92913048,
+      "pnl": -90.5625,
+      "fee": 4.9888,
+      "entry_time": "2026-04-06T19:11:25.406796+00:00",
+      "exit_time": "2026-04-06T23:06:27.376450+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "FIGHTUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.002868,
+      "exit_price": 0.00289,
+      "quantity": 1499269.75575991,
+      "pnl": 24.3511,
+      "fee": 8.6328,
+      "entry_time": "2026-04-06T15:30:17.114550+00:00",
+      "exit_time": "2026-04-06T23:06:45.032447+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "MINAUSDT",
+      "action": "CLOSE",
+      "side": "SHORT",
+      "entry_price": 0.05544,
+      "exit_price": 0.05423,
+      "quantity": 23517.60658048,
+      "pnl": 25.8771,
+      "fee": 2.5792,
+      "entry_time": "2026-04-06T19:31:39.250675+00:00",
+      "exit_time": "2026-04-07T01:34:08.426434+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "MAGICUSDT",
+      "action": "CLOSE",
+      "side": "SHORT",
+      "entry_price": 0.05679,
+      "exit_price": 0.05608,
+      "quantity": 28423.59711217,
+      "pnl": 16.9726,
+      "fee": 3.2082,
+      "entry_time": "2026-04-06T22:51:12.544476+00:00",
+      "exit_time": "2026-04-07T01:34:36.282563+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "MAGMAUSDT",
+      "action": "CLOSE",
+      "side": "SHORT",
+      "entry_price": 0.10181,
+      "exit_price": 0.10275,
+      "quantity": 19989.58211374,
+      "pnl": -22.8793,
+      "fee": 4.0891,
+      "entry_time": "2026-04-06T23:03:49.104883+00:00",
+      "exit_time": "2026-04-07T01:35:08.715668+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "FIGHTUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.002897,
+      "exit_price": 0.002897,
+      "quantity": 935144.8446669,
+      "pnl": -5.4182,
+      "fee": 5.4182,
+      "entry_time": "2026-04-06T23:13:04.208741+00:00",
+      "exit_time": "2026-04-07T01:35:42.296674+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "FIGHTUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.002897,
+      "exit_price": 0.002897,
+      "quantity": 836865.21228857,
+      "pnl": -4.8488,
+      "fee": 4.8488,
+      "entry_time": "2026-04-07T01:35:45.986192+00:00",
+      "exit_time": "2026-04-07T01:35:49.769288+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "FIGHTUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.002897,
+      "exit_price": 0.00289,
+      "quantity": 835860.97342078,
+      "pnl": -10.6882,
+      "fee": 4.8371,
+      "entry_time": "2026-04-07T01:35:52.463767+00:00",
+      "exit_time": "2026-04-07T01:36:19.260143+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "ZECUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 255.51,
+      "exit_price": 255.9,
+      "quantity": 10.10244202,
+      "pnl": -1.2265,
+      "fee": 5.1665,
+      "entry_time": "2026-04-07T01:42:28.399670+00:00",
+      "exit_time": "2026-04-07T01:44:25.527716+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "ZECUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 254.98,
+      "exit_price": 251.55,
+      "quantity": 8.1530462,
+      "pnl": -32.0947,
+      "fee": 4.1298,
+      "entry_time": "2026-04-07T01:51:01.996856+00:00",
+      "exit_time": "2026-04-07T02:17:02.907451+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "1000000MOGUSDT",
+      "action": "CLOSE",
+      "side": "SHORT",
+      "entry_price": 0.1328,
+      "exit_price": 0.1339,
+      "quantity": 18394.49410863,
+      "pnl": -25.1398,
+      "fee": 4.9058,
+      "entry_time": "2026-04-07T00:04:31.733379+00:00",
+      "exit_time": "2026-04-07T09:07:18.860233+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "CELRUSDT",
+      "action": "CLOSE",
+      "side": "SHORT",
+      "entry_price": 0.00239,
+      "exit_price": 0.0024,
+      "quantity": 956741.89964603,
+      "pnl": -14.1502,
+      "fee": 4.5828,
+      "entry_time": "2026-04-07T00:04:16.995390+00:00",
+      "exit_time": "2026-04-07T09:07:21.622436+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "POLUSDT",
+      "action": "CLOSE",
+      "side": "SHORT",
+      "entry_price": 0.08991,
+      "exit_price": 0.09061,
+      "quantity": 26874.04515627,
+      "pnl": -23.6631,
+      "fee": 4.8513,
+      "entry_time": "2026-04-07T01:40:05.035919+00:00",
+      "exit_time": "2026-04-07T09:07:32.612032+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "ACHUSDT",
+      "action": "CLOSE",
+      "side": "SHORT",
+      "entry_price": 0.005841,
+      "exit_price": 0.005843,
+      "quantity": 354203.69225244,
+      "pnl": -4.8469,
+      "fee": 4.1385,
+      "entry_time": "2026-04-07T01:43:59.433055+00:00",
+      "exit_time": "2026-04-07T09:07:46.332661+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "PENDLEUSDT",
+      "action": "CLOSE",
+      "side": "SHORT",
+      "entry_price": 1.0046,
+      "exit_price": 1.0044,
+      "quantity": 2168.73461107,
+      "pnl": -3.9232,
+      "fee": 4.357,
+      "entry_time": "2026-04-07T01:43:52.044266+00:00",
+      "exit_time": "2026-04-07T09:07:48.652719+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "HEIUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.08668,
+      "exit_price": 0.08346,
+      "quantity": 25621.25186977,
+      "pnl": -86.8596,
+      "fee": 4.3592,
+      "entry_time": "2026-04-07T02:08:29.729794+00:00",
+      "exit_time": "2026-04-07T09:08:05.415981+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "APRUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.23304,
+      "exit_price": 0.23062,
+      "quantity": 9488.93627703,
+      "pnl": -27.3629,
+      "fee": 4.3996,
+      "entry_time": "2026-04-07T03:50:24.433210+00:00",
+      "exit_time": "2026-04-07T09:08:07.876427+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "LITUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 1.055,
+      "exit_price": 1.0723,
+      "quantity": 1990.27634003,
+      "pnl": 30.1979,
+      "fee": 4.2339,
+      "entry_time": "2026-04-07T06:22:51.103918+00:00",
+      "exit_time": "2026-04-07T09:08:25.335368+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "AIOTUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.0349,
+      "exit_price": 0.03669,
+      "quantity": 50781.52379756,
+      "pnl": 87.2635,
+      "fee": 3.6354,
+      "entry_time": "2026-04-07T08:54:04.331262+00:00",
+      "exit_time": "2026-04-07T09:23:58.596743+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "SWARMSUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.010802,
+      "exit_price": 0.010929,
+      "quantity": 175275.09492364,
+      "pnl": 18.451,
+      "fee": 3.8089,
+      "entry_time": "2026-04-07T09:02:42.692967+00:00",
+      "exit_time": "2026-04-07T09:40:28.468598+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "NMRUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 7.862,
+      "exit_price": 7.775,
+      "quantity": 341.34729395,
+      "pnl": -35.0349,
+      "fee": 5.3376,
+      "entry_time": "2026-04-07T09:30:15.898332+00:00",
+      "exit_time": "2026-04-07T11:34:26.968469+00:00",
+      "reason": "Sinyal tersine d\u00f6nd\u00fc: LONG \u2192 SELL"
+    },
+    {
+      "symbol": "AIOTUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.03638,
+      "exit_price": 0.03511,
+      "quantity": 65712.28404838,
+      "pnl": -88.1524,
+      "fee": 4.6978,
+      "entry_time": "2026-04-07T10:35:46.768543+00:00",
+      "exit_time": "2026-04-07T11:34:29.584413+00:00",
+      "reason": "Sinyal tersine d\u00f6nd\u00fc: LONG \u2192 SELL"
+    },
+    {
+      "symbol": "AIAUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.12062,
+      "exit_price": 0.12066,
+      "quantity": 40410.16431769,
+      "pnl": -8.1338,
+      "fee": 9.7502,
+      "entry_time": "2026-04-07T11:49:41.320154+00:00",
+      "exit_time": "2026-04-07T11:59:18.960563+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "SPXUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.2885,
+      "exit_price": 0.2812,
+      "quantity": 9289.13381282,
+      "pnl": -73.1027,
+      "fee": 5.292,
+      "entry_time": "2026-04-07T09:14:47.928904+00:00",
+      "exit_time": "2026-04-07T11:59:23.436413+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "PARTIUSDT",
+      "action": "CLOSE",
+      "side": "SHORT",
+      "entry_price": 0.08172,
+      "exit_price": 0.08257,
+      "quantity": 28838.31179638,
+      "pnl": -29.2504,
+      "fee": 4.7378,
+      "entry_time": "2026-04-07T09:47:07.265731+00:00",
+      "exit_time": "2026-04-07T11:59:35.358688+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "ACHUSDT",
+      "action": "CLOSE",
+      "side": "SHORT",
+      "entry_price": 0.005839,
+      "exit_price": 0.00582,
+      "quantity": 431174.37663504,
+      "pnl": 3.1653,
+      "fee": 5.0271,
+      "entry_time": "2026-04-07T10:19:40.611376+00:00",
+      "exit_time": "2026-04-07T12:00:22.445763+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "BULLAUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.018783,
+      "exit_price": 0.01889,
+      "quantity": 214852.10368183,
+      "pnl": 14.8951,
+      "fee": 8.0941,
+      "entry_time": "2026-04-07T10:56:10.456707+00:00",
+      "exit_time": "2026-04-07T12:00:43.299563+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "USUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.005832,
+      "exit_price": 3.046,
+      "quantity": 544441.72934277,
+      "pnl": 1653532.7787,
+      "fee": 1661.5447,
+      "entry_time": "2026-04-07T11:03:06.839342+00:00",
+      "exit_time": "2026-04-07T12:01:00.575830+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "CFGUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.1694,
+      "exit_price": 0.1705,
+      "quantity": 30816727.23533058,
+      "pnl": 23423.7944,
+      "fee": 10474.6056,
+      "entry_time": "2026-04-07T13:04:18.886892+00:00",
+      "exit_time": "2026-04-07T15:27:23.210743+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "SIGNUSDT",
+      "action": "CLOSE",
+      "side": "SHORT",
+      "entry_price": 0.03245,
+      "exit_price": 0.03219,
+      "quantity": 81591862.33251977,
+      "pnl": 15939.7862,
+      "fee": 5274.098,
+      "entry_time": "2026-04-07T16:19:37.452200+00:00",
+      "exit_time": "2026-04-07T17:01:25.090411+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "UNIUSDT",
+      "action": "CLOSE",
+      "side": "SHORT",
+      "entry_price": 3.049,
+      "exit_price": 3.043,
+      "quantity": 7023.88435567,
+      "pnl": -0.6462,
+      "fee": 42.7895,
+      "entry_time": "2026-04-07T11:34:25.268896+00:00",
+      "exit_time": "2026-04-07T17:03:03.514208+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "VELVETUSDT",
+      "action": "CLOSE",
+      "side": "SHORT",
+      "entry_price": 0.06372,
+      "exit_price": 0.06355,
+      "quantity": 101199.73999801,
+      "pnl": 4.3243,
+      "fee": 12.8797,
+      "entry_time": "2026-04-07T11:37:13.213578+00:00",
+      "exit_time": "2026-04-07T17:03:15.840245+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "RUNEUSDT",
+      "action": "CLOSE",
+      "side": "SHORT",
+      "entry_price": 0.3803,
+      "exit_price": 0.3831,
+      "quantity": 5919512.17821405,
+      "pnl": -21093.5897,
+      "fee": 4518.9556,
+      "entry_time": "2026-04-07T14:32:30.436120+00:00",
+      "exit_time": "2026-04-07T17:03:28.649643+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "CFGUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.1705,
+      "exit_price": 0.1705,
+      "quantity": 18651741.45134897,
+      "pnl": -6360.2438,
+      "fee": 6360.2438,
+      "entry_time": "2026-04-07T15:27:25.650796+00:00",
+      "exit_time": "2026-04-07T17:03:51.605723+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "ZECUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 272.09,
+      "exit_price": 271.22,
+      "quantity": 9664.3774599,
+      "pnl": -13658.7613,
+      "fee": 5250.7529,
+      "entry_time": "2026-04-07T17:41:17.008888+00:00",
+      "exit_time": "2026-04-07T17:51:18.772800+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "ZECUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 271.22,
+      "exit_price": 271.26,
+      "quantity": 9548.24137573,
+      "pnl": -4797.8003,
+      "fee": 5179.73,
+      "entry_time": "2026-04-07T17:51:22.242571+00:00",
+      "exit_time": "2026-04-07T17:51:28.530078+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "BSVUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 16.48,
+      "exit_price": 16.55,
+      "quantity": 115480.11136067,
+      "pnl": 4269.2997,
+      "fee": 3814.3081,
+      "entry_time": "2026-04-07T18:02:34.704881+00:00",
+      "exit_time": "2026-04-07T20:13:55.557899+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "CFGUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.172,
+      "exit_price": 0.1768,
+      "quantity": 26996748.20093023,
+      "pnl": 120167.9256,
+      "fee": 9416.4658,
+      "entry_time": "2026-04-07T17:14:40.432842+00:00",
+      "exit_time": "2026-04-07T23:30:04.622165+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "ZECUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 271.16,
+      "exit_price": 322.57,
+      "quantity": 9483.60640819,
+      "pnl": 481921.5038,
+      "fee": 5630.7016,
+      "entry_time": "2026-04-07T17:51:32.232064+00:00",
+      "exit_time": "2026-04-07T23:30:11.950558+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "SIGNUSDT",
+      "action": "CLOSE",
+      "side": "SHORT",
+      "entry_price": 0.0322,
+      "exit_price": 0.03222,
+      "quantity": 43032795.60455018,
+      "pnl": -3632.8286,
+      "fee": 2772.1727,
+      "entry_time": "2026-04-07T18:20:53.848659+00:00",
+      "exit_time": "2026-04-07T23:30:23.507957+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "USUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.005804,
+      "exit_price": 0.005775,
+      "quantity": 137271092.05070308,
+      "pnl": -5570.3236,
+      "fee": 1589.462,
+      "entry_time": "2026-04-07T19:41:15.850870+00:00",
+      "exit_time": "2026-04-07T23:30:35.087279+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "B2USDT",
+      "action": "CLOSE",
+      "side": "SHORT",
+      "entry_price": 0.6294,
+      "exit_price": 0.6355,
+      "quantity": 795258.25378663,
+      "pnl": -5856.9975,
+      "fee": 1005.9222,
+      "entry_time": "2026-04-07T22:49:25.809552+00:00",
+      "exit_time": "2026-04-07T23:30:55.149430+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "RENDERUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 1.945,
+      "exit_price": 2.099,
+      "quantity": 297898.69560782,
+      "pnl": 44671.6968,
+      "fee": 1204.7023,
+      "entry_time": "2026-04-07T21:04:12.236955+00:00",
+      "exit_time": "2026-04-07T23:31:24.417404+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "DUSKUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.11488,
+      "exit_price": 0.11624,
+      "quantity": 2819869.46971477,
+      "pnl": 3183.2942,
+      "fee": 651.7282,
+      "entry_time": "2026-04-07T23:07:02.079115+00:00",
+      "exit_time": "2026-04-07T23:31:34.454481+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "KAITOUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.4314,
+      "exit_price": 0.4317,
+      "quantity": 364496.24921668,
+      "pnl": -205.2478,
+      "fee": 314.5967,
+      "entry_time": "2026-04-07T23:26:43.025673+00:00",
+      "exit_time": "2026-04-07T23:32:03.649914+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "GRIFFAINUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.015523,
+      "exit_price": 0.015514,
+      "quantity": 6563047.18874151,
+      "pnl": -262.7647,
+      "fee": 203.6973,
+      "entry_time": "2026-04-07T23:28:15.383960+00:00",
+      "exit_time": "2026-04-08T15:56:03.858642+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "BSVUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 16.55,
+      "exit_price": 16.76,
+      "quantity": 72125.76576918,
+      "pnl": 12743.9016,
+      "fee": 2402.5093,
+      "entry_time": "2026-04-07T20:13:58.438293+00:00",
+      "exit_time": "2026-04-08T15:56:16.592279+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "HOMEUSDT",
+      "action": "CLOSE",
+      "side": "SHORT",
+      "entry_price": 0.019201,
+      "exit_price": 0.019094,
+      "quantity": 2721707.86535544,
+      "pnl": 186.9949,
+      "fee": 104.2278,
+      "entry_time": "2026-04-08T09:38:51.654527+00:00",
+      "exit_time": "2026-04-08T15:56:34.659552+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "BULLAUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.019797,
+      "exit_price": 0.017178,
+      "quantity": 1667092.83732054,
+      "pnl": -4427.7569,
+      "fee": 61.6408,
+      "entry_time": "2026-04-07T23:29:20.010745+00:00",
+      "exit_time": "2026-04-08T15:57:15.201623+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "2ZUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.08688,
+      "exit_price": 0.08543,
+      "quantity": 67249741.65515654,
+      "pnl": -109099.9284,
+      "fee": 11587.803,
+      "entry_time": "2026-04-07T23:41:52.157539+00:00",
+      "exit_time": "2026-04-08T15:57:52.308115+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "BICOUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.02425,
+      "exit_price": 0.02436,
+      "quantity": 155932699.77715465,
+      "pnl": 9572.7084,
+      "fee": 7579.8885,
+      "entry_time": "2026-04-07T23:58:39.771450+00:00",
+      "exit_time": "2026-04-08T15:57:56.895765+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "SIGNUSDT",
+      "action": "CLOSE",
+      "side": "SHORT",
+      "entry_price": 0.03189,
+      "exit_price": 0.0323,
+      "quantity": 67149221.736664,
+      "pnl": -31841.4895,
+      "fee": 4310.3085,
+      "entry_time": "2026-04-08T00:34:38.547641+00:00",
+      "exit_time": "2026-04-09T00:15:54.748065+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "RENDERUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 2.032,
+      "exit_price": 2.001,
+      "quantity": 584922.48614998,
+      "pnl": -20491.5895,
+      "fee": 2358.9924,
+      "entry_time": "2026-04-08T00:51:01.743954+00:00",
+      "exit_time": "2026-04-09T00:16:00.446176+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "CROSSUSDT",
+      "action": "CLOSE",
+      "side": "SHORT",
+      "entry_price": 0.06374,
+      "exit_price": 0.06286,
+      "quantity": 12081418.8652963,
+      "pnl": 9102.141,
+      "fee": 1529.5076,
+      "entry_time": "2026-04-08T01:27:28.716515+00:00",
+      "exit_time": "2026-04-09T00:16:02.373859+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "TRIAUSDT",
+      "action": "CLOSE",
+      "side": "SHORT",
+      "entry_price": 0.0228,
+      "exit_price": 0.0237,
+      "quantity": 116165858.10666372,
+      "pnl": -109950.9847,
+      "fee": 5401.7124,
+      "entry_time": "2026-04-08T21:20:52.371737+00:00",
+      "exit_time": "2026-04-09T00:16:19.762730+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "ARCUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.0613,
+      "exit_price": 0.06037,
+      "quantity": 630913.95877097,
+      "pnl": -663.5133,
+      "fee": 76.7633,
+      "entry_time": "2026-04-08T12:35:46.029725+00:00",
+      "exit_time": "2026-04-09T00:16:22.463430+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "HYPERUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.08936,
+      "exit_price": 0.08813,
+      "quantity": 8375024.37501056,
+      "pnl": -11787.7631,
+      "fee": 1486.4831,
+      "entry_time": "2026-04-08T02:00:53.737937+00:00",
+      "exit_time": "2026-04-09T11:31:35.406045+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "ALGOUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.1234,
+      "exit_price": 0.1109,
+      "quantity": 230050.8967308,
+      "pnl": -2929.5371,
+      "fee": 53.9009,
+      "entry_time": "2026-04-08T08:16:08.360361+00:00",
+      "exit_time": "2026-04-09T12:37:44.113679+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "LUMIAUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.07904,
+      "exit_price": 0.07746,
+      "quantity": 4083143.39099981,
+      "pnl": -7090.3785,
+      "fee": 639.0119,
+      "entry_time": "2026-04-08T02:17:04.657346+00:00",
+      "exit_time": "2026-04-09T21:15:09.910709+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "NOMUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.00649,
+      "exit_price": 0.007377,
+      "quantity": 17376492.16765966,
+      "pnl": 15171.9887,
+      "fee": 240.9598,
+      "entry_time": "2026-04-08T03:40:13.317293+00:00",
+      "exit_time": "2026-04-09T21:15:12.462699+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "JSTUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.06446,
+      "exit_price": 0.06937,
+      "quantity": 1814592.08686263,
+      "pnl": 8666.8003,
+      "fee": 242.8469,
+      "entry_time": "2026-04-08T05:41:05.271220+00:00",
+      "exit_time": "2026-04-09T21:15:28.293432+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "DUSKUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.11472,
+      "exit_price": 0.12525,
+      "quantity": 190914.112957,
+      "pnl": 1964.5119,
+      "fee": 45.8137,
+      "entry_time": "2026-04-08T13:28:58.863718+00:00",
+      "exit_time": "2026-04-09T21:15:41.037441+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "KAITOUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.429,
+      "exit_price": 0.4078,
+      "quantity": 649876.73157232,
+      "pnl": -14321.2036,
+      "fee": 543.8168,
+      "entry_time": "2026-04-08T02:34:10.926043+00:00",
+      "exit_time": "2026-04-09T23:41:20.237036+00:00",
+      "reason": "Sinyal tersine d\u00f6nd\u00fc: LONG \u2192 SELL"
+    },
+    {
+      "symbol": "TAOUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 336.16,
+      "exit_price": 301.08,
+      "quantity": 147.25005373,
+      "pnl": -5259.3655,
+      "fee": 93.8336,
+      "entry_time": "2026-04-09T20:14:34.381563+00:00",
+      "exit_time": "2026-04-10T00:00:19.220538+00:00",
+      "reason": "Sinyal tersine d\u00f6nd\u00fc: LONG \u2192 SELL"
+    },
+    {
+      "symbol": "CLOUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.10481,
+      "exit_price": 0.0774,
+      "quantity": 16346102.33004042,
+      "pnl": -451025.0882,
+      "fee": 2978.4233,
+      "entry_time": "2026-04-08T22:45:38.614763+00:00",
+      "exit_time": "2026-04-10T04:02:24.001313+00:00",
+      "reason": "Sinyal tersine d\u00f6nd\u00fc: LONG \u2192 SELL"
+    },
+    {
+      "symbol": "CROSSUSDT",
+      "action": "CLOSE",
+      "side": "SHORT",
+      "entry_price": 0.06246,
+      "exit_price": 0.06145,
+      "quantity": 21196334.41306436,
+      "pnl": 18781.86,
+      "fee": 2626.4378,
+      "entry_time": "2026-04-09T01:24:51.603926+00:00",
+      "exit_time": "2026-04-10T18:14:01.510223+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "CHILLGUYUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.008712,
+      "exit_price": 0.01288,
+      "quantity": 110646048.07633886,
+      "pnl": 458783.6589,
+      "fee": 2389.0695,
+      "entry_time": "2026-04-09T03:02:55.171359+00:00",
+      "exit_time": "2026-04-10T18:14:09.188441+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "DUSKUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.1217,
+      "exit_price": 0.12428,
+      "quantity": 2578396.54605587,
+      "pnl": 6018.0291,
+      "fee": 634.234,
+      "entry_time": "2026-04-09T22:11:11.602791+00:00",
+      "exit_time": "2026-04-10T18:14:18.341368+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "IRYSUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.02152,
+      "exit_price": 0.02548,
+      "quantity": 126640275.27462825,
+      "pnl": 495543.3971,
+      "fee": 5952.0929,
+      "entry_time": "2026-04-08T16:44:24.096974+00:00",
+      "exit_time": "2026-04-10T21:14:43.037244+00:00",
+      "reason": "take_profit tetiklendi \u2014 otomatik kapat\u0131ld\u0131"
+    },
+    {
+      "symbol": "DAMUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.05694,
+      "exit_price": 0.06135,
+      "quantity": 55539656.41587637,
+      "pnl": 238360.0988,
+      "fee": 6569.786,
+      "entry_time": "2026-04-09T00:26:58.704574+00:00",
+      "exit_time": "2026-04-10T21:14:43.488972+00:00",
+      "reason": "trailing_stop tetiklendi \u2014 otomatik kapat\u0131ld\u0131"
+    },
+    {
+      "symbol": "TAKEUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.01932,
+      "exit_price": 0.01931,
+      "quantity": 119180323.66690432,
+      "pnl": -5795.7391,
+      "fee": 4603.9359,
+      "entry_time": "2026-04-09T00:41:23.473174+00:00",
+      "exit_time": "2026-04-10T21:14:44.432270+00:00",
+      "reason": "trailing_stop tetiklendi \u2014 otomatik kapat\u0131ld\u0131"
+    },
+    {
+      "symbol": "EULUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.9752,
+      "exit_price": 1.107,
+      "quantity": 568343.8188666,
+      "pnl": 73724.3098,
+      "fee": 1183.4055,
+      "entry_time": "2026-04-09T04:16:05.322029+00:00",
+      "exit_time": "2026-04-10T21:14:44.940237+00:00",
+      "reason": "trailing_stop tetiklendi \u2014 otomatik kapat\u0131ld\u0131"
+    },
+    {
+      "symbol": "ARCUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.0625,
+      "exit_price": 0.07085,
+      "quantity": 6456777.89409202,
+      "pnl": 53053.0841,
+      "fee": 861.0113,
+      "entry_time": "2026-04-09T08:22:48.011055+00:00",
+      "exit_time": "2026-04-10T21:14:45.582454+00:00",
+      "reason": "trailing_stop tetiklendi \u2014 otomatik kapat\u0131ld\u0131"
+    },
+    {
+      "symbol": "RENDERUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 2.041,
+      "exit_price": 2.011,
+      "quantity": 99474.54769433,
+      "pnl": -3387.3073,
+      "fee": 403.0709,
+      "entry_time": "2026-04-09T10:03:07.231920+00:00",
+      "exit_time": "2026-04-10T21:14:45.980155+00:00",
+      "reason": "trailing_stop tetiklendi \u2014 otomatik kapat\u0131ld\u0131"
+    },
+    {
+      "symbol": "UBUSDT",
+      "action": "CLOSE",
+      "side": "SHORT",
+      "entry_price": 0.01969,
+      "exit_price": 0.02219,
+      "quantity": 10084895.16420695,
+      "pnl": -25634.5933,
+      "fee": 422.3554,
+      "entry_time": "2026-04-09T12:26:46.142166+00:00",
+      "exit_time": "2026-04-10T21:14:47.503125+00:00",
+      "reason": "trailing_stop tetiklendi \u2014 otomatik kapat\u0131ld\u0131"
+    },
+    {
+      "symbol": "ARBUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.1017,
+      "exit_price": 0.1121,
+      "quantity": 4154313.38474572,
+      "pnl": 42316.667,
+      "fee": 888.1922,
+      "entry_time": "2026-04-09T12:35:57.876961+00:00",
+      "exit_time": "2026-04-10T21:14:48.050723+00:00",
+      "reason": "take_profit tetiklendi \u2014 otomatik kapat\u0131ld\u0131"
+    },
+    {
+      "symbol": "ZBTUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.10996,
+      "exit_price": 0.11267,
+      "quantity": 1043889.29124227,
+      "pnl": 2596.5389,
+      "fee": 232.4011,
+      "entry_time": "2026-04-09T16:44:16.772889+00:00",
+      "exit_time": "2026-04-10T21:14:48.455435+00:00",
+      "reason": "trailing_stop tetiklendi \u2014 otomatik kapat\u0131ld\u0131"
+    },
+    {
+      "symbol": "LYNUSDT",
+      "action": "CLOSE",
+      "side": "SHORT",
+      "entry_price": 0.04663,
+      "exit_price": 0.05302,
+      "quantity": 33426830.19826293,
+      "pnl": -216928.4286,
+      "fee": 3330.9836,
+      "entry_time": "2026-04-10T18:14:44.855937+00:00",
+      "exit_time": "2026-04-11T15:38:34.194835+00:00",
+      "reason": "Sinyal tersine d\u00f6nd\u00fc: SHORT \u2192 BUY"
+    },
+    {
+      "symbol": "LAUSDT",
+      "action": "CLOSE",
+      "side": "SHORT",
+      "entry_price": 0.1648,
+      "exit_price": 0.156,
+      "quantity": 1327667.53458738,
+      "pnl": 11257.5586,
+      "fee": 425.9157,
+      "entry_time": "2026-04-09T12:10:59.954587+00:00",
+      "exit_time": "2026-04-12T06:46:57.863583+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "ONGUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.09185,
+      "exit_price": 0.09078,
+      "quantity": 801883.29820359,
+      "pnl": -1004.4631,
+      "fee": 146.4479,
+      "entry_time": "2026-04-10T18:14:04.465679+00:00",
+      "exit_time": "2026-04-12T06:47:08.851305+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "SAFEUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.1372,
+      "exit_price": 0.1418,
+      "quantity": 7356645.12987241,
+      "pnl": 31788.0636,
+      "fee": 2052.504,
+      "entry_time": "2026-04-10T19:39:45.886669+00:00",
+      "exit_time": "2026-04-12T06:52:50.484520+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "TAUSDT",
+      "action": "CLOSE",
+      "side": "SHORT",
+      "entry_price": 0.04028,
+      "exit_price": 0.0411,
+      "quantity": 127497519.14305602,
+      "pnl": -114923.7138,
+      "fee": 10375.7481,
+      "entry_time": "2026-04-10T22:19:34.135693+00:00",
+      "exit_time": "2026-04-12T06:53:04.986217+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "DUSKUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.12648,
+      "exit_price": 0.15391,
+      "quantity": 35076484.14516129,
+      "pnl": 952312.8647,
+      "fee": 9835.0954,
+      "entry_time": "2026-04-11T00:33:49.813927+00:00",
+      "exit_time": "2026-04-12T06:53:40.560097+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "PLAYUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.0836,
+      "exit_price": 0.08172,
+      "quantity": 11308852.6016042,
+      "pnl": -23130.2224,
+      "fee": 1869.5795,
+      "entry_time": "2026-04-12T16:23:00.677822+00:00",
+      "exit_time": "2026-04-12T17:46:35.924686+00:00",
+      "reason": "manual_close"
+    },
+    {
+      "symbol": "MYXUSDT",
+      "action": "CLOSE",
+      "side": "SHORT",
+      "entry_price": 0.2128,
+      "exit_price": 0.2978,
+      "quantity": 1547642.58848684,
+      "pnl": -132339.8463,
+      "fee": 790.2263,
+      "entry_time": "2026-04-12T22:45:26.392338+00:00",
+      "exit_time": "2026-04-14T20:22:21.968251+00:00",
+      "reason": "Sinyal tersine d\u00f6nd\u00fc: SHORT \u2192 BUY"
+    },
+    {
+      "symbol": "MELANIAUSDT",
+      "action": "CLOSE",
+      "side": "SHORT",
+      "entry_price": 0.1007,
+      "exit_price": 0.1115,
+      "quantity": 9660422.29264328,
+      "pnl": -106382.5024,
+      "fee": 2049.9416,
+      "entry_time": "2026-04-12T14:21:43.242801+00:00",
+      "exit_time": "2026-04-22T22:33:12.464540+00:00",
+      "reason": "Sinyal tersine d\u00f6nd\u00fc: SHORT \u2192 BUY"
+    },
+    {
+      "symbol": "BLESSUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.00638,
+      "exit_price": 0.006005,
+      "quantity": 337533595.80094045,
+      "pnl": -130755.452,
+      "fee": 4180.3536,
+      "entry_time": "2026-04-11T06:18:43.646512+00:00",
+      "exit_time": "2026-04-22T23:03:11.127819+00:00",
+      "reason": "Sinyal tersine d\u00f6nd\u00fc: LONG \u2192 SELL"
+    },
+    {
+      "symbol": "IRYSUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.02725,
+      "exit_price": 0.03388,
+      "quantity": 44183122.33100917,
+      "pnl": 290233.1868,
+      "fee": 2700.9143,
+      "entry_time": "2026-04-11T07:51:16.759933+00:00",
+      "exit_time": "2026-05-19T10:54:48.465528+00:00",
+      "reason": "Sinyal tersine d\u00f6nd\u00fc: LONG \u2192 SELL"
+    },
+    {
+      "symbol": "SWARMSUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 0.017871,
+      "exit_price": 0.01244,
+      "quantity": 470997073.4312573,
+      "pnl": -2572261.4981,
+      "fee": 14276.3923,
+      "entry_time": "2026-04-12T08:28:07.576580+00:00",
+      "exit_time": "2026-05-19T10:54:50.383478+00:00",
+      "reason": "Sinyal tersine d\u00f6nd\u00fc: LONG \u2192 SELL"
+    },
+    {
+      "symbol": "ETHUSDT",
+      "action": "CLOSE",
+      "side": "LONG",
+      "entry_price": 2213.34,
+      "exit_price": 2114.03,
+      "quantity": 8746.41302909,
+      "pnl": -906455.2433,
+      "fee": 37848.9653,
+      "entry_time": "2026-04-12T09:55:55.562623+00:00",
+      "exit_time": "2026-05-19T10:54:51.348021+00:00",
+      "reason": "Sinyal tersine d\u00f6nd\u00fc: LONG \u2192 SELL"
+    }
+  ],
+  "bot_start_time": "2026-05-19T10:54:45.102058+00:00",
+  "paper_balance": -1212118.0633,
+  "daily_date": "2026-05-19",
+  "last_save_time": "2026-05-20T12:44:05.602647+00:00",
+  "last_auto_scan": "2026-04-12T22:24:14.575366+00:00",
+  "last_scan_results": [
+    {
+      "symbol": "DEXEUSDT",
+      "count": 6,
+      "total_conf": 269,
+      "buy_nss": 8862.35,
+      "sell_nss": 0,
+      "best_conf": 53,
+      "price": 9.894,
+      "signals": {
+        "30m": {
+          "signal": "BUY",
+          "confidence": 38,
+          "zak": 48,
+          "nihai_skor": 693.12
+        },
+        "1h": {
+          "signal": "BUY",
+          "confidence": 39,
+          "zak": 58,
+          "nihai_skor": 882.18
+        },
+        "2h": {
+          "signal": "BUY",
+          "confidence": 42,
+          "zak": 65,
+          "nihai_skor": 1146.6
+        },
+        "4h": {
+          "signal": "BUY",
+          "confidence": 53,
+          "zak": 75,
+          "nihai_skor": 2106.75
+        },
+        "6h": {
+          "signal": "BUY",
+          "confidence": 46,
+          "zak": 80,
+          "nihai_skor": 1692.8
+        },
+        "12h": {
+          "signal": "BUY",
+          "confidence": 51,
+          "zak": 90,
+          "nihai_skor": 2340.9
+        }
+      },
+      "all_signals": {
+        "30m": {
+          "signal": "BUY",
+          "confidence": 38,
+          "zak": 48,
+          "nihai_skor": 693.12,
+          "in_top15": true
+        },
+        "1h": {
+          "signal": "BUY",
+          "confidence": 39,
+          "zak": 58,
+          "nihai_skor": 882.18,
+          "in_top15": true
+        },
+        "2h": {
+          "signal": "BUY",
+          "confidence": 42,
+          "zak": 65,
+          "nihai_skor": 1146.6,
+          "in_top15": true
+        },
+        "4h": {
+          "signal": "BUY",
+          "confidence": 53,
+          "zak": 75,
+          "nihai_skor": 2106.75,
+          "in_top15": true
+        },
+        "6h": {
+          "signal": "BUY",
+          "confidence": 46,
+          "zak": 80,
+          "nihai_skor": 1692.8,
+          "in_top15": true
+        },
+        "12h": {
+          "signal": "BUY",
+          "confidence": 51,
+          "zak": 90,
+          "nihai_skor": 2340.9,
+          "in_top15": true
+        },
+        "1m": {
+          "signal": "NEUTRAL",
+          "confidence": 18,
+          "zak": 8,
+          "nihai_skor": 25.92,
+          "in_top15": false
+        },
+        "3m": {
+          "signal": "NEUTRAL",
+          "confidence": 12,
+          "zak": 15,
+          "nihai_skor": 21.6,
+          "in_top15": false
+        },
+        "15m": {
+          "signal": "BUY",
+          "confidence": 32,
+          "zak": 38,
+          "nihai_skor": 389.12,
+          "in_top15": false
+        },
+        "8h": {
+          "signal": "BUY",
+          "confidence": 44,
+          "zak": 85,
+          "nihai_skor": 1645.6,
+          "in_top15": false
+        },
+        "1d": {
+          "signal": "BUY",
+          "confidence": 40,
+          "zak": 95,
+          "nihai_skor": 1520.0,
+          "in_top15": false
+        }
+      },
+      "dominant_dir": "BUY",
+      "net_nss": 8862.35,
+      "total_nss": 8862.35
+    },
+    {
+      "symbol": "PLAYUSDT",
+      "count": 5,
+      "total_conf": 236,
+      "buy_nss": 8064.95,
+      "sell_nss": 194.4,
+      "best_conf": 55,
+      "price": 0.07846,
+      "signals": {
+        "3m": {
+          "signal": "SELL",
+          "confidence": 36,
+          "zak": 15,
+          "nihai_skor": 194.4
+        },
+        "2h": {
+          "signal": "BUY",
+          "confidence": 42,
+          "zak": 65,
+          "nihai_skor": 1146.6
+        },
+        "4h": {
+          "signal": "BUY",
+          "confidence": 55,
+          "zak": 75,
+          "nihai_skor": 2268.75
+        },
+        "6h": {
+          "signal": "BUY",
+          "confidence": 51,
+          "zak": 80,
+          "nihai_skor": 2080.8
+        },
+        "1d": {
+          "signal": "BUY",
+          "confidence": 52,
+          "zak": 95,
+          "nihai_skor": 2568.8
+        }
+      },
+      "all_signals": {
+        "3m": {
+          "signal": "SELL",
+          "confidence": 36,
+          "zak": 15,
+          "nihai_skor": 194.4,
+          "in_top15": true
+        },
+        "2h": {
+          "signal": "BUY",
+          "confidence": 42,
+          "zak": 65,
+          "nihai_skor": 1146.6,
+          "in_top15": true
+        },
+        "4h": {
+          "signal": "BUY",
+          "confidence": 55,
+          "zak": 75,
+          "nihai_skor": 2268.75,
+          "in_top15": true
+        },
+        "6h": {
+          "signal": "BUY",
+          "confidence": 51,
+          "zak": 80,
+          "nihai_skor": 2080.8,
+          "in_top15": true
+        },
+        "1d": {
+          "signal": "BUY",
+          "confidence": 52,
+          "zak": 95,
+          "nihai_skor": 2568.8,
+          "in_top15": true
+        },
+        "1m": {
+          "signal": "NEUTRAL",
+          "confidence": 20,
+          "zak": 8,
+          "nihai_skor": 32.0,
+          "in_top15": false
+        },
+        "15m": {
+          "signal": "SELL",
+          "confidence": 32,
+          "zak": 38,
+          "nihai_skor": 389.12,
+          "in_top15": false
+        },
+        "30m": {
+          "signal": "NEUTRAL",
+          "confidence": 12,
+          "zak": 48,
+          "nihai_skor": 69.12,
+          "in_top15": false
+        },
+        "1h": {
+          "signal": "NEUTRAL",
+          "confidence": 12,
+          "zak": 58,
+          "nihai_skor": 83.52,
+          "in_top15": false
+        },
+        "8h": {
+          "signal": "BUY",
+          "confidence": 43,
+          "zak": 85,
+          "nihai_skor": 1571.65,
+          "in_top15": false
+        },
+        "12h": {
+          "signal": "BUY",
+          "confidence": 33,
+          "zak": 90,
+          "nihai_skor": 980.1,
+          "in_top15": false
+        }
+      },
+      "dominant_dir": "BUY",
+      "net_nss": 7870.55,
+      "total_nss": 7870.55
+    },
+    {
+      "symbol": "GIGGLEUSDT",
+      "count": 4,
+      "total_conf": 194,
+      "buy_nss": 7855.950000000001,
+      "sell_nss": 0,
+      "best_conf": 52,
+      "price": 29.33,
+      "signals": {
+        "4h": {
+          "signal": "BUY",
+          "confidence": 43,
+          "zak": 75,
+          "nihai_skor": 1386.75
+        },
+        "6h": {
+          "signal": "BUY",
+          "confidence": 49,
+          "zak": 80,
+          "nihai_skor": 1920.8
+        },
+        "8h": {
+          "signal": "BUY",
+          "confidence": 52,
+          "zak": 85,
+          "nihai_skor": 2298.4
+        },
+        "12h": {
+          "signal": "BUY",
+          "confidence": 50,
+          "zak": 90,
+          "nihai_skor": 2250.0
+        }
+      },
+      "all_signals": {
+        "4h": {
+          "signal": "BUY",
+          "confidence": 43,
+          "zak": 75,
+          "nihai_skor": 1386.75,
+          "in_top15": true
+        },
+        "6h": {
+          "signal": "BUY",
+          "confidence": 49,
+          "zak": 80,
+          "nihai_skor": 1920.8,
+          "in_top15": true
+        },
+        "8h": {
+          "signal": "BUY",
+          "confidence": 52,
+          "zak": 85,
+          "nihai_skor": 2298.4,
+          "in_top15": true
+        },
+        "12h": {
+          "signal": "BUY",
+          "confidence": 50,
+          "zak": 90,
+          "nihai_skor": 2250.0,
+          "in_top15": true
+        },
+        "1m": {
+          "signal": "NEUTRAL",
+          "confidence": 14,
+          "zak": 8,
+          "nihai_skor": 15.68,
+          "in_top15": false
+        },
+        "3m": {
+          "signal": "NEUTRAL",
+          "confidence": 21,
+          "zak": 15,
+          "nihai_skor": 66.15,
+          "in_top15": false
+        },
+        "15m": {
+          "signal": "NEUTRAL",
+          "confidence": 16,
+          "zak": 38,
+          "nihai_skor": 97.28,
+          "in_top15": false
+        },
+        "30m": {
+          "signal": "NEUTRAL",
+          "confidence": 8,
+          "zak": 48,
+          "nihai_skor": 30.72,
+          "in_top15": false
+        },
+        "1h": {
+          "signal": "BUY",
+          "confidence": 37,
+          "zak": 58,
+          "nihai_skor": 794.02,
+          "in_top15": false
+        },
+        "2h": {
+          "signal": "NEUTRAL",
+          "confidence": 14,
+          "zak": 65,
+          "nihai_skor": 127.4,
+          "in_top15": false
+        },
+        "1d": {
+          "signal": "NEUTRAL",
+          "confidence": 27,
+          "zak": 95,
+          "nihai_skor": 692.55,
+          "in_top15": false
+        }
+      },
+      "dominant_dir": "BUY",
+      "net_nss": 7855.95,
+      "total_nss": 7855.95
+    },
+    {
+      "symbol": "PTBUSDT",
+      "count": 5,
+      "total_conf": 233,
+      "buy_nss": 0,
+      "sell_nss": 7651.26,
+      "best_conf": 52,
+      "price": 0.00092,
+      "signals": {
+        "15m": {
+          "signal": "SELL",
+          "confidence": 41,
+          "zak": 38,
+          "nihai_skor": 638.78
+        },
+        "1h": {
+          "signal": "SELL",
+          "confidence": 44,
+          "zak": 58,
+          "nihai_skor": 1122.88
+        },
+        "2h": {
+          "signal": "SELL",
+          "confidence": 48,
+          "zak": 65,
+          "nihai_skor": 1497.6
+        },
+        "8h": {
+          "signal": "SELL",
+          "confidence": 48,
+          "zak": 85,
+          "nihai_skor": 1958.4
+        },
+        "12h": {
+          "signal": "SELL",
+          "confidence": 52,
+          "zak": 90,
+          "nihai_skor": 2433.6
+        }
+      },
+      "all_signals": {
+        "15m": {
+          "signal": "SELL",
+          "confidence": 41,
+          "zak": 38,
+          "nihai_skor": 638.78,
+          "in_top15": true
+        },
+        "1h": {
+          "signal": "SELL",
+          "confidence": 44,
+          "zak": 58,
+          "nihai_skor": 1122.88,
+          "in_top15": true
+        },
+        "2h": {
+          "signal": "SELL",
+          "confidence": 48,
+          "zak": 65,
+          "nihai_skor": 1497.6,
+          "in_top15": true
+        },
+        "8h": {
+          "signal": "SELL",
+          "confidence": 48,
+          "zak": 85,
+          "nihai_skor": 1958.4,
+          "in_top15": true
+        },
+        "12h": {
+          "signal": "SELL",
+          "confidence": 52,
+          "zak": 90,
+          "nihai_skor": 2433.6,
+          "in_top15": true
+        },
+        "1m": {
+          "signal": "NEUTRAL",
+          "confidence": 17,
+          "zak": 8,
+          "nihai_skor": 23.12,
+          "in_top15": false
+        },
+        "3m": {
+          "signal": "SELL",
+          "confidence": 28,
+          "zak": 15,
+          "nihai_skor": 117.6,
+          "in_top15": false
+        },
+        "30m": {
+          "signal": "NEUTRAL",
+          "confidence": 25,
+          "zak": 48,
+          "nihai_skor": 300.0,
+          "in_top15": false
+        },
+        "4h": {
+          "signal": "SELL",
+          "confidence": 40,
+          "zak": 75,
+          "nihai_skor": 1200.0,
+          "in_top15": false
+        },
+        "6h": {
+          "signal": "SELL",
+          "confidence": 35,
+          "zak": 80,
+          "nihai_skor": 980.0,
+          "in_top15": false
+        },
+        "1d": {
+          "signal": "SELL",
+          "confidence": 28,
+          "zak": 95,
+          "nihai_skor": 744.8,
+          "in_top15": false
+        }
+      },
+      "dominant_dir": "SELL",
+      "net_nss": 7651.26,
+      "total_nss": 7651.26
+    },
+    {
+      "symbol": "SAHARAUSDT",
+      "count": 5,
+      "total_conf": 232,
+      "buy_nss": 0,
+      "sell_nss": 6652.28,
+      "best_conf": 52,
+      "price": 0.02161,
+      "signals": {
+        "1m": {
+          "signal": "SELL",
+          "confidence": 36,
+          "zak": 8,
+          "nihai_skor": 103.68
+        },
+        "3m": {
+          "signal": "SELL",
+          "confidence": 51,
+          "zak": 15,
+          "nihai_skor": 390.15
+        },
+        "6h": {
+          "signal": "SELL",
+          "confidence": 44,
+          "zak": 80,
+          "nihai_skor": 1548.8
+        },
+        "8h": {
+          "signal": "SELL",
+          "confidence": 49,
+          "zak": 85,
+          "nihai_skor": 2040.85
+        },
+        "1d": {
+          "signal": "SELL",
+          "confidence": 52,
+          "zak": 95,
+          "nihai_skor": 2568.8
+        }
+      },
+      "all_signals": {
+        "1m": {
+          "signal": "SELL",
+          "confidence": 36,
+          "zak": 8,
+          "nihai_skor": 103.68,
+          "in_top15": true
+        },
+        "3m": {
+          "signal": "SELL",
+          "confidence": 51,
+          "zak": 15,
+          "nihai_skor": 390.15,
+          "in_top15": true
+        },
+        "6h": {
+          "signal": "SELL",
+          "confidence": 44,
+          "zak": 80,
+          "nihai_skor": 1548.8,
+          "in_top15": true
+        },
+        "8h": {
+          "signal": "SELL",
+          "confidence": 49,
+          "zak": 85,
+          "nihai_skor": 2040.85,
+          "in_top15": true
+        },
+        "1d": {
+          "signal": "SELL",
+          "confidence": 52,
+          "zak": 95,
+          "nihai_skor": 2568.8,
+          "in_top15": true
+        },
+        "15m": {
+          "signal": "NEUTRAL",
+          "confidence": 20,
+          "zak": 38,
+          "nihai_skor": 152.0,
+          "in_top15": false
+        },
+        "30m": {
+          "signal": "NEUTRAL",
+          "confidence": 23,
+          "zak": 48,
+          "nihai_skor": 253.92,
+          "in_top15": false
+        },
+        "1h": {
+          "signal": "NEUTRAL",
+          "confidence": 24,
+          "zak": 58,
+          "nihai_skor": 334.08,
+          "in_top15": false
+        },
+        "2h": {
+          "signal": "NEUTRAL",
+          "confidence": 30,
+          "zak": 65,
+          "nihai_skor": 585.0,
+          "in_top15": false
+        },
+        "4h": {
+          "signal": "SELL",
+          "confidence": 35,
+          "zak": 75,
+          "nihai_skor": 918.75,
+          "in_top15": false
+        },
+        "12h": {
+          "signal": "NEUTRAL",
+          "confidence": 32,
+          "zak": 90,
+          "nihai_skor": 921.6,
+          "in_top15": false
+        }
+      },
+      "dominant_dir": "SELL",
+      "net_nss": 6652.28,
+      "total_nss": 6652.28
+    },
+    {
+      "symbol": "ETHFIUSDT",
+      "count": 5,
+      "total_conf": 215,
+      "buy_nss": 0,
+      "sell_nss": 6569.92,
+      "best_conf": 51,
+      "price": 0.4159,
+      "signals": {
+        "1m": {
+          "signal": "SELL",
+          "confidence": 37,
+          "zak": 8,
+          "nihai_skor": 109.52
+        },
+        "2h": {
+          "signal": "SELL",
+          "confidence": 39,
+          "zak": 65,
+          "nihai_skor": 988.65
+        },
+        "4h": {
+          "signal": "SELL",
+          "confidence": 44,
+          "zak": 75,
+          "nihai_skor": 1452.0
+        },
+        "6h": {
+          "signal": "SELL",
+          "confidence": 44,
+          "zak": 80,
+          "nihai_skor": 1548.8
+        },
+        "1d": {
+          "signal": "SELL",
+          "confidence": 51,
+          "zak": 95,
+          "nihai_skor": 2470.95
+        }
+      },
+      "all_signals": {
+        "1m": {
+          "signal": "SELL",
+          "confidence": 37,
+          "zak": 8,
+          "nihai_skor": 109.52,
+          "in_top15": true
+        },
+        "2h": {
+          "signal": "SELL",
+          "confidence": 39,
+          "zak": 65,
+          "nihai_skor": 988.65,
+          "in_top15": true
+        },
+        "4h": {
+          "signal": "SELL",
+          "confidence": 44,
+          "zak": 75,
+          "nihai_skor": 1452.0,
+          "in_top15": true
+        },
+        "6h": {
+          "signal": "SELL",
+          "confidence": 44,
+          "zak": 80,
+          "nihai_skor": 1548.8,
+          "in_top15": true
+        },
+        "1d": {
+          "signal": "SELL",
+          "confidence": 51,
+          "zak": 95,
+          "nihai_skor": 2470.95,
+          "in_top15": true
+        },
+        "3m": {
+          "signal": "NEUTRAL",
+          "confidence": 31,
+          "zak": 15,
+          "nihai_skor": 144.15,
+          "in_top15": false
+        },
+        "15m": {
+          "signal": "NEUTRAL",
+          "confidence": 9,
+          "zak": 38,
+          "nihai_skor": 30.78,
+          "in_top15": false
+        },
+        "30m": {
+          "signal": "NEUTRAL",
+          "confidence": 10,
+          "zak": 48,
+          "nihai_skor": 48.0,
+          "in_top15": false
+        },
+        "8h": {
+          "signal": "SELL",
+          "confidence": 40,
+          "zak": 85,
+          "nihai_skor": 1360.0,
+          "in_top15": false
+        },
+        "12h": {
+          "signal": "SELL",
+          "confidence": 36,
+          "zak": 90,
+          "nihai_skor": 1166.4,
+          "in_top15": false
+        }
+      },
+      "dominant_dir": "SELL",
+      "net_nss": 6569.92,
+      "total_nss": 6569.92
+    },
+    {
+      "symbol": "SONICUSDT",
+      "count": 7,
+      "total_conf": 284,
+      "buy_nss": 0,
+      "sell_nss": 5893.75,
+      "best_conf": 47,
+      "price": 0.03443,
+      "signals": {
+        "1m": {
+          "signal": "SELL",
+          "confidence": 38,
+          "zak": 8,
+          "nihai_skor": 115.52
+        },
+        "3m": {
+          "signal": "SELL",
+          "confidence": 38,
+          "zak": 15,
+          "nihai_skor": 216.6
+        },
+        "15m": {
+          "signal": "SELL",
+          "confidence": 36,
+          "zak": 38,
+          "nihai_skor": 492.48
+        },
+        "30m": {
+          "signal": "SELL",
+          "confidence": 36,
+          "zak": 48,
+          "nihai_skor": 622.08
+        },
+        "1h": {
+          "signal": "SELL",
+          "confidence": 42,
+          "zak": 58,
+          "nihai_skor": 1023.12
+        },
+        "4h": {
+          "signal": "SELL",
+          "confidence": 47,
+          "zak": 75,
+          "nihai_skor": 1656.75
+        },
+        "6h": {
+          "signal": "SELL",
+          "confidence": 47,
+          "zak": 80,
+          "nihai_skor": 1767.2
+        }
+      },
+      "all_signals": {
+        "1m": {
+          "signal": "SELL",
+          "confidence": 38,
+          "zak": 8,
+          "nihai_skor": 115.52,
+          "in_top15": true
+        },
+        "3m": {
+          "signal": "SELL",
+          "confidence": 38,
+          "zak": 15,
+          "nihai_skor": 216.6,
+          "in_top15": true
+        },
+        "15m": {
+          "signal": "SELL",
+          "confidence": 36,
+          "zak": 38,
+          "nihai_skor": 492.48,
+          "in_top15": true
+        },
+        "30m": {
+          "signal": "SELL",
+          "confidence": 36,
+          "zak": 48,
+          "nihai_skor": 622.08,
+          "in_top15": true
+        },
+        "1h": {
+          "signal": "SELL",
+          "confidence": 42,
+          "zak": 58,
+          "nihai_skor": 1023.12,
+          "in_top15": true
+        },
+        "4h": {
+          "signal": "SELL",
+          "confidence": 47,
+          "zak": 75,
+          "nihai_skor": 1656.75,
+          "in_top15": true
+        },
+        "6h": {
+          "signal": "SELL",
+          "confidence": 47,
+          "zak": 80,
+          "nihai_skor": 1767.2,
+          "in_top15": true
+        },
+        "2h": {
+          "signal": "SELL",
+          "confidence": 35,
+          "zak": 65,
+          "nihai_skor": 796.25,
+          "in_top15": false
+        },
+        "8h": {
+          "signal": "SELL",
+          "confidence": 35,
+          "zak": 85,
+          "nihai_skor": 1041.25,
+          "in_top15": false
+        },
+        "12h": {
+          "signal": "SELL",
+          "confidence": 44,
+          "zak": 90,
+          "nihai_skor": 1742.4,
+          "in_top15": false
+        },
+        "1d": {
+          "signal": "SELL",
+          "confidence": 38,
+          "zak": 95,
+          "nihai_skor": 1371.8,
+          "in_top15": false
+        }
+      },
+      "dominant_dir": "SELL",
+      "net_nss": 5893.75,
+      "total_nss": 5893.75
+    },
+    {
+      "symbol": "ATHUSDT",
+      "count": 6,
+      "total_conf": 252,
+      "buy_nss": 0,
+      "sell_nss": 5815.47,
+      "best_conf": 51,
+      "price": 0.00564,
+      "signals": {
+        "1m": {
+          "signal": "SELL",
+          "confidence": 40,
+          "zak": 8,
+          "nihai_skor": 128.0
+        },
+        "3m": {
+          "signal": "SELL",
+          "confidence": 36,
+          "zak": 15,
+          "nihai_skor": 194.4
+        },
+        "1h": {
+          "signal": "SELL",
+          "confidence": 42,
+          "zak": 58,
+          "nihai_skor": 1023.12
+        },
+        "2h": {
+          "signal": "SELL",
+          "confidence": 40,
+          "zak": 65,
+          "nihai_skor": 1040.0
+        },
+        "4h": {
+          "signal": "SELL",
+          "confidence": 51,
+          "zak": 75,
+          "nihai_skor": 1950.75
+        },
+        "6h": {
+          "signal": "SELL",
+          "confidence": 43,
+          "zak": 80,
+          "nihai_skor": 1479.2
+        }
+      },
+      "all_signals": {
+        "1m": {
+          "signal": "SELL",
+          "confidence": 40,
+          "zak": 8,
+          "nihai_skor": 128.0,
+          "in_top15": true
+        },
+        "3m": {
+          "signal": "SELL",
+          "confidence": 36,
+          "zak": 15,
+          "nihai_skor": 194.4,
+          "in_top15": true
+        },
+        "1h": {
+          "signal": "SELL",
+          "confidence": 42,
+          "zak": 58,
+          "nihai_skor": 1023.12,
+          "in_top15": true
+        },
+        "2h": {
+          "signal": "SELL",
+          "confidence": 40,
+          "zak": 65,
+          "nihai_skor": 1040.0,
+          "in_top15": true
+        },
+        "4h": {
+          "signal": "SELL",
+          "confidence": 51,
+          "zak": 75,
+          "nihai_skor": 1950.75,
+          "in_top15": true
+        },
+        "6h": {
+          "signal": "SELL",
+          "confidence": 43,
+          "zak": 80,
+          "nihai_skor": 1479.2,
+          "in_top15": true
+        },
+        "15m": {
+          "signal": "SELL",
+          "confidence": 32,
+          "zak": 38,
+          "nihai_skor": 389.12,
+          "in_top15": false
+        },
+        "8h": {
+          "signal": "SELL",
+          "confidence": 42,
+          "zak": 85,
+          "nihai_skor": 1499.4,
+          "in_top15": false
+        },
+        "12h": {
+          "signal": "SELL",
+          "confidence": 41,
+          "zak": 90,
+          "nihai_skor": 1512.9,
+          "in_top15": false
+        },
+        "1d": {
+          "signal": "SELL",
+          "confidence": 43,
+          "zak": 95,
+          "nihai_skor": 1756.55,
+          "in_top15": false
+        }
+      },
+      "dominant_dir": "SELL",
+      "net_nss": 5815.47,
+      "total_nss": 5815.47
+    },
+    {
+      "symbol": "UNIUSDT",
+      "count": 5,
+      "total_conf": 209,
+      "buy_nss": 0,
+      "sell_nss": 5731.8099999999995,
+      "best_conf": 58,
+      "price": 3.025,
+      "signals": {
+        "1m": {
+          "signal": "SELL",
+          "confidence": 38,
+          "zak": 8,
+          "nihai_skor": 115.52
+        },
+        "30m": {
+          "signal": "SELL",
+          "confidence": 38,
+          "zak": 48,
+          "nihai_skor": 693.12
+        },
+        "1h": {
+          "signal": "SELL",
+          "confidence": 38,
+          "zak": 58,
+          "nihai_skor": 837.52
+        },
+        "2h": {
+          "signal": "SELL",
+          "confidence": 37,
+          "zak": 65,
+          "nihai_skor": 889.85
+        },
+        "1d": {
+          "signal": "SELL",
+          "confidence": 58,
+          "zak": 95,
+          "nihai_skor": 3195.8
+        }
+      },
+      "all_signals": {
+        "1m": {
+          "signal": "SELL",
+          "confidence": 38,
+          "zak": 8,
+          "nihai_skor": 115.52,
+          "in_top15": true
+        },
+        "30m": {
+          "signal": "SELL",
+          "confidence": 38,
+          "zak": 48,
+          "nihai_skor": 693.12,
+          "in_top15": true
+        },
+        "1h": {
+          "signal": "SELL",
+          "confidence": 38,
+          "zak": 58,
+          "nihai_skor": 837.52,
+          "in_top15": true
+        },
+        "2h": {
+          "signal": "SELL",
+          "confidence": 37,
+          "zak": 65,
+          "nihai_skor": 889.85,
+          "in_top15": true
+        },
+        "1d": {
+          "signal": "SELL",
+          "confidence": 58,
+          "zak": 95,
+          "nihai_skor": 3195.8,
+          "in_top15": true
+        },
+        "3m": {
+          "signal": "NEUTRAL",
+          "confidence": 22,
+          "zak": 15,
+          "nihai_skor": 72.6,
+          "in_top15": false
+        },
+        "15m": {
+          "signal": "NEUTRAL",
+          "confidence": 27,
+          "zak": 38,
+          "nihai_skor": 277.02,
+          "in_top15": false
+        },
+        "4h": {
+          "signal": "SELL",
+          "confidence": 35,
+          "zak": 75,
+          "nihai_skor": 918.75,
+          "in_top15": false
+        },
+        "8h": {
+          "signal": "SELL",
+          "confidence": 25,
+          "zak": 85,
+          "nihai_skor": 531.25,
+          "in_top15": false
+        },
+        "12h": {
+          "signal": "SELL",
+          "confidence": 30,
+          "zak": 90,
+          "nihai_skor": 810.0,
+          "in_top15": false
+        }
+      },
+      "dominant_dir": "SELL",
+      "net_nss": 5731.81,
+      "total_nss": 5731.81
+    },
+    {
+      "symbol": "GWEIUSDT",
+      "count": 4,
+      "total_conf": 189,
+      "buy_nss": 6220.6,
+      "sell_nss": 548.72,
+      "best_conf": 57,
+      "price": 0.06463,
+      "signals": {
+        "15m": {
+          "signal": "SELL",
+          "confidence": 38,
+          "zak": 38,
+          "nihai_skor": 548.72
+        },
+        "4h": {
+          "signal": "BUY",
+          "confidence": 42,
+          "zak": 75,
+          "nihai_skor": 1323.0
+        },
+        "6h": {
+          "signal": "BUY",
+          "confidence": 57,
+          "zak": 80,
+          "nihai_skor": 2599.2
+        },
+        "8h": {
+          "signal": "BUY",
+          "confidence": 52,
+          "zak": 85,
+          "nihai_skor": 2298.4
+        }
+      },
+      "all_signals": {
+        "15m": {
+          "signal": "SELL",
+          "confidence": 38,
+          "zak": 38,
+          "nihai_skor": 548.72,
+          "in_top15": true
+        },
+        "4h": {
+          "signal": "BUY",
+          "confidence": 42,
+          "zak": 75,
+          "nihai_skor": 1323.0,
+          "in_top15": true
+        },
+        "6h": {
+          "signal": "BUY",
+          "confidence": 57,
+          "zak": 80,
+          "nihai_skor": 2599.2,
+          "in_top15": true
+        },
+        "8h": {
+          "signal": "BUY",
+          "confidence": 52,
+          "zak": 85,
+          "nihai_skor": 2298.4,
+          "in_top15": true
+        },
+        "1m": {
+          "signal": "NEUTRAL",
+          "confidence": 10,
+          "zak": 8,
+          "nihai_skor": 8.0,
+          "in_top15": false
+        },
+        "3m": {
+          "signal": "NEUTRAL",
+          "confidence": 21,
+          "zak": 15,
+          "nihai_skor": 66.15,
+          "in_top15": false
+        },
+        "30m": {
+          "signal": "NEUTRAL",
+          "confidence": 18,
+          "zak": 48,
+          "nihai_skor": 155.52,
+          "in_top15": false
+        },
+        "1h": {
+          "signal": "NEUTRAL",
+          "confidence": 13,
+          "zak": 58,
+          "nihai_skor": 98.02,
+          "in_top15": false
+        },
+        "2h": {
+          "signal": "NEUTRAL",
+          "confidence": 11,
+          "zak": 65,
+          "nihai_skor": 78.65,
+          "in_top15": false
+        },
+        "12h": {
+          "signal": "BUY",
+          "confidence": 32,
+          "zak": 90,
+          "nihai_skor": 921.6,
+          "in_top15": false
+        },
+        "1d": {
+          "signal": "BUY",
+          "confidence": 36,
+          "zak": 95,
+          "nihai_skor": 1231.2,
+          "in_top15": false
+        }
+      },
+      "dominant_dir": "BUY",
+      "net_nss": 5671.88,
+      "total_nss": 5671.88
+    }
+  ],
+  "last_scan_hot_count": 0,
+  "last_scan_total": 61
+}
