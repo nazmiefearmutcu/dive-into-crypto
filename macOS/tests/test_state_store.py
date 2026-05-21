@@ -97,6 +97,45 @@ class TestStateStore:
         # tmp file should not exist after save
         tmp_file = state_file.with_suffix(".tmp")
         assert not tmp_file.exists()
+        # No leftover *.tmp* sidecars from the shared atomic helper either.
+        leftovers = list(state_file.parent.glob(f"{state_file.name}.*.tmp"))
+        assert leftovers == []
         # Main file should be valid
         data = json.loads(state_file.read_text())
         assert data["paper_balance"] == 7777.0
+
+    def test_save_stamps_schema_version(self, store, state_file):
+        store.load()
+        store.update(paper_balance=9999.0)
+        data = json.loads(state_file.read_text())
+        assert data["schema_version"] >= 1
+
+    def test_load_strict_raises_on_corrupt(self, store, state_file):
+        from src.persistence.state_store import StateLoadError
+
+        state_file.write_text("{not json")
+        with pytest.raises(StateLoadError):
+            store.load_strict()
+
+    def test_load_strict_raises_on_missing(self, store, state_file):
+        from src.persistence.state_store import StateLoadError
+
+        with pytest.raises(StateLoadError):
+            store.load_strict()
+
+    def test_load_strict_raises_on_missing_required(self, store, state_file):
+        from src.persistence.state_store import StateLoadError
+
+        # Missing `active_symbol` and `paper_balance` — must fail loudly.
+        state_file.write_text(json.dumps({"positions": {}}))
+        with pytest.raises(StateLoadError):
+            store.load_strict()
+
+    def test_load_strict_accepts_legacy(self, store, state_file):
+        state_file.write_text(json.dumps({
+            "active_symbol": "BTCUSDT",
+            "positions": {},
+            "paper_balance": 10000.0,
+        }))
+        state = store.load_strict()
+        assert state["active_symbol"] == "BTCUSDT"

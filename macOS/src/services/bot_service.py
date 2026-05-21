@@ -9,22 +9,61 @@ from typing import Any, Optional
 
 from src.api.binance_client import BinanceClient
 from src.data.market_data import MarketDataProvider
+from src.market.live_price_service import LivePriceService, RestPriceAdapter
 from src.services.signal_service import SignalService
 from src.services.scanner_service import ScannerService
 from src.consensus.engine import ConsensusEngine
 from src.trading.decision_engine import DecisionEngine
-from src.trading.execution_engine import ExecutionEngine
+from src.trading.execution_engine import ExecutionEngine, LIVE_SHORT_UNSUPPORTED_REASON
 from src.trading.leverage_manager import LeverageManager
 from src.trading.order_models import TradeAction, PositionSide
 from src.trading.position_manager import PositionManager
 from src.control.symbol_controller import SymbolController
 from src.control.config_watcher import ConfigWatcher, load_config
+from src.persistence.command_queue import CommandQueue
+from src.persistence.schemas import CommandKind, CommandSchema
 from src.persistence.state_store import StateStore
+from src.services.command_processor import CommandProcessor
 from src.monitoring.status_exporter import StatusExporter
 from src.utils.logger import get_logger
 from src.utils.helpers import iso_now
 
 logger = get_logger("services.bot_service")
+
+
+def _compute_candle_key(df: Any) -> str:
+    """Stable key for the latest candle in an OHLCV DataFrame.
+
+    Uses ``open_time`` of the last row when available, falling back to
+    ``close_time``. Returns the empty string for an empty/missing frame.
+
+    This deliberately does NOT read ``df.index[-1]`` — the upstream
+    ``MarketDataProvider`` calls ``reset_index(drop=True)``, so the index
+    is a RangeIndex and ``df.index[-1]`` is just ``len(df) - 1``. That
+    integer is effectively constant across cycles (the candle limit is
+    fixed at 200), which silently broke same-candle detection prior to S3.
+    """
+    if df is None:
+        return ""
+    try:
+        if df.empty:
+            return ""
+    except Exception:
+        return ""
+    for col in ("open_time", "close_time"):
+        if col in df.columns:
+            try:
+                val = df[col].iloc[-1]
+            except Exception:
+                continue
+            if val is None:
+                continue
+            try:
+                # pandas Timestamp / datetime → ISO
+                return val.isoformat()
+            except AttributeError:
+                return str(val)
+    return ""
 
 
 class BotService:
@@ -37,6 +76,9 @@ class BotService:
         # Initialize components
         self.binance_client = BinanceClient(config)
         self.market_data = MarketDataProvider(self.binance_client, config)
+        # S3 live-price seam — REST/polling rescue today; the subscribe_symbol
+        # hook is the future WebSocket adapter swap point.
+        self.live_price_service = LivePriceService(RestPriceAdapter(self.binance_client))
         self.signal_service = SignalService(config)
         self.consensus_engine = ConsensusEngine(config)
         self.position_manager = PositionManager(config)
@@ -46,6 +88,23 @@ class BotService:
         self.symbol_controller = SymbolController(config.get("active_symbol_path", "runtime/active_symbol.txt"))
         self.state_store = StateStore(config.get("state_path", "runtime/state.json"))
         self.status_exporter = StatusExporter(config.get("dashboard_status_path", "runtime/dashboard_status.json"))
+
+        # S5: control-plane command queue + processor. The dashboard writes
+        # to the SAME file (see dashboard/app.py COMMAND_QUEUE_FILE). The
+        # default path is anchored to the runtime dir derived from
+        # dashboard_status_path so test harnesses that point at tmp_path get
+        # their own isolated queue automatically.
+        _ds_path = Path(config.get("dashboard_status_path", "runtime/dashboard_status.json"))
+        _runtime_dir = _ds_path.parent if _ds_path.parent != Path(".") else Path("runtime")
+        self.command_queue = CommandQueue(
+            config.get("command_queue_path", _runtime_dir / "command_queue.json")
+        )
+        self.command_processor = CommandProcessor(self.command_queue)
+        self.command_processor.register(CommandKind.MANUAL_CLOSE, self._handle_manual_close)
+        self.command_processor.register(CommandKind.PAPER_RESET, self._handle_paper_reset)
+        # Configuration health surfaces: surfaced to dashboard so an operator
+        # who picks live+futures+short knows the execution path won't honor it.
+        self._status_warnings: list[str] = []
         config_path = config.get("_config_path", "config/default.yaml")
         self.config_watcher = ConfigWatcher(config_path)
         self.config_watcher.config = config
@@ -68,6 +127,9 @@ class BotService:
         self._last_decision: dict[str, Any] | None = None
         self._last_execution: dict[str, Any] | None = None
         self._last_price: float | None = None
+        # S3: track the candle close the decision engine acted on separately
+        # from the freshest live tick. The dashboard exports both.
+        self._last_signal_price: float | None = None
 
         # Auto-scan: multi-TF scan every 10 minutes in background
         self._auto_scan_interval = config.get("auto_scan_interval_seconds", 600)  # 10 min
@@ -261,16 +323,36 @@ class BotService:
             logger.info(f"Symbol switched to {symbol}. Adapting...")
             self.state_store.update(active_symbol=symbol)
 
+        # S5: drain control-plane commands BEFORE the decision pipeline so
+        # operator closes/resets land before the engine re-evaluates state.
+        self._process_pending_commands()
+        self._refresh_status_warnings()
+
         # 2. Fetch market data
         df = self.market_data.get_ohlcv(symbol)
         if df is None or df.empty:
             logger.warning(f"No market data for {symbol}. Skipping cycle.")
             return
 
-        current_price = float(df["close"].iloc[-1])
-        latest_candle_time = str(df.index[-1]) if hasattr(df.index[-1], 'isoformat') else str(df.index[-1])
+        # S3: signal_price = candle close, distinct from display_price.
+        signal_price = float(df["close"].iloc[-1])
+        current_price = signal_price  # kept for downstream call-sites
+        latest_candle_time = _compute_candle_key(df)
 
-        # Same-candle detection
+        # Refresh the live tick via LivePriceService (REST polling rescue).
+        # Failure is non-fatal — the helper keeps the last good snapshot so
+        # the dashboard stays honest about freshness instead of dropping to
+        # 'unavailable' on a single REST hiccup.
+        try:
+            self.live_price_service.subscribe_symbol(
+                symbol, market_type=self.config.get("market_type", "spot")
+            )
+            self.live_price_service.refresh(symbol)
+        except Exception as e:
+            logger.debug(f"LivePriceService refresh failed for {symbol}: {e}")
+
+        # Same-candle detection — uses df["open_time"].iloc[-1] (not the
+        # post-reset RangeIndex). See _compute_candle_key() above.
         if latest_candle_time != self._last_candle_time:
             self._candle_changed = True
             self._last_candle_time = latest_candle_time
@@ -279,34 +361,59 @@ class BotService:
 
         logger.info(f"Current price: {symbol} = {current_price} | candle_changed={self._candle_changed}")
 
-        # 3. Calculate all indicators
-        indicator_results = self.signal_service.calculate_all(df)
-
-        # 4. Run consensus engine
-        consensus = self.consensus_engine.evaluate(indicator_results)
-
-        # 5. Get balance and PnL info
+        # S3 cadence split: only re-run the indicator → consensus → decision
+        # → execute pipeline when the candle has actually advanced. With
+        # polling_interval=1s and timeframe=4h, this collapses ~14 400
+        # redundant recomputes per candle into one. SL/TP/position checks
+        # (steps 10–13) still run every cycle so the live price keeps
+        # flowing to the dashboard and reverse-signal/SL hits aren't
+        # missed.
         balance = self.execution_engine.get_balance()
         daily_pnl = self.state_store.get("daily_pnl", 0.0)
         daily_start_balance = self.state_store.get("daily_start_balance", balance)
 
-        # 6. Decision engine
-        decision = self.decision_engine.decide(
-            symbol=symbol,
-            consensus=consensus,
-            current_price=current_price,
-            balance=balance,
-            daily_pnl=daily_pnl,
-            daily_start_balance=daily_start_balance,
+        signal_stack_fresh = (
+            self._candle_changed
+            or self._last_consensus is None
+            or self._last_decision is None
         )
 
-        # 7. Execute
-        execution_result = self.execution_engine.execute(decision)
+        if signal_stack_fresh:
+            # 3. Calculate all indicators
+            indicator_results = self.signal_service.calculate_all(df)
 
-        # 8. Update state
-        self._update_state_after_cycle(
-            symbol, decision, execution_result, consensus, current_price, balance
-        )
+            # 4. Run consensus engine
+            consensus = self.consensus_engine.evaluate(indicator_results)
+
+            # 6. Decision engine
+            decision = self.decision_engine.decide(
+                symbol=symbol,
+                consensus=consensus,
+                current_price=current_price,
+                balance=balance,
+                daily_pnl=daily_pnl,
+                daily_start_balance=daily_start_balance,
+            )
+
+            # 7. Execute
+            execution_result = self.execution_engine.execute(decision)
+
+            # 8. Update state
+            self._update_state_after_cycle(
+                symbol, decision, execution_result, consensus, current_price, balance
+            )
+        else:
+            # Same candle as last cycle — reuse cached signal stack. The
+            # dashboard still gets a fresh display_price via the live-price
+            # refresh above.
+            indicator_results = self._last_indicator_results
+            consensus = self._last_consensus
+            decision = self._last_decision
+            execution_result = {"executed": False, "reason": "same_candle_reuse"}
+            logger.debug(
+                f"Same candle ({latest_candle_time}) — signal stack reused; "
+                f"price refresh only"
+            )
 
         # 9. Log decision summary
         self._log_cycle_summary(symbol, consensus, decision, execution_result, balance)
@@ -329,6 +436,7 @@ class BotService:
         self._last_decision = decision
         self._last_execution = execution_result
         self._last_price = current_price
+        self._last_signal_price = signal_price
         self._export_dashboard_status(balance)
 
     def _update_state_after_cycle(
@@ -385,6 +493,209 @@ class BotService:
 
         if execution_result.get("executed"):
             logger.info(f"Execution: {json.dumps(execution_result, default=str)}")
+
+    # ── S5 command-queue draining ──────────────────────────────
+
+    def _process_pending_commands(self) -> None:
+        """Drain pending control-plane commands from the queue.
+
+        Runs once per cycle BEFORE the indicator → decision → execute
+        pipeline so that an operator close clears the position before the
+        decision engine could re-evaluate the freshly-flat state. Per-tick
+        cap (`max_per_tick=16`) caps blast radius if the queue is malformed.
+        """
+        if not hasattr(self, "command_processor"):
+            return
+        try:
+            self.command_processor.process_pending(max_per_tick=16)
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"Command queue drain failed: {exc}", exc_info=True)
+
+    def _handle_manual_close(self, cmd: "CommandSchema") -> dict[str, Any]:
+        """Apply a `manual_close` queue command.
+
+        Paper mode: routes through the existing paper close path
+        (ExecutionEngine.execute) so PnL and balance accounting stay
+        identical to every other close.
+
+        Live mode: closing a LIVE position via the bot's seam is not yet
+        verified end-to-end (futures shorts are guarded — see
+        `_assert_live_action_supported`). Long live close goes through the
+        execution engine as-is; short live close is refused with a
+        non-silent failure so the queue's `error` field surfaces in the
+        dashboard. Either way, the queue keeps the command terminal with
+        explicit status — no fake "executed: True" without a real fill.
+        """
+        symbol = cmd.payload.get("symbol", "").strip().upper()
+        if not symbol:
+            raise ValueError("manual_close payload missing symbol")
+
+        position = self.position_manager.get_position(symbol)
+        if position is None:
+            logger.info(
+                f"manual_close for {symbol}: no open position (already closed)"
+            )
+            return {"executed": False, "reason": "no position"}
+
+        price = None
+        try:
+            price = self.binance_client.get_ticker_price(symbol)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"manual_close ticker fetch failed for {symbol}: {exc}")
+        if not price:
+            # Last-known display price keeps the close deterministic in tests.
+            snap = (
+                self.live_price_service.snapshot(symbol)
+                if hasattr(self, "live_price_service") else None
+            )
+            if snap and snap.price is not None:
+                price = snap.price
+            else:
+                price = position.entry_price
+
+        close_action = (
+            TradeAction.CLOSE_LONG if position.side.value == "LONG"
+            else TradeAction.CLOSE_SHORT
+        )
+        decision = {
+            "action": close_action.value,
+            "symbol": symbol,
+            "quantity": position.quantity,
+            "price": price,
+            "reason": "manual_close (dashboard)",
+            "timestamp": iso_now(),
+            "consensus_signal": "NEUTRAL",
+            "confidence": 0,
+            "risk_level": "LOW",
+            "leverage": position.leverage,
+        }
+
+        # Live-side futures short close guard. Paper mode is unaffected.
+        guard = self._assert_live_action_supported(close_action)
+        if guard is not None:
+            logger.warning(
+                f"manual_close refused for {symbol}: {guard} — position kept open."
+            )
+            raise RuntimeError(guard)
+
+        exec_result = self.execution_engine.execute(decision)
+        if exec_result.get("executed"):
+            pnl = exec_result.get("pnl", 0)
+            daily_pnl = self.state_store.get("daily_pnl", 0.0) + pnl
+            self.state_store.update(
+                daily_pnl=round(daily_pnl, 4),
+                total_realized_pnl=round(self.position_manager.total_realized_pnl, 4),
+                positions=self.position_manager.get_positions_dict(),
+                trade_history=[t.to_dict() for t in self.position_manager.trade_history[-100:]],
+                paper_balance=round(self.execution_engine.paper_balance, 4),
+            )
+            logger.info(
+                f"✅ manual_close {symbol} via command queue | "
+                f"mode={exec_result.get('mode', self.execution_engine.mode)} | "
+                f"PnL={pnl:.4f}"
+            )
+        else:
+            reason = exec_result.get("reason", "unknown")
+            logger.warning(f"manual_close {symbol} not executed: {reason}")
+            # Non-executed live close = fail closed so the operator sees
+            # the queue command marked FAILED, not a silent PROCESSED.
+            if self.execution_engine.mode == "live":
+                raise RuntimeError(f"live close not executed: {reason}")
+        return exec_result
+
+    def _handle_paper_reset(self, cmd: "CommandSchema") -> dict[str, Any]:
+        """Apply a `paper_reset` queue command.
+
+        Live mode rejects this — there is no "reset" on a live exchange.
+        Paper mode: close all open positions at last-known price, then
+        rewind paper balance to either the requested value or the
+        configured starting balance.
+        """
+        if self.execution_engine.mode != "paper":
+            raise RuntimeError("paper_reset rejected: bot is in live mode")
+
+        target_balance = float(
+            cmd.payload.get("balance",
+                            self.config.get("paper", {}).get("starting_balance", 10000.0))
+        )
+        if target_balance <= 0:
+            raise ValueError("paper_reset balance must be positive")
+
+        # Close any open paper positions at last-known price so PnL accounting
+        # stays consistent (no orphaned positions after a reset).
+        for sym in list(self.position_manager.positions.keys()):
+            pos = self.position_manager.positions.get(sym)
+            if pos is None:
+                continue
+            price = None
+            try:
+                price = self.binance_client.get_ticker_price(sym)
+            except Exception:  # noqa: BLE001
+                price = None
+            if not price:
+                price = pos.entry_price
+            try:
+                self.position_manager.close_position(
+                    sym, price, reason="paper_reset",
+                    fee_pct=self.execution_engine.paper_fee_pct,
+                )
+            except Exception as exc:  # noqa: BLE001 — keep best-effort
+                logger.warning(f"paper_reset close_position failed for {sym}: {exc}")
+
+        # Wipe trade history & PnL since this is a fresh sandbox.
+        self.position_manager.trade_history = []
+        self.position_manager.total_realized_pnl = 0.0
+        self.execution_engine.set_paper_balance(target_balance)
+
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        self.state_store.update(
+            paper_balance=round(target_balance, 4),
+            positions=self.position_manager.get_positions_dict(),
+            trade_history=[],
+            daily_pnl=0.0,
+            daily_start_balance=target_balance,
+            daily_date=today,
+            total_realized_pnl=0.0,
+        )
+        logger.info(
+            f"✅ paper_reset via command queue | balance={target_balance:.2f} | "
+            f"positions cleared"
+        )
+        return {"executed": True, "balance": target_balance}
+
+    def _assert_live_action_supported(self, action: TradeAction) -> Optional[str]:
+        """Return a refusal reason if this action cannot be safely executed
+        live; otherwise None.
+
+        Today: live OPEN_SHORT and CLOSE_SHORT are NOT wired through to the
+        exchange (see ExecutionEngine._execute_live). On live+futures we
+        refuse the action up front so the queue command turns FAILED with a
+        clear explanation and the dashboard surfaces it.
+        """
+        if self.execution_engine.mode != "live":
+            return None
+        if action in (TradeAction.OPEN_SHORT, TradeAction.CLOSE_SHORT):
+            return LIVE_SHORT_UNSUPPORTED_REASON
+        return None
+
+    def _refresh_status_warnings(self) -> None:
+        """Re-evaluate config-time invariants that should surface to the
+        operator. Today this is mostly about futures live short support.
+
+        Kept idempotent: same warning string is set once per cycle even if
+        the underlying config didn't change.
+        """
+        warnings: list[str] = []
+        if (
+            self.config.get("mode") == "live"
+            and str(self.config.get("market_type", "spot")).lower() == "futures"
+        ):
+            warnings.append(LIVE_SHORT_UNSUPPORTED_REASON)
+        self._status_warnings = warnings
+
+    # ── Legacy file-glob close command reader ──────────────────
+    # Kept callable for the transitional period; the queue-based path is the
+    # new source of truth. test_cycle_cadence.py stubs this method directly.
 
     def _process_close_commands(self) -> None:
         """Check for manual close commands written by dashboard and execute them."""
@@ -445,10 +756,17 @@ class BotService:
     def _check_other_positions(self, active_symbol: str, balance: float) -> None:
         """Check SL/TP/trailing AND signal reversal for non-active positions.
 
-        - SL/TP/trailing: warning only, never auto-close.
-        - Signal reversal: if the consensus flips to the opposite direction, AUTO-CLOSE.
+        S5 exit-semantics policy (same as decision_engine):
+          - paper mode: AUTO-CLOSE on stop_loss/take_profit/trailing_stop/
+            break_even_stop/liquidation; the close path removes the
+            position so no stale `warning` accumulates next cycle.
+          - live mode: warning-only (`live_exit_unsupported:<reason>`) —
+            the live execution path is not yet verified for non-active exits.
+          - Signal reversal: AUTO-CLOSE in both modes (routes through
+            ExecutionEngine.execute, which guards live shorts up front).
         """
         positions = dict(self.position_manager.positions)  # copy to avoid mutation during iteration
+        mode = self.execution_engine.mode
         for sym, pos in positions.items():
             if sym == active_symbol:
                 continue  # already handled by main decision engine
@@ -457,15 +775,58 @@ class BotService:
                 if not price:
                     continue
 
-                # SL/TP/trailing check — warnings only
+                # SL/TP/trailing/liquidation check
                 exit_reason = self.position_manager.update_position(sym, price)
                 if exit_reason:
-                    # Permanent warning — once triggered, never clears
-                    pos.warning = exit_reason
-                    logger.warning(
-                        f"Position {sym} hit {exit_reason} — NOT auto-closing. "
-                        f"Manual close required."
-                    )
+                    if mode == "paper":
+                        close_action = (
+                            TradeAction.CLOSE_LONG if pos.side.value == "LONG"
+                            else TradeAction.CLOSE_SHORT
+                        )
+                        decision = {
+                            "action": close_action.value,
+                            "symbol": sym,
+                            "quantity": pos.quantity,
+                            "price": price,
+                            "reason": f"auto_close:{exit_reason}",
+                            "timestamp": iso_now(),
+                            "consensus_signal": "NEUTRAL",
+                            "confidence": 0,
+                            "risk_level": "LOW",
+                            "leverage": pos.leverage,
+                        }
+                        exec_result = self.execution_engine.execute(decision)
+                        if exec_result.get("executed"):
+                            pnl = exec_result.get("pnl", 0)
+                            daily_pnl = self.state_store.get("daily_pnl", 0.0) + pnl
+                            self.state_store.update(
+                                daily_pnl=round(daily_pnl, 4),
+                                total_realized_pnl=round(self.position_manager.total_realized_pnl, 4),
+                                positions=self.position_manager.get_positions_dict(),
+                                trade_history=[t.to_dict() for t in self.position_manager.trade_history[-100:]],
+                                paper_balance=round(self.execution_engine.paper_balance, 4),
+                            )
+                            logger.info(
+                                f"✅ {sym} auto-closed on {exit_reason} (paper) | "
+                                f"PnL={pnl:.4f}"
+                            )
+                            # Position is removed by close_position; nothing more to do.
+                            continue
+                        # If paper close failed unexpectedly, surface the
+                        # reason as a warning instead of pretending we closed.
+                        pos.warning = f"paper_exit_failed:{exit_reason}"
+                        logger.warning(
+                            f"{sym} paper auto-close on {exit_reason} did not "
+                            f"execute: {exec_result.get('reason')}"
+                        )
+                    else:
+                        # Live mode: warning-only. Tag with explicit prefix so
+                        # the dashboard can render it as "live exit not wired".
+                        pos.warning = f"live_exit_unsupported:{exit_reason}"
+                        logger.warning(
+                            f"Position {sym} hit {exit_reason} in live mode — "
+                            f"NOT auto-closing (execution path not verified)."
+                        )
 
                 # ── Signal reversal check for non-active positions ──
                 try:
@@ -619,12 +980,24 @@ class BotService:
         Skips if a manual scan is running (from dashboard).
         Skips if auto-scan is disabled via dashboard toggle.
         """
-        # Check if auto-scan is disabled
-        flag_file = Path(self.project_root) / "runtime" / "auto_scan_disabled"
+        # S6: anchor runtime paths on the same dashboard_status_path the
+        # rest of the bot uses. Pre-S6 this referenced self.project_root /
+        # self._read_config_from_disk(), both of which are undefined on
+        # BotService — the live bot would AttributeError on cycle #1.
+        runtime_dir = self._runtime_dir()
+        flag_file = runtime_dir / "auto_scan_disabled"
         if flag_file.exists():
+            self._write_auto_scan_progress({
+                "scanning": False, "total": 0, "done": 0, "pct": 0,
+                "reason": "auto_scan_disabled_flag",
+            })
             return
-        config = self._read_config_from_disk()
-        if not config.get("auto_scan_enabled", True):
+        disk_cfg = self._read_yaml_config()
+        if not disk_cfg.get("auto_scan_enabled", True):
+            self._write_auto_scan_progress({
+                "scanning": False, "total": 0, "done": 0, "pct": 0,
+                "reason": "auto_scan_enabled_false",
+            })
             return
 
         # Fast check: is a scan already in progress?
@@ -1066,16 +1439,66 @@ class BotService:
             self._last_auto_scan_time = time.time()
             self._scanning_active = False
 
-    def _write_auto_scan_progress(self, data: dict) -> None:
-        """Write auto-scan progress to a JSON file for the dashboard to read."""
+    def _runtime_dir(self) -> Path:
+        """Return the runtime directory derived from ``dashboard_status_path``.
+
+        S6: every runtime artifact (flag files, progress, command queue,
+        active_symbol.txt) is anchored on the same parent so tmp_path
+        isolated test runs never bleed into the developer's real repo.
+        """
+        ds = Path(self.config.get("dashboard_status_path", "runtime/dashboard_status.json"))
+        return ds.parent if str(ds.parent) != "." else Path("runtime")
+
+    def _read_yaml_config(self) -> dict[str, Any]:
+        """Re-read the YAML config from disk so toggles applied via the
+        dashboard land before the next scan decision.
+
+        S6: this replaces the pre-S6 reference to the undefined
+        ``self._read_config_from_disk()``. The chosen pattern mirrors
+        the YAML reread that already exists in ``_process_multi_scan_results``
+        for ``auto_select_enabled``.
+        """
+        cfg_path = Path(self.config.get("_config_path", "config/default.yaml"))
         try:
-            runtime_dir = Path(self.config.get("dashboard_status_path", "runtime/dashboard_status.json")).parent
+            import yaml as _yaml
+            return _yaml.safe_load(cfg_path.read_text()) or {}
+        except Exception:
+            return {}
+
+    def _write_auto_scan_progress(self, data: dict) -> None:
+        """Write auto-scan progress to a JSON file for the dashboard to read.
+
+        S6: always surface a top-level ``state`` field derived from the
+        payload so the dashboard renders idle vs scanning vs disabled vs
+        complete vs error honestly — never silent. ``reason`` is preserved
+        when the caller provides it (e.g. ``auto_scan_disabled_flag``)."""
+        try:
+            payload = dict(data)
+            payload.setdefault("state", self._derive_progress_state(payload))
+            runtime_dir = self._runtime_dir()
+            runtime_dir.mkdir(parents=True, exist_ok=True)
             progress_file = runtime_dir / "auto_scan_progress.json"
             tmp = progress_file.with_suffix(".tmp")
-            tmp.write_text(json.dumps(data, default=str))
+            tmp.write_text(json.dumps(payload, default=str))
             tmp.replace(progress_file)
         except Exception:
             pass  # Non-critical
+
+    @staticmethod
+    def _derive_progress_state(payload: dict) -> str:
+        """Pure helper: pick the right state label from a progress payload."""
+        reason = payload.get("reason", "")
+        if reason in {"auto_scan_disabled_flag", "auto_scan_enabled_false"}:
+            return "disabled"
+        if payload.get("scanning"):
+            return "scanning"
+        if payload.get("error"):
+            return "error"
+        total = payload.get("total", 0) or 0
+        done = payload.get("done", 0) or 0
+        if total > 0 and done >= total:
+            return "complete"
+        return "idle"
 
     def _patch_dashboard_status(self, updates: dict) -> None:
         """Directly patch dashboard_status.json with given key-value pairs."""
@@ -1114,6 +1537,16 @@ class BotService:
         """Export dashboard snapshot after each cycle."""
         try:
             all_prices = self._fetch_all_position_prices()
+            # Resolve the canonical S3 price fields from LivePriceService.
+            symbol = self.state_store.get("active_symbol") or ""
+            snap = self.live_price_service.snapshot(symbol) if symbol else None
+            display_price = snap.price if snap and snap.price is not None else self._last_signal_price
+            display_price_source = snap.source if snap else None
+            price_age_ms = snap.age_ms if snap else None
+            mark_price = snap.mark_price if snap else None
+            best_bid = snap.best_bid if snap else None
+            best_ask = snap.best_ask if snap else None
+
             self.status_exporter.export(
                 config=self.config,
                 state=self.state_store.state,
@@ -1122,10 +1555,18 @@ class BotService:
                 decision=self._last_decision,
                 execution_result=self._last_execution,
                 balance=balance,
-                current_price=self._last_price,
+                current_price=display_price,
                 cycle_count=self._cycle_count,
                 running=self.running,
                 all_prices=all_prices,
+                signal_price=self._last_signal_price,
+                display_price=display_price,
+                display_price_source=display_price_source,
+                price_age_ms=price_age_ms,
+                mark_price=mark_price,
+                best_bid=best_bid,
+                best_ask=best_ask,
+                status_warnings=getattr(self, "_status_warnings", []),
             )
         except Exception as e:
             logger.error(f"Failed to export dashboard status: {e}")

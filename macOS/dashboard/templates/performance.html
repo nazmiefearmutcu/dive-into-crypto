@@ -5,11 +5,27 @@
 {% set s = status or {} %}
 {% set perf = s.get("performance") or {} %}
 {% set history = s.get("trade_history", []) %}
+{% set stale = data_stale if data_stale is defined else is_stale(s) %}
+{% set bot_off = not (bot_running if bot_running is defined else true) %}
 
 <div class="page-header">
     <h1>Performans Özeti</h1>
-    <span class="update-time" id="last-update">Son güncelleme: {{ time_ago(s.get("last_update", "")) }}</span>
+    <span class="update-time {% if stale %}stale{% endif %}" id="last-update">
+        Son güncelleme: {{ time_ago(s.get("last_update", "")) }}
+        {% if stale %}<span class="badge badge-red">ESKİ</span>{% endif %}
+    </span>
 </div>
+
+{% if bot_off %}
+<div class="snapshot-banner snapshot-banner-stopped">
+    <span class="snapshot-banner-icon" aria-hidden="true">⚠</span>
+    <span class="snapshot-banner-text">
+        <strong>Snapshot — Bot durdu.</strong>
+        Performans rakamları son işlem geçmişine göre dondurulmuş durumda.
+        Gerçekleşmemiş PnL canlı değildir.
+    </span>
+</div>
+{% endif %}
 
 <!-- Key Metrics -->
 <div class="grid grid-4">

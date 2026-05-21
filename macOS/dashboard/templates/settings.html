@@ -301,40 +301,40 @@ function resetPaper() {
 </div>
 </form>
 
-<!-- ─── API Anahtarları ─── -->
-<form method="post" action="/settings/env">
-<div class="card">
+<!-- ─── API Anahtarları (S7: rescue build — read-only) ─── -->
+<div class="card" data-testid="api-keys-readonly">
     <h3>API Anahtarları (.env)</h3>
-    <p class="sub-text" style="margin-bottom:14px">Mevcut değerleri korumak için alanları değiştirmeyin. Maskeli değerler mevcut anahtarları üzerine yazmaz.</p>
+    <p class="sub-text" style="margin-bottom:14px">
+        <strong>Rescue modu:</strong> Pano API anahtarlarını düzenleyemez. Yalnızca diskteki
+        <code>.env</code> dosyası üzerinden yönetilir; format için <code>.env.example</code>'a bakın.
+    </p>
     <div class="settings-grid">
         <div class="form-group">
             <label>Binance API Anahtarı</label>
-            <input type="text" name="binance_api_key" value="{{ mask_key(env.get('BINANCE_API_KEY', '')) }}" class="form-input form-mono" autocomplete="off">
+            <input type="text" value="{{ mask_key(env.get('BINANCE_API_KEY', '')) }}" class="form-input form-mono" autocomplete="off" disabled readonly>
         </div>
         <div class="form-group">
             <label>Binance API Gizli Anahtar</label>
-            <input type="text" name="binance_api_secret" value="{{ mask_key(env.get('BINANCE_API_SECRET', '')) }}" class="form-input form-mono" autocomplete="off">
+            <input type="text" value="{{ mask_key(env.get('BINANCE_API_SECRET', '')) }}" class="form-input form-mono" autocomplete="off" disabled readonly>
         </div>
         <div class="form-group">
             <label>Testnet API Anahtarı</label>
-            <input type="text" name="binance_testnet_api_key" value="{{ mask_key(env.get('BINANCE_TESTNET_API_KEY', '')) }}" class="form-input form-mono" autocomplete="off">
+            <input type="text" value="{{ mask_key(env.get('BINANCE_TESTNET_API_KEY', '')) }}" class="form-input form-mono" autocomplete="off" disabled readonly>
         </div>
         <div class="form-group">
             <label>Testnet API Gizli Anahtar</label>
-            <input type="text" name="binance_testnet_api_secret" value="{{ mask_key(env.get('BINANCE_TESTNET_API_SECRET', '')) }}" class="form-input form-mono" autocomplete="off">
+            <input type="text" value="{{ mask_key(env.get('BINANCE_TESTNET_API_SECRET', '')) }}" class="form-input form-mono" autocomplete="off" disabled readonly>
         </div>
         <div class="form-group">
             <label>Testnet Kullan</label>
-            <select name="use_testnet" class="form-input">
-                <option value="false" {% if env.get('USE_TESTNET', 'false') != 'true' %}selected{% endif %}>false</option>
-                <option value="true" {% if env.get('USE_TESTNET', 'false') == 'true' %}selected{% endif %}>true</option>
-            </select>
+            <input type="text" value="{{ env.get('USE_TESTNET', 'false') }}" class="form-input" autocomplete="off" disabled readonly>
         </div>
     </div>
     <div class="settings-actions" style="margin-top:16px">
-        <button type="submit" class="btn btn-primary">API Anahtarlarını Kaydet</button>
+        <button type="button" class="btn btn-primary" disabled aria-disabled="true" title="Rescue build: dashboard cannot write secrets">
+            API Anahtarlarını Kaydet (devre dışı)
+        </button>
     </div>
 </div>
-</form>
 
 {% endblock %}

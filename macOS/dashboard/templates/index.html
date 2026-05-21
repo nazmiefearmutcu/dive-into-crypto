@@ -6,7 +6,9 @@
 {% set decision = s.get("latest_decision") or {} %}
 {% set perf = s.get("performance") or {} %}
 {% set dist = s.get("signal_distribution") or {} %}
-{% set stale = is_stale(s) %}
+{% set stale = data_stale if data_stale is defined else is_stale(s) %}
+{% set pv = price_view or price_display(s, bot_running=bot_running) %}
+{% set cycle_count = s.get("cycle_count", 0) %}
 
 <div class="page-header">
     <h1>Genel Bakış</h1>
@@ -15,6 +17,31 @@
         {% if stale %}<span class="badge badge-red">ESKİ</span>{% endif %}
     </span>
 </div>
+
+{% if not bot_running or stale or pv.state == "unavailable" %}
+<div class="snapshot-banner snapshot-banner-{{ 'stale' if stale else ('stopped' if not bot_running else 'nodata') }}"
+     id="snapshot-banner" data-state="{{ 'stale' if stale else ('stopped' if not bot_running else 'nodata') }}">
+    <span class="snapshot-banner-icon" aria-hidden="true">⚠</span>
+    <span class="snapshot-banner-text">
+        {% if pv.state == "unavailable" and not bot_running %}
+            <strong>Snapshot — Bot durdu.</strong>
+            Canlı fiyat yok, aşağıdaki rakamlar son bot döngüsünden kalmıştır
+            ({{ time_ago(s.get("last_update", "")) }}).
+        {% elif not bot_running %}
+            <strong>Snapshot — Bot durdu.</strong>
+            Aşağıdaki rakamlar son bot döngüsünden kalmıştır
+            ({{ time_ago(s.get("last_update", "")) }}). Canlı güncelleme yok.
+        {% elif pv.state == "unavailable" %}
+            <strong>Canlı fiyat alınamıyor.</strong>
+            Bot çalışıyor ama henüz fiyat döngüsü tamamlanmadı.
+        {% else %}
+            <strong>Veri eski.</strong>
+            Son güncelleme {{ time_ago(s.get("last_update", "")) }} —
+            bot canlı olabilir ama dosyalar tazelenmiyor.
+        {% endif %}
+    </span>
+</div>
+{% endif %}
 
 <!-- Bot Control -->
 <div class="bot-control-bar">
@@ -118,7 +145,14 @@
     </div>
     <div class="status-item">
         <span class="label">Fiyat</span>
-        <span class="value" id="live-price">${{ (s.get("current_price", 0) or 0) | price }}</span>
+        <span class="value price-value price-{{ pv.state }}" id="live-price" data-state="{{ pv.state }}">{{ pv.text }}</span>
+        {% if pv.state == "snapshot" %}
+            <span class="price-tag price-tag-snapshot" id="live-price-tag">SNAPSHOT</span>
+        {% elif pv.state == "unavailable" %}
+            <span class="price-tag price-tag-unavailable" id="live-price-tag">CANLI YOK</span>
+        {% else %}
+            <span class="price-tag price-tag-live" id="live-price-tag">CANLI</span>
+        {% endif %}
     </div>
     <div class="status-item">
         <span class="label">Kaldıraç</span>
@@ -126,7 +160,7 @@
     </div>
     <div class="status-item">
         <span class="label">Döngü</span>
-        <span class="value" id="live-cycle">#{{ s.get("cycle_count", 0) }}</span>
+        <span class="value" id="live-cycle">{% if cycle_count > 0 %}#{{ cycle_count }}{% else %}—{% endif %}</span>
     </div>
 </div>
 
@@ -566,6 +600,13 @@ function _checkReverseAlert(symbol, timeframes) {
     fetch("/api/status")
         .then(function(r) { return r.json(); })
         .then(function(s) {
+            // Honest contract: a stopped bot must NOT trigger audible reverse
+            // alerts. The signals are frozen at the last cycle — they aren't
+            // "now" — so any reverse condition is historical, not actionable.
+            if (s._bot_running === false || s._stale === true) {
+                if (_alertLooping) { dismissAlert(); }
+                return;
+            }
             // Sinyal dosyasindaki coin, aktif coin ile ayni olmali
             var activeSymbol = s.active_symbol || "";
             if (symbol !== activeSymbol) return;

@@ -12,6 +12,14 @@ from src.utils.helpers import iso_now, retry_with_backoff
 
 logger = get_logger("trading.execution_engine")
 
+# S5: explicit, single-source contract string for the live-short refusal.
+# Bot-side guard (`_assert_live_action_supported`) and the execution engine
+# reuse the same prefix so dashboard parsers can match `live_short_unsupported`
+# without depending on free-text reason copy.
+LIVE_SHORT_UNSUPPORTED_REASON = (
+    "live_short_unsupported: futures live short execution is not implemented"
+)
+
 
 class ExecutionEngine:
     """Executes trading decisions in either paper or live mode."""
@@ -295,9 +303,20 @@ class ExecutionEngine:
             return {"executed": False, "action": action.value, "reason": "Market sell failed"}
 
         elif action in (TradeAction.OPEN_SHORT, TradeAction.CLOSE_SHORT):
-            # Futures short execution - architecture ready
-            logger.warning(f"Short execution requires futures mode. Action: {action.value}")
-            return {"executed": False, "action": action.value, "reason": "Futures short not yet enabled"}
+            # S5: live shorts (OPEN/CLOSE) are NOT wired through to the
+            # exchange. Refuse explicitly with a stable reason prefix so the
+            # queue's `error` field, the dashboard, and any monitoring can
+            # parse `live_short_unsupported` reliably. Fails CLOSED — never
+            # pretends the position was opened/closed.
+            logger.warning(
+                f"[LIVE] Short execution refused: {action.value} — "
+                f"{LIVE_SHORT_UNSUPPORTED_REASON}"
+            )
+            return {
+                "executed": False,
+                "action": action.value,
+                "reason": LIVE_SHORT_UNSUPPORTED_REASON,
+            }
 
         return {"executed": False, "action": action.value, "reason": "Unhandled action"}
 

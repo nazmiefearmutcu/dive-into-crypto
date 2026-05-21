@@ -54,14 +54,41 @@ class DecisionEngine:
             )
 
         # If we have a position, update tracking (trailing stop, break-even etc.)
-        # SL/TP warnings only — but signal reversal AUTO-CLOSES.
+        # S5 exit-semantics policy:
+        #   - paper mode: AUTO-CLOSE on stop_loss / take_profit / trailing_stop
+        #     / break_even_stop / liquidation. The position is removed by the
+        #     close path; no permanent `warning` accumulates cycle-after-cycle.
+        #   - live mode: keep the previous warning-only behavior. The live
+        #     execution path is not yet verified for exit orders, so we fail
+        #     CLOSED — surface a clear warning rather than pretend we closed.
+        #   - signal reversal: AUTO-CLOSE in both modes (already routed
+        #     through ExecutionEngine.execute, which guards live shorts).
+        mode = self.config.get("mode", "paper")
         if has_position and position:
             exit_reason = self.position_manager.update_position(symbol, current_price)
             if exit_reason:
-                # Don't close for SL/TP — just set warning (permanent, never clears)
-                position.warning = exit_reason
+                if mode == "paper":
+                    close_action = (
+                        TradeAction.CLOSE_LONG if position.side == PositionSide.LONG
+                        else TradeAction.CLOSE_SHORT
+                    )
+                    reason = (
+                        f"Auto-close on {exit_reason} (paper) | "
+                        f"{position.side.value} entry={position.entry_price} "
+                        f"price={current_price}"
+                    )
+                    logger.info(reason)
+                    return self._make_decision(
+                        close_action, position.quantity, symbol, current_price,
+                        reason,
+                        consensus,
+                        leverage=position.leverage,
+                    )
+                # Live mode: warning only, no silent close.
+                position.warning = f"live_exit_unsupported:{exit_reason}"
                 logger.warning(
-                    f"Position {symbol} hit {exit_reason} — NOT auto-closing. "
+                    f"Position {symbol} hit {exit_reason} in live mode — "
+                    f"NOT auto-closing (execution path not verified). "
                     f"Manual close required."
                 )
 

@@ -26,13 +26,13 @@ desktop.ini
 *.swo
 
 # --- macOS runtime outputs ---
-# Ignore everything in runtime/ by default (logs, pid, future files)…
+# Runtime/ is live process state (PID, scan progress, balances, flags) — never
+# source-truth. Ignore everything inside it except the .gitkeep placeholder so
+# the directory continues to exist after a clean checkout.
+# Historical incident snapshots live under macOS/tests/fixtures/runtime_snapshots/
+# and are tracked normally.
 macOS/runtime/*
-# …then allow analysis snapshots back in:
-!macOS/runtime/*.json
-!macOS/runtime/active_symbol.txt
-!macOS/runtime/auto_scan_disabled
-!macOS/runtime/auto_select_disabled
+!macOS/runtime/.gitkeep
 
 # --- Windows build artifacts (PyInstaller) ---
 windows/build/

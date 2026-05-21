@@ -7,8 +7,8 @@ Reads:
 
 Settings page allows:
 - Editing config/default.yaml
-- Editing .env (API keys)
 - Changing active symbol
+- (S7) .env editing is REMOVED — managed on disk only, see .env.example
 """
 
 import json
@@ -37,6 +37,21 @@ LOG_FILE = RUNTIME_DIR / "bot.log"
 CONFIG_FILE = PROJECT_ROOT / "config" / "default.yaml"
 ENV_FILE = PROJECT_ROOT / ".env"
 SYMBOL_FILE = RUNTIME_DIR / "active_symbol.txt"
+COMMAND_QUEUE_FILE = RUNTIME_DIR / "command_queue.json"
+
+# Lazy-imported command queue so dashboard tests can monkeypatch the path.
+sys.path.insert(0, str(PROJECT_ROOT))
+from src.persistence.command_queue import CommandQueue  # noqa: E402
+from src.persistence.schemas import CommandKind  # noqa: E402
+
+
+def _get_command_queue() -> CommandQueue:
+    """Return a CommandQueue bound to the current `COMMAND_QUEUE_FILE`.
+
+    A fresh instance per call is cheap and avoids stale state when tests
+    rebind the path via monkeypatch.
+    """
+    return CommandQueue(COMMAND_QUEUE_FILE)
 
 app = FastAPI(title="Trading Bot Dashboard", docs_url=None, redoc_url=None)
 
@@ -155,6 +170,74 @@ def _is_stale(status: dict) -> bool:
         return True
 
 
+# S3: a live-tick that hasn't been refreshed in more than this many
+# milliseconds counts as 'snapshot', even if the bot says it's running.
+# Conservative default: 5 minutes — same as _is_stale's threshold so the
+# two staleness signals don't disagree at the edge.
+_PRICE_AGE_STALE_MS = 5 * 60 * 1000
+
+
+def _price_display(status: dict, bot_running: Optional[bool] = None) -> dict:
+    """Canonical price display contract.
+
+    Source priority:
+      1. ``display_price`` — the live tick from LivePriceService (S3+).
+      2. ``current_price`` — legacy field (pre-S3 snapshots). For S3+ the
+         exporter mirrors display_price into current_price so this branch
+         is redundant; it stays for backward compatibility with snapshots
+         written by older builds.
+
+    The dashboard's live-price element MUST NEVER substitute
+    ``latest_decision.price`` — that field is decision metadata, captured
+    at decision time and stale by definition between cycles.
+
+    Returns ``{text, state, is_live, raw}``:
+      - state="live"        → numeric price + bot running + not stale + fresh tick
+      - state="snapshot"    → numeric price but bot stopped, data stale, or tick stale
+      - state="unavailable" → price missing/null/<=0 (no honest number to show)
+    """
+    raw = status.get("display_price")
+    if raw is None:
+        raw = status.get("current_price")
+    try:
+        v = float(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        v = None
+
+    bot_status = status.get("bot_status")
+    bot_stopped = (bot_running is False) or (bot_running is None and bot_status != "running")
+    stale = _is_stale(status)
+
+    # An old live tick must downgrade to 'snapshot' even when the rest of
+    # the snapshot looks fresh. price_age_ms is set by the bot from the
+    # LivePriceService cache; None means 'no info' which is not used as a
+    # staleness signal (the bot might not be running LivePriceService yet).
+    age_ms = status.get("price_age_ms")
+    try:
+        age_int = int(age_ms) if age_ms is not None else None
+    except (TypeError, ValueError):
+        age_int = None
+    tick_stale = age_int is not None and age_int > _PRICE_AGE_STALE_MS
+
+    if v is None or v <= 0:
+        return {"text": "Veri Yok", "state": "unavailable", "is_live": False, "raw": None}
+
+    if stale or bot_stopped or tick_stale:
+        return {
+            "text": "$" + _fmt_price(v),
+            "state": "snapshot",
+            "is_live": False,
+            "raw": v,
+        }
+
+    return {
+        "text": "$" + _fmt_price(v),
+        "state": "live",
+        "is_live": True,
+        "raw": v,
+    }
+
+
 def _time_ago(iso_str: str) -> str:
     if not iso_str:
         return "N/A"
@@ -189,6 +272,7 @@ def _format_dt(iso_str: str) -> str:
 templates.env.globals["time_ago"] = _time_ago
 templates.env.globals["format_dt"] = _format_dt
 templates.env.globals["is_stale"] = _is_stale
+templates.env.globals["price_display"] = _price_display
 templates.env.filters["format_dt"] = _format_dt
 templates.env.filters["time_ago"] = _time_ago
 
@@ -203,6 +287,8 @@ def api_status():
         status = _read_json(STATE_FILE)
         status["_source"] = "state.json (fallback)"
     status["_stale"] = _is_stale(status)
+    status["_bot_running"] = _is_bot_running()
+    status["_price_display"] = _price_display(status, bot_running=status["_bot_running"])
     return status
 
 
@@ -213,12 +299,17 @@ def api_active_coin_signals():
     Primary source: active_coin_signals.json (written by bot each cycle).
     Fallback: extract from auto-scan results if the active coin is in top 5.
     """
-    # Trigger background calculation if needed
+    # Trigger background calculation if needed (gated by
+    # ``dashboard_fallback_enabled`` — see ``_ensure_live_signals``).
     _ensure_live_signals()
 
-    # Primary: bot-written file (or dashboard-calculated)
+    # Primary: bot-written file (or dashboard-calculated). S6: every
+    # return path labels ``_source`` so the dashboard UI can tell apart
+    # authoritative bot-owned data from fallbacks and render staleness
+    # honestly.
     data = _read_json(RUNTIME_DIR / "active_coin_signals.json")
     if data and data.get("symbol") and len(data.get("timeframes", {})) >= 3:
+        data.setdefault("_source", "bot_owned")
         return data
 
     # Fallback: extract from auto-scan or multi-scan results
@@ -232,7 +323,8 @@ def api_active_coin_signals():
         status = _read_json(STATUS_FILE)
         active_symbol = status.get("active_symbol")
     if not active_symbol:
-        return {"symbol": None, "timeframes": {}, "updated_at": None}
+        return {"symbol": None, "timeframes": {}, "updated_at": None,
+                "_source": "empty"}
 
     # Try auto-scan progress (has all_signals for top coins)
     scan_data = _read_json(RUNTIME_DIR / "auto_scan_progress.json")
@@ -281,7 +373,8 @@ def api_active_coin_signals():
             "_source": "dashboard_status_fallback",
         }
 
-    return {"symbol": active_symbol, "timeframes": {}, "updated_at": None}
+    return {"symbol": active_symbol, "timeframes": {}, "updated_at": None,
+            "_source": "no_data"}
 
 
 # Background live signal calculator for dashboard
@@ -351,8 +444,19 @@ def _calc_live_signals_bg():
 
 
 def _ensure_live_signals():
-    """Trigger background calculation if file is missing or stale (>2 min)."""
+    """Trigger background calculation if file is missing or stale (>2 min).
+
+    S6: gated by ``dashboard_fallback_enabled`` (default ``True`` for
+    backward compatibility). When the bot is the trusted writer of
+    ``active_coin_signals.json``, set the knob to ``False`` so the
+    dashboard does not race the bot with a duplicate Binance pass.
+    """
     global _live_signal_thread
+    try:
+        if not _read_config().get("dashboard_fallback_enabled", True):
+            return
+    except Exception:
+        pass
     if _live_signal_thread and _live_signal_thread.is_alive():
         return  # already running
     sig_file = RUNTIME_DIR / "active_coin_signals.json"
@@ -446,23 +550,13 @@ def _read_env() -> dict[str, str]:
     return result
 
 
-def _write_env(env_data: dict[str, str]) -> None:
-    """Write .env file atomically, preserving comments from .env.example."""
-    lines = [
-        "# Binance API credentials",
-        f"BINANCE_API_KEY={env_data.get('BINANCE_API_KEY', '')}",
-        f"BINANCE_API_SECRET={env_data.get('BINANCE_API_SECRET', '')}",
-        "",
-        "# Optional: Binance Testnet (for testing live orders without real money)",
-        f"BINANCE_TESTNET_API_KEY={env_data.get('BINANCE_TESTNET_API_KEY', '')}",
-        f"BINANCE_TESTNET_API_SECRET={env_data.get('BINANCE_TESTNET_API_SECRET', '')}",
-        "",
-        "# Use testnet for live mode (true/false)",
-        f"USE_TESTNET={env_data.get('USE_TESTNET', 'false')}",
-    ]
-    tmp = ENV_FILE.with_suffix(".tmp")
-    tmp.write_text("\n".join(lines) + "\n")
-    tmp.replace(ENV_FILE)
+# S8: ``_write_env`` was removed. Earlier rescue stages disabled the only
+# HTTP caller (``POST /settings/env`` returns 403 without parsing the body),
+# leaving the helper unreachable from the running app. Deletion is the
+# fail-loud quarantine: any future regression that tries to write secrets
+# from the dashboard will now raise ``NameError`` at import time instead of
+# silently grafting a writer back into the rescue build. The .env file is
+# the only source of truth for Binance credentials — see ``.env.example``.
 
 
 def _read_symbol() -> str:
@@ -641,167 +735,49 @@ def api_bot_stop():
 
 
 @app.post("/api/position/close", response_class=JSONResponse)
-def api_close_position(symbol: str = Form(...)):
-    """Manually close an open position.
+def api_close_position(
+    symbol: str = Form(...),
+    idempotency_key: Optional[str] = Form(default=None),
+):
+    """Enqueue a manual close command for the bot.
 
-    Stops bot first to prevent state overwrite, then updates state.json,
-    then restarts bot. If bot can't be stopped, writes a close-command file
-    so the bot picks it up on the next cycle.
+    S4: the dashboard never mutates `state.json` directly. It writes one
+    command to `runtime/command_queue.json` and returns immediately. The
+    bot's CommandProcessor drains pending commands each cycle and routes
+    `manual_close` through the existing close path. Duplicate requests
+    with the same `idempotency_key` collapse to the same command.
     """
-    import json as _json
-    import time as _time
-    from datetime import datetime as _dt, timezone as _tz
+    from src.persistence.atomic_io import RuntimeIOError
+    from src.persistence.schemas import SchemaValidationError
 
-    state_path = RUNTIME_DIR / "state.json"
-    status_path = STATUS_FILE
+    symbol = (symbol or "").strip().upper()
+    if not symbol:
+        return JSONResponse({"error": "symbol is required"}, status_code=400)
 
-    # Stop bot first so it doesn't overwrite our changes.
-    # Bot removes PID file AFTER saving state, so we wait for PID file removal
-    # to guarantee state.json is final.
-    was_running = _is_bot_running()
-    if was_running:
-        _stop_bot()
-        # Wait up to 10 seconds for bot to fully exit (shutdown save + PID removal)
-        for _w in range(20):
-            _time.sleep(0.5)
-            if not _is_bot_running():
-                break
+    # Default key collapses double-submits while a command is still pending.
+    key = idempotency_key or f"close::{symbol}::pending"
 
-    # If bot STILL running after stop attempt, write a close-command file
-    # so the bot picks it up next cycle, and also update state anyway
-    bot_still_alive = _is_bot_running()
-    if bot_still_alive:
-        # Write close command for bot to pick up
-        cmd_file = RUNTIME_DIR / f"close_cmd_{symbol}.json"
-        cmd_file.write_text(_json.dumps({
-            "symbol": symbol,
-            "ts": _dt.now(_tz.utc).isoformat(),
-        }))
-
-    # Load state — re-read from disk AFTER bot is dead so we get its final save
-    if not state_path.exists():
-        if was_running and not bot_still_alive:
-            _start_bot()
-        return JSONResponse({"error": "No state file found"}, status_code=404)
     try:
-        state = _json.loads(state_path.read_text())
-    except Exception:
-        if was_running and not bot_still_alive:
-            _start_bot()
-        return JSONResponse({"error": "Failed to read state"}, status_code=500)
-
-    positions = state.get("positions", {})
-    if symbol not in positions:
-        if was_running and not bot_still_alive:
-            _start_bot()
-        return JSONResponse({"error": f"No open position for {symbol}"}, status_code=404)
-
-    pos = positions[symbol]
-    entry_price = pos["entry_price"]
-    quantity = pos["quantity"]
-    side = pos.get("side", "LONG")
-    leverage = pos.get("leverage", 1)
-
-    # Get current price — try Binance first, then dashboard status, then entry price
-    current_price = None
-    try:
-        config = _read_config()
-        from src.api.binance_client import BinanceClient
-        _client = BinanceClient(config)
-        _client.initialize()
-        current_price = _client.get_ticker_price(symbol)
-    except Exception:
-        pass
-    if not current_price:
-        # Fallback: check dashboard status for matching position price
-        if status_path.exists():
-            try:
-                status = _json.loads(status_path.read_text())
-                for p in status.get("open_positions", []):
-                    if p.get("symbol") == symbol and p.get("current_price"):
-                        current_price = p["current_price"]
-                        break
-                if not current_price:
-                    current_price = status.get("current_price")
-            except Exception:
-                pass
-    if not current_price:
-        current_price = entry_price  # last resort fallback
-
-    # Calculate PnL
-    fee_pct = 0.001
-    if side == "LONG":
-        gross_pnl = (current_price - entry_price) * quantity
-    else:
-        gross_pnl = (entry_price - current_price) * quantity
-    fee = (entry_price * quantity + current_price * quantity) * fee_pct
-    net_pnl = gross_pnl - fee
-
-    # Create trade record
-    trade_record = {
-        "symbol": symbol,
-        "action": "CLOSE",
-        "side": side,
-        "entry_price": entry_price,
-        "exit_price": current_price,
-        "quantity": quantity,
-        "pnl": round(net_pnl, 4),
-        "fee": round(fee, 4),
-        "entry_time": pos.get("open_time", ""),
-        "exit_time": _dt.now(_tz.utc).isoformat(),
-        "reason": "manual_close",
-    }
-
-    # Update balance
-    paper_balance = state.get("paper_balance", 0)
-    if leverage > 1:
-        margin_returned = entry_price * quantity / leverage
-        paper_balance += margin_returned + net_pnl
-    else:
-        paper_balance += current_price * quantity - fee
-
-    # Update state
-    del positions[symbol]
-    state["positions"] = positions
-    state["trade_history"] = state.get("trade_history", []) + [trade_record]
-    state["paper_balance"] = round(paper_balance, 4)
-    state["daily_pnl"] = round(state.get("daily_pnl", 0) + net_pnl, 4)
-    state["total_realized_pnl"] = round(state.get("total_realized_pnl", 0) + net_pnl, 4)
-
-    # Atomic write state.json
-    tmp = state_path.with_suffix(".tmp")
-    tmp.write_text(_json.dumps(state, indent=2, default=str))
-    tmp.replace(state_path)
-
-    # Also update dashboard_status.json to reflect closed position immediately
-    if status_path.exists():
-        try:
-            ds = _json.loads(status_path.read_text())
-            ds["open_positions"] = [p for p in ds.get("open_positions", []) if p.get("symbol") != symbol]
-            ds["open_positions_count"] = len(ds["open_positions"])
-            ds["balance"] = round(paper_balance, 4)
-            ds["daily_pnl"] = state["daily_pnl"]
-            ds["total_pnl"] = state["total_realized_pnl"]
-            ds_tmp = status_path.with_suffix(".tmp")
-            ds_tmp.write_text(_json.dumps(ds, indent=2, default=str))
-            ds_tmp.replace(status_path)
-        except Exception:
-            pass
-
-    # Restart bot (only if we successfully stopped it)
-    if was_running and not bot_still_alive:
-        _start_bot()
+        queue = _get_command_queue()
+        cmd = queue.enqueue(
+            kind=CommandKind.MANUAL_CLOSE,
+            payload={"symbol": symbol},
+            idempotency_key=key,
+        )
+    except (RuntimeIOError, SchemaValidationError) as exc:
+        # Queue file exists but is malformed — refuse to silently lose commands.
+        return JSONResponse(
+            {"error": f"command queue corrupt: {exc}"},
+            status_code=500,
+        )
 
     return {
-        "status": "closed",
+        "status": "enqueued",
+        "command_id": cmd.id,
+        "idempotency_key": cmd.idempotency_key,
+        "kind": cmd.kind.value,
         "symbol": symbol,
-        "side": side,
-        "entry_price": entry_price,
-        "exit_price": current_price,
-        "leverage": leverage,
-        "pnl": round(net_pnl, 4),
-        "fee": round(fee, 4),
-        "balance_after": round(paper_balance, 4),
+        "created_at": cmd.created_at,
     }
 
 
@@ -864,96 +840,44 @@ def api_alert_stop():
 # ─── Paper Reset ─────────────────────────────────────────────────
 
 @app.post("/api/paper/reset", response_class=JSONResponse)
-def api_paper_reset(balance: float = Form(10000.0)):
-    """Reset paper trading: clear all history, positions, PnL. Start fresh.
-    Stops the bot first to prevent it from re-writing stale state on shutdown."""
-    import json as _json
-    import time as _time
-    from datetime import datetime as _dt, timezone as _tz
+def api_paper_reset(
+    balance: float = Form(10000.0),
+    idempotency_key: Optional[str] = Form(default=None),
+):
+    """Enqueue a paper-reset command for the bot.
+
+    S4: the dashboard no longer races the bot for `state.json`. The bot
+    picks up the `paper_reset` command, snapshots into a clean state, and
+    publishes a fresh `dashboard_status.json`.
+    """
+    from src.persistence.atomic_io import RuntimeIOError
+    from src.persistence.schemas import SchemaValidationError
 
     if balance <= 0:
         return JSONResponse({"error": "Balance must be positive"}, status_code=400)
 
-    # Stop bot first so it doesn't overwrite fresh state on shutdown
-    if _is_bot_running():
-        _stop_bot()
-        _time.sleep(2)  # wait for graceful shutdown
+    key = idempotency_key or f"paper_reset::{balance:.4f}::pending"
 
-    # Also kill any orphan bot processes not tracked by PID file
     try:
-        result = subprocess.run(
-            ["pgrep", "-f", "src\\.main"],
-            capture_output=True, text=True, timeout=5,
+        queue = _get_command_queue()
+        cmd = queue.enqueue(
+            kind=CommandKind.PAPER_RESET,
+            payload={"balance": float(balance)},
+            idempotency_key=key,
         )
-        for pid_str in result.stdout.strip().split("\n"):
-            if pid_str.strip():
-                try:
-                    os.kill(int(pid_str.strip()), signal.SIGTERM)
-                except (ProcessLookupError, PermissionError, ValueError):
-                    pass
-        if result.stdout.strip():
-            _time.sleep(2)
-    except Exception:
-        pass
-
-    state_path = RUNTIME_DIR / "state.json"
-    now = _dt.now(_tz.utc)
-
-    fresh_state = {
-        "active_symbol": "",
-        "positions": {},
-        "last_decision": {},
-        "last_trade_time": None,
-        "daily_pnl": 0.0,
-        "daily_start_balance": balance,
-        "daily_date": now.strftime("%Y-%m-%d"),
-        "total_realized_pnl": 0.0,
-        "trade_history": [],
-        "paper_balance": balance,
-        "bot_start_time": now.isoformat(),
-    }
-
-    # dashboard_status.json uses different keys than state.json
-    fresh_dashboard = {
-        "bot_status": "stopped",
-        "mode": "paper",
-        "market_type": "futures",
-        "timeframe": "",
-        "polling_interval": 1,
-        "active_symbol": "",
-        "current_price": 0.0,
-        "last_update": now.isoformat(),
-        "cycle_count": 0,
-        "balance": balance,
-        "daily_pnl": 0.0,
-        "total_pnl": 0.0,
-        "unrealized_pnl": 0.0,
-        "daily_start_balance": balance,
-        "open_positions_count": 0,
-        "open_positions": [],
-        "latest_decision": {},
-        "indicator_votes": [],
-        "signal_distribution": {},
-        "score_details": [],
-        "trade_history": [],
-        "performance": {},
-        "bot_start_time": now.isoformat(),
-    }
-
-    # Write fresh state.json
-    tmp = state_path.with_suffix(".tmp")
-    tmp.write_text(_json.dumps(fresh_state, indent=2, default=str))
-    tmp.replace(state_path)
-
-    # Write fresh dashboard_status.json (different schema from state.json)
-    status_tmp = STATUS_FILE.with_suffix(".tmp")
-    status_tmp.write_text(_json.dumps(fresh_dashboard, indent=2, default=str))
-    status_tmp.replace(STATUS_FILE)
+    except (RuntimeIOError, SchemaValidationError) as exc:
+        return JSONResponse(
+            {"error": f"command queue corrupt: {exc}"},
+            status_code=500,
+        )
 
     return {
-        "status": "ok",
-        "balance": balance,
-        "message": f"Paper trading reset. Starting balance: ${balance:.2f}",
+        "status": "enqueued",
+        "command_id": cmd.id,
+        "idempotency_key": cmd.idempotency_key,
+        "kind": cmd.kind.value,
+        "balance": float(balance),
+        "created_at": cmd.created_at,
     }
 
 
@@ -1268,13 +1192,50 @@ def api_scan_lock_status():
     }
 
 
+def _derive_scan_state(progress: dict | None) -> str:
+    """S8: pure helper — return a canonical scan state for the UI.
+
+    Returns one of: ``disabled``, ``scanning``, ``error``, ``stale``,
+    ``complete``, ``idle``. The bot's own writer (``BotService._derive_progress_state``)
+    sets the same field on disk; this helper reproduces the contract on the
+    dashboard side so empty/missing-file paths can never silently imply
+    ``idle`` when the truth is "we have no signal at all".
+    """
+    if not progress:
+        return "idle"
+    state = progress.get("state")
+    if isinstance(state, str) and state in {
+        "disabled", "scanning", "error", "stale", "complete", "idle",
+    }:
+        return state
+    reason = progress.get("reason", "")
+    if reason in {"auto_scan_disabled_flag", "auto_scan_enabled_false"}:
+        return "disabled"
+    if progress.get("scanning"):
+        return "scanning"
+    if progress.get("error"):
+        return "error"
+    total = progress.get("total", 0) or 0
+    done = progress.get("done", 0) or 0
+    if total > 0 and done >= total:
+        return "complete"
+    return "idle"
+
+
 @app.get("/api/auto-scan-progress", response_class=JSONResponse)
 def api_auto_scan_progress():
-    """Return bot's auto-scan progress (read from file written by bot_service)."""
+    """Return bot's auto-scan progress (read from file written by bot_service).
+
+    S8: the response always carries a top-level ``state`` field so the
+    tarama UI can render the honest state (idle / scanning / disabled /
+    complete / error / stale) instead of silently implying ``idle`` when
+    the bot has not written a progress file yet.
+    """
     data = _read_json(RUNTIME_DIR / "auto_scan_progress.json")
     if data:
+        data.setdefault("state", _derive_scan_state(data))
         return data
-    return {"scanning": False, "pct": 0, "done": 0, "total": 0}
+    return {"scanning": False, "pct": 0, "done": 0, "total": 0, "state": "idle"}
 
 
 @app.get("/api/scanner/multi-progress", response_class=JSONResponse)
@@ -1681,6 +1642,8 @@ def page_index(request: Request):
     if scan_progress.get("last_scan_total") is not None:
         status["last_scan_total"] = scan_progress["last_scan_total"]
 
+    price_view = _price_display(status, bot_running=bot_running)
+
     return templates.TemplateResponse(
         request=request,
         name="index.html",
@@ -1697,6 +1660,8 @@ def page_index(request: Request):
             "dll_pct": dll_pct,
             "auto_select_enabled": auto_select_enabled,
             "auto_scan_enabled": auto_scan_enabled,
+            "price_view": price_view,
+            "data_stale": _is_stale(status),
         },
     )
 
@@ -1714,10 +1679,21 @@ def page_tarama(request: Request):
         status["last_scan_hot_count"] = scan_progress["last_scan_hot_count"]
     if scan_progress.get("last_scan_total") is not None:
         status["last_scan_total"] = scan_progress["last_scan_total"]
+    # S8: canonical scan state (idle/scanning/disabled/complete/error/stale).
+    scan_state = _derive_scan_state(scan_progress)
+    scan_reason = scan_progress.get("reason", "") if scan_progress else ""
     return templates.TemplateResponse(
         request=request,
         name="tarama.html",
-        context={"status": status, "page": "tarama"},
+        context={
+            "status": status,
+            "page": "tarama",
+            "bot_running": _is_bot_running(),
+            "data_stale": _is_stale(status),
+            "scan_state": scan_state,
+            "scan_reason": scan_reason,
+            "scan_progress": scan_progress,
+        },
     )
 
 
@@ -1727,7 +1703,12 @@ def page_positions(request: Request):
     return templates.TemplateResponse(
         request=request,
         name="positions.html",
-        context={"status": status, "page": "positions"},
+        context={
+            "status": status,
+            "page": "positions",
+            "bot_running": _is_bot_running(),
+            "data_stale": _is_stale(status),
+        },
     )
 
 
@@ -1737,7 +1718,12 @@ def page_signals(request: Request):
     return templates.TemplateResponse(
         request=request,
         name="signals.html",
-        context={"status": status, "page": "signals"},
+        context={
+            "status": status,
+            "page": "signals",
+            "bot_running": _is_bot_running(),
+            "data_stale": _is_stale(status),
+        },
     )
 
 
@@ -1793,6 +1779,8 @@ def page_performance(request: Request):
             "status": status,
             "daily_summaries": daily_summaries,
             "page": "performance",
+            "bot_running": _is_bot_running(),
+            "data_stale": _is_stale(status),
         },
     )
 
@@ -1929,33 +1917,35 @@ async def save_weights(request: Request):
     return RedirectResponse("/settings?saved=weights", status_code=303)
 
 
-@app.post("/settings/env", response_class=HTMLResponse)
-def save_env(
-    request: Request,
-    binance_api_key: str = Form(default=""),
-    binance_api_secret: str = Form(default=""),
-    binance_testnet_api_key: str = Form(default=""),
-    binance_testnet_api_secret: str = Form(default=""),
-    use_testnet: str = Form(default="false"),
-):
-    """Save .env API keys."""
-    current = _read_env()
+SECRET_WRITE_DISABLED_MESSAGE = (
+    "Dashboard cannot edit API keys in rescue mode. "
+    "Edit the .env file directly on disk; see .env.example for the documented format."
+)
 
-    # Only update if a non-masked value is provided
-    def _update(field: str, new_val: str) -> str:
-        if not new_val or "*" in new_val:
-            return current.get(field, "")
-        return new_val
 
-    env_data = {
-        "BINANCE_API_KEY": _update("BINANCE_API_KEY", binance_api_key),
-        "BINANCE_API_SECRET": _update("BINANCE_API_SECRET", binance_api_secret),
-        "BINANCE_TESTNET_API_KEY": _update("BINANCE_TESTNET_API_KEY", binance_testnet_api_key),
-        "BINANCE_TESTNET_API_SECRET": _update("BINANCE_TESTNET_API_SECRET", binance_testnet_api_secret),
-        "USE_TESTNET": use_testnet,
-    }
-    _write_env(env_data)
-    return RedirectResponse("/settings?saved=env", status_code=303)
+@app.post("/settings/env")
+def save_env(request: Request) -> JSONResponse:
+    """Rescue-mode: dashboard MUST NOT write API keys.
+
+    Returns 403 without parsing the request body. The handler intentionally
+    does NOT declare ``Form(...)`` parameters so submitted secrets are never
+    bound to Python locals — they cannot leak into logs, the response body,
+    or downstream handlers.
+
+    Contract (S7):
+        * Status is 403 (Forbidden).
+        * Response body never echoes submitted form values.
+        * No file under ``ENV_FILE`` is created or modified.
+        * The on-disk ``.env`` file remains the only source of truth for
+          Binance credentials.
+    """
+    return JSONResponse(
+        status_code=403,
+        content={
+            "error": "dashboard_secret_write_disabled",
+            "message": SECRET_WRITE_DISABLED_MESSAGE,
+        },
+    )
 
 
 @app.post("/settings/symbol", response_class=HTMLResponse)

@@ -3,10 +3,38 @@
 
 {% block content %}
 {% set s = status or {} %}
+{% set stale = data_stale if data_stale is defined else is_stale(s) %}
+{% set bot_off = not (bot_running if bot_running is defined else true) %}
 
 <div class="page-header">
     <h1>Tarama</h1>
+    {% set _state = scan_state | default('idle') %}
+    {% set _labels = {
+        'disabled': 'Devre Disi',
+        'scanning': 'Taraniyor',
+        'complete': 'Tamamlandi',
+        'error': 'Hata',
+        'stale': 'Eski Veri',
+        'idle': 'Beklemede',
+    } %}
+    <span class="scan-state-badge scan-state-{{ _state }}"
+          data-testid="auto-scan-state"
+          data-scan-state="{{ _state }}"
+          {% if scan_reason %}title="{{ scan_reason }}"{% endif %}>
+        Otomatik Tarama: {{ _labels.get(_state, _state) }}
+    </span>
 </div>
+
+{% if bot_off %}
+<div class="snapshot-banner snapshot-banner-stopped">
+    <span class="snapshot-banner-icon" aria-hidden="true">⚠</span>
+    <span class="snapshot-banner-text">
+        <strong>Snapshot — Bot durdu.</strong>
+        Otomatik tarama döngüsü çalışmıyor; aşağıdaki son sonuçlar dondurulmuştur.
+        Yeni veri için "Taramaya Basla" tıklayın.
+    </span>
+</div>
+{% endif %}
 
 <!-- Manual Multi-Timeframe Scanner -->
 <div class="card scanner-card" id="scanner-card">

@@ -1,0 +1,89 @@
+# S7: pytest CI for the macOS/ rescue build.
+#
+# Why this exists: every S1–S6 fix has been verified manually with
+# `python3 -m pytest -q`. CI promotes that into the merge gate so a
+# regression in the rescue tree cannot land unnoticed.
+#
+# Security:
+#   * No secrets are referenced anywhere (intentional — see workflow body).
+#   * No untrusted ``github.event.*`` payloads are interpolated into
+#     ``run:`` blocks; the only template values used in shell context are
+#     ``matrix.python-version`` which is a fixed enum set in this file.
+#
+# Why no secrets: this workflow runs the offline pytest suite only.
+# Live Binance calls, paper-trade harnesses, and any code path that
+# needs BINANCE_API_KEY are out of scope here. Mocked tests cover the
+# trading surfaces. If S8 wants integration tests against a sandbox,
+# secrets can be added then with a separate, gated job.
+#
+# Why the Python matrix is 3.11 + 3.12 (and not 3.13):
+#   * python-binance, ta, and the pandas 2.1+ tooling have stable
+#     wheels on 3.11–3.12. Some transitives only ship 3.12-floor
+#     wheels for 3.13 from later releases, so we pin the matrix at
+#     the well-tested versions for the rescue build.
+#   * Local development on 3.13 keeps working — the suite is version
+#     agnostic for the surfaces under test. CI just enforces a
+#     reproducible lower bound.
+
+name: macOS Tests
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "macOS/**"
+      - ".github/workflows/macos-tests.yml"
+  pull_request:
+    paths:
+      - "macOS/**"
+      - ".github/workflows/macos-tests.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    name: pytest
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    defaults:
+      run:
+        # Every step in this job runs from the macOS/ rescue tree —
+        # mirroring how operators run the suite locally.
+        working-directory: macOS
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: macOS/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run pytest
+        run: python -m pytest -q
+
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-artifacts-${{ matrix.python-version }}
+          # All paths are workflow-root relative regardless of the job's
+          # working-directory (GitHub Actions quirk).
+          path: |
+            macOS/runtime/*.log
+            macOS/.pytest_cache/v/cache/lastfailed
+          if-no-files-found: ignore
+          retention-days: 14

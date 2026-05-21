@@ -15,6 +15,9 @@ logger = get_logger("monitoring.status_exporter")
 
 DEFAULT_DASHBOARD_PATH = "runtime/dashboard_status.json"
 
+# Sentinel for kwargs that distinguish "caller did not pass" from "caller passed None".
+_UNSET: Any = object()
+
 
 class StatusExporter:
     """Exports a dashboard-consumable JSON snapshot after every bot cycle."""
@@ -36,8 +39,52 @@ class StatusExporter:
         cycle_count: int,
         running: bool,
         all_prices: dict[str, float] | None = None,
+        *,
+        signal_price: float | None = _UNSET,
+        display_price: float | None = _UNSET,
+        display_price_source: str | None = None,
+        price_age_ms: int | None = None,
+        mark_price: float | None = None,
+        best_bid: float | None = None,
+        best_ask: float | None = None,
+        status_warnings: list[str] | None = None,
     ) -> None:
-        """Build and atomically write the dashboard snapshot."""
+        """Build and atomically write the dashboard snapshot.
+
+        S3 adds the canonical price fields:
+
+        - ``signal_price`` is the candle close the decision engine used. It
+          mirrors ``latest_decision.price`` and changes only when a new
+          candle closes.
+        - ``display_price`` is the freshest ticker the bot pulled from the
+          LivePriceService cache (REST polling rescue today). The dashboard
+          puts this on screen. May be more recent than ``signal_price``.
+        - ``display_price_source`` labels the transport ("rest:binance" /
+          "fake" / "cycle_close" / "unavailable").
+        - ``price_age_ms`` is how old the display price is, in milliseconds.
+
+        ``current_price`` is preserved as a mirror of ``display_price`` so
+        S2 dashboard truth tests keep passing verbatim.
+        """
+        # Default signal_price to the cycle's current_price when the caller
+        # doesn't yet pass it (pre-S3 call sites).
+        if signal_price is _UNSET:
+            signal_price = current_price
+        if display_price is _UNSET:
+            display_price = current_price
+
+        # Resolve display_price_source honestly.
+        if display_price is None:
+            resolved_source = "unavailable"
+        elif display_price_source:
+            resolved_source = display_price_source
+        elif display_price == signal_price:
+            resolved_source = "cycle_close"
+        else:
+            resolved_source = "rest:binance"
+
+        # current_price is the legacy mirror of display_price for S2 compat.
+        current_display = display_price
         # Indicator votes
         indicator_votes: list[dict[str, Any]] = []
         buy_count = 0
@@ -60,9 +107,12 @@ class StatusExporter:
         open_positions: list[dict[str, Any]] = []
         total_unrealized = 0.0
         prices = dict(all_prices) if all_prices else {}
-        # Active symbol price is always available from the cycle
-        if current_price and state.get("active_symbol"):
-            prices.setdefault(state["active_symbol"], current_price)
+        # Active symbol price is always available from the cycle.
+        # Prefer display_price (the live tick) for unrealized PnL math
+        # because the dashboard shows that one; fall back to current_price.
+        _active_pos_price = current_display if current_display is not None else current_price
+        if _active_pos_price and state.get("active_symbol"):
+            prices.setdefault(state["active_symbol"], _active_pos_price)
         for sym, pos in positions_raw.items():
             p = dict(pos)
             price = prices.get(sym)
@@ -92,7 +142,16 @@ class StatusExporter:
             "timeframe": config.get("timeframe", "1h"),
             "polling_interval": config.get("polling_interval_seconds", 60),
             "active_symbol": state.get("active_symbol", ""),
-            "current_price": current_price,
+            # S2 backward-compat: current_price = display_price.
+            "current_price": current_display,
+            # S3 canonical price contract:
+            "display_price": display_price,
+            "display_price_source": resolved_source,
+            "price_age_ms": price_age_ms,
+            "signal_price": signal_price,
+            "mark_price": mark_price,
+            "best_bid": best_bid,
+            "best_ask": best_ask,
             "last_update": iso_now(),
             "cycle_count": cycle_count,
             "balance": round(balance, 4),
@@ -110,7 +169,10 @@ class StatusExporter:
                 "weighted_score": round(consensus.get("weighted_score", 0), 4) if consensus else 0,
                 "reason": decision.get("reason", "") if decision else "",
                 "should_trade": consensus.get("should_trade", False) if consensus else False,
-                "price": current_price,
+                # `price` is decision metadata — pin it to signal_price
+                # (the candle close the decision engine acted on), NOT the
+                # freshest live tick. See test_status_exporter_canonical.
+                "price": signal_price,
                 "leverage": decision.get("leverage", 1) if decision else 1,
                 "timestamp": decision.get("timestamp", "") if decision else "",
             },
@@ -128,6 +190,9 @@ class StatusExporter:
             "last_scan_results": state.get("last_scan_results", []),
             "last_scan_hot_count": state.get("last_scan_hot_count", 0),
             "last_scan_total": state.get("last_scan_total", 0),
+            # S5: surface config-time invariants (e.g. futures live short
+            # unsupported) so the dashboard can render an honest banner.
+            "status_warnings": list(status_warnings or []),
         }
 
         self._write_atomic(snapshot)
@@ -143,6 +208,14 @@ class StatusExporter:
             "polling_interval": config.get("polling_interval_seconds", 60),
             "active_symbol": state.get("active_symbol", ""),
             "current_price": None,
+            # S3 canonical fields — honest 'unavailable' for stopped state.
+            "display_price": None,
+            "display_price_source": "unavailable",
+            "price_age_ms": None,
+            "signal_price": None,
+            "mark_price": None,
+            "best_bid": None,
+            "best_ask": None,
             "last_update": iso_now(),
             "cycle_count": 0,
             "balance": round(state.get("paper_balance", 0), 4),
