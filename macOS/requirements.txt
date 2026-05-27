@@ -1,5 +1,5 @@
 python-binance>=1.0.19
-pandas>=2.1.0
+pandas>=3.0.3
 numpy>=1.24.0
 ta>=0.11.0
 pyyaml>=6.0
