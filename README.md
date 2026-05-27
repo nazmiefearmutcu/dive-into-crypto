@@ -1,5 +1,11 @@
 # TRADING-BOT (TBV1)
 
+[![License: MIT](https://img.shields.io/github/license/nazmiefearmutcu/TRADING-BOT?color=blue)](LICENSE)
+[![Stars](https://img.shields.io/github/stars/nazmiefearmutcu/TRADING-BOT?style=flat&logo=github)](https://github.com/nazmiefearmutcu/TRADING-BOT/stargazers)
+[![Python](https://img.shields.io/badge/python-3.11%2B-3776ab?logo=python&logoColor=white)](https://python.org)
+[![Mode](https://img.shields.io/badge/default%20mode-paper-success)](#status)
+[![Platforms](https://img.shields.io/badge/platforms-macOS%20%2B%20Windows-lightgrey)](#subdirectories)
+
 **Python crypto perpetual futures trading bot with a 7-tab web dashboard and a 15-indicator consensus engine.**
 
 - 📊 **15 indicators** voting via consensus (RSI, MACD, Bollinger, SMA, EMA, Stochastic, ADX, CCI, ATR, OBV, Williams %R, VWAP, Ichimoku, PSAR, KDJ)
