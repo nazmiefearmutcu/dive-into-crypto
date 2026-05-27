@@ -1,6 +1,6 @@
 # TRADING-BOT (TBV1)
 
-**Python Binance Futures trading bot with a 7-tab web dashboard and a 15-indicator consensus engine.**
+**Python crypto perpetual futures trading bot with a 7-tab web dashboard and a 15-indicator consensus engine.**
 
 - 📊 **15 indicators** voting via consensus (RSI, MACD, Bollinger, SMA, EMA, Stochastic, ADX, CCI, ATR, OBV, Williams %R, VWAP, Ichimoku, PSAR, KDJ)
 - 🌀 **12 timeframes** scanned per symbol (1m, 3m, 5m, 15m, 30m, 1h, 2h, 4h, 6h, 8h, 12h, 1d) with per-TF confidence
@@ -14,7 +14,7 @@
 
 | Genel Bakış (Overview) | Tarama (Multi-symbol scan) |
 | --- | --- |
-| ![Dashboard with 12-timeframe confidence grid for EDENUSDT, balance $10000, PNL, and paper-mode futures status banner](docs/screenshots/01-panel.png) | ![Manual scan: 581 coins ranked, top-15 BUY/SELL signals across 12 timeframes, with cross-TF consistency ranking](docs/screenshots/02-tarama.png) |
+| ![Dashboard with 12-timeframe confidence grid for an example symbol, balance $10000, PNL, and paper-mode futures status banner](docs/screenshots/01-panel.png) | ![Manual scan: 581 coins ranked, top-15 BUY/SELL signals across 12 timeframes, with cross-TF consistency ranking](docs/screenshots/02-tarama.png) |
 
 | Sinyaller (Signal history) | Ayarlar (Settings) |
 | --- | --- |
@@ -30,7 +30,7 @@ Windows builds wrap the same Python code; the dashboard markup is identical.
 
 ## Status
 
-Paper-mode is the default. Live trading on a credentialed Binance Futures
+Paper-mode is the default. Live trading on a credentialed perpetual-futures
 account requires explicit opt-in via `Ayarlar` → `Mode = LIVE` and a per-
 credential confirmation prompt.
 
