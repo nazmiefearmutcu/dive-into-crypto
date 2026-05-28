@@ -6,7 +6,7 @@
 [![Mode](https://img.shields.io/badge/default%20mode-paper-success)](#status)
 [![Platforms](https://img.shields.io/badge/platforms-macOS%20%2B%20Windows-lightgrey)](#subdirectories)
 
-**Python crypto perpetual futures trading bot with a 7-tab web dashboard and a 15-indicator consensus engine.**
+**A trading bot that won't trade until 15 indicators across 12 timeframes agree.** Paper-mode by default — live trading must be explicitly enabled per credential. Python backend, 7-tab web dashboard, macOS and Windows packaged distributions.
 
 - 📊 **15 indicators** voting via consensus (RSI, MACD, Bollinger, SMA, EMA, Stochastic, ADX, CCI, ATR, OBV, Williams %R, VWAP, Ichimoku, PSAR, KDJ)
 - 🌀 **12 timeframes** scanned per symbol (1m, 3m, 5m, 15m, 30m, 1h, 2h, 4h, 6h, 8h, 12h, 1d) with per-TF confidence
