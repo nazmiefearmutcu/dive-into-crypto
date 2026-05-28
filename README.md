@@ -18,13 +18,26 @@
 
 ## Preview
 
-| Genel Bakış (Overview) | Tarama (Multi-symbol scan) |
-| --- | --- |
-| ![Dashboard with 12-timeframe confidence grid for an example symbol, balance $10000, PNL, and paper-mode futures status banner](docs/screenshots/01-panel.png) | ![Manual scan: 581 coins ranked, top-15 BUY/SELL signals across 12 timeframes, with cross-TF consistency ranking](docs/screenshots/02-tarama.png) |
+#### Panel (Overview)
+![Dashboard panel: bot running indicator, 12-timeframe confidence grid for the active symbol with per-TF BUY / SELL / HOLD votes, balance and PNL counters, paper-mode futures status banner, recent positions and signal history strips](docs/screenshots/01-panel.png)
 
-| Sinyaller (Signal history) | Ayarlar (Settings) |
-| --- | --- |
-| ![Signal history feed showing recent BUY/SELL decisions with timestamps and confidence levels](docs/screenshots/03-sinyaller.png) | ![Settings page with risk profile, mode, daily limit, auto-scan, indicator weights and credential management](docs/screenshots/04-ayarlar.png) |
+#### Tarama (Multi-symbol scan)
+![Tarama tab: 581-coin scan results ranked by cross-timeframe consistency, top BUY and top SELL columns with per-symbol confidence chips, 12-TF colored heat strip per row, manual rescan controls](docs/screenshots/02-tarama.png)
+
+#### Pozisyonlar (Open positions)
+![Pozisyonlar tab: open positions cards with LONG / SHORT badges, leverage chip, Kapat button, PnL bar, entry / current / amount / liquidation price grid, SL + TP + Trailing strip, paper-mode footer and trade history table](docs/screenshots/03-pozisyonlar.png)
+
+#### Sinyaller (Signal history)
+![Sinyaller tab: signal feed with timestamped BUY / SELL decisions, per-decision confidence percentage, contributing indicators list, time-since strip, infinite scroll](docs/screenshots/04-sinyaller.png)
+
+#### Performans (Performance)
+![Performans tab: lifetime PnL summary, win rate, average win and loss, best and worst trades, equity curve sparkline, trade volume and turnover counters](docs/screenshots/05-performans.png)
+
+#### Loglar (Bot logs)
+![Loglar tab: live bot log tail with severity colour-coding, decision-cycle markers, per-symbol entry and exit lines, scroll-to-follow toggle](docs/screenshots/06-loglar.png)
+
+#### Ayarlar (Settings)
+![Ayarlar tab: risk profile picker, mode toggle (PAPER / LIVE), daily limit and per-trade size, auto-scan cadence, indicator weights matrix, credential management with reveal toggle](docs/screenshots/07-ayarlar.png)
 
 The dashboard is a FastAPI app served at `127.0.0.1:8081`. Both macOS and
 Windows builds wrap the same Python code; the dashboard markup is identical.
