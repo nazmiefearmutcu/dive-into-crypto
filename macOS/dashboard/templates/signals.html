@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title_extra %} - Sinyaller{% endblock %}
+{% block title_extra %} - Signals{% endblock %}
 
 {% block content %}
 {% set s = status or {} %}
@@ -11,10 +11,10 @@
 {% set bot_off = not (bot_running if bot_running is defined else true) %}
 
 <div class="page-header">
-    <h1>Sinyaller ve İndikatör Detayları</h1>
+    <h1>Signals & Indicator Details</h1>
     <span class="update-time {% if stale %}stale{% endif %}" id="last-update">
-        Son güncelleme: {{ time_ago(s.get("last_update", "")) }}
-        {% if stale %}<span class="badge badge-red">ESKİ</span>{% endif %}
+        Last update: {{ time_ago(s.get("last_update", "")) }}
+        {% if stale %}<span class="badge badge-red">STALE</span>{% endif %}
     </span>
 </div>
 
@@ -23,11 +23,11 @@
     <span class="snapshot-banner-icon" aria-hidden="true">⚠</span>
     <span class="snapshot-banner-text">
         {% if bot_off %}
-            <strong>Snapshot — Bot durdu.</strong>
-            Aşağıdaki sinyaller son bot döngüsünden kalmıştır, canlı değildir.
+            <strong>Snapshot — Bot stopped.</strong>
+            The signals below are from the last bot cycle and are not live.
         {% else %}
-            <strong>Veri eski.</strong>
-            Sinyaller artık tazelenmiyor.
+            <strong>Data is stale.</strong>
+            Signals are no longer being refreshed.
         {% endif %}
     </span>
 </div>
@@ -35,29 +35,29 @@
 
 <!-- Consensus Summary -->
 <div class="card">
-    <h3>Konsensüs Sonucu</h3>
+    <h3>Consensus Result</h3>
     <div class="grid grid-4">
         <div class="metric-box">
-            <span class="label">Son Sinyal</span>
+            <span class="label">Latest Signal</span>
             <span class="signal-badge signal-{{ (decision.get('signal', 'neutral') | lower) }}">
                 {{ decision.get("signal", "N/A") }}
             </span>
         </div>
         <div class="metric-box">
-            <span class="label">Güven</span>
+            <span class="label">Confidence</span>
             <div class="big-number">{{ decision.get("confidence", 0) }}%</div>
             <div class="progress-bar">
                 <div class="progress-fill" style="width: {{ decision.get('confidence', 0) }}%"></div>
             </div>
         </div>
         <div class="metric-box">
-            <span class="label">Risk Seviyesi</span>
+            <span class="label">Risk Level</span>
             <span class="risk-badge risk-{{ (decision.get('risk_level', 'n/a') | lower) }}">
                 {{ decision.get("risk_level", "N/A") }}
             </span>
         </div>
         <div class="metric-box">
-            <span class="label">Ağırlıklı Skor</span>
+            <span class="label">Weighted Score</span>
             <div class="big-number {{ 'positive' if (decision.get('weighted_score', 0) or 0) > 0 else 'negative' if (decision.get('weighted_score', 0) or 0) < 0 else '' }}">
                 {{ "%.4f" | format(decision.get("weighted_score", 0) or 0) }}
             </div>
@@ -65,12 +65,12 @@
     </div>
     <div class="grid grid-2" style="margin-top: 12px;">
         <div>
-            <span class="label">Aksiyon</span>
+            <span class="label">Action</span>
             <span class="value">{{ decision.get("action", "N/A") }}</span>
         </div>
         <div>
-            <span class="label">İşlem Yapılsın mı</span>
-            <span class="value">{{ "Evet" if decision.get("should_trade") else "Hayır" }}</span>
+            <span class="label">Should Trade</span>
+            <span class="value">{{ "Yes" if decision.get("should_trade") else "No" }}</span>
         </div>
     </div>
     {% if decision.get("reason") %}
@@ -80,7 +80,7 @@
 
 <!-- Signal Distribution Bar -->
 <div class="card">
-    <h3>Sinyal Dağılımı</h3>
+    <h3>Signal Distribution</h3>
     <div class="dist-bar">
         {% set total = (dist.get("buy", 0) + dist.get("sell", 0) + dist.get("neutral", 0)) or 1 %}
         <div class="dist-segment dist-buy" style="width: {{ (dist.get('buy', 0) / total * 100) | int }}%">
@@ -97,18 +97,18 @@
 
 <!-- Indicator Table -->
 <div class="card">
-    <h3>İndikatör Detayları ({{ votes | length }})</h3>
+    <h3>Indicator Details ({{ votes | length }})</h3>
     {% if votes %}
     <div class="table-wrap">
         <table>
             <thead>
                 <tr>
-                    <th>İndikatör</th>
-                    <th>Sinyal</th>
-                    <th>Skor</th>
-                    <th>Ağırlık</th>
-                    <th>Ağırlıklı Skor</th>
-                    <th>Sebep</th>
+                    <th>Indicator</th>
+                    <th>Signal</th>
+                    <th>Score</th>
+                    <th>Weight</th>
+                    <th>Weighted Score</th>
+                    <th>Reason</th>
                 </tr>
             </thead>
             <tbody>
@@ -140,7 +140,7 @@
         </table>
     </div>
     {% else %}
-    <div class="empty-state">İndikatör verisi yok. İlk bot döngüsü bekleniyor.</div>
+    <div class="empty-state">No indicator data. Waiting for the first bot cycle.</div>
     {% endif %}
 </div>
 

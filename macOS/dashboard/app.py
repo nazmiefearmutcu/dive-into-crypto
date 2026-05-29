@@ -220,7 +220,7 @@ def _price_display(status: dict, bot_running: Optional[bool] = None) -> dict:
     tick_stale = age_int is not None and age_int > _PRICE_AGE_STALE_MS
 
     if v is None or v <= 0:
-        return {"text": "Veri Yok", "state": "unavailable", "is_live": False, "raw": None}
+        return {"text": "No Data", "state": "unavailable", "is_live": False, "raw": None}
 
     if stale or bot_stopped or tick_stale:
         return {
@@ -425,7 +425,7 @@ def _calc_live_signals_bg():
                     "confidence": conf,
                     "risk_level": consensus["risk_level"],
                     "zak": zak_val,
-                    "nihai_skor": round((conf ** 2) * (zak_val / 100), 2),
+                    "final_score": round((conf ** 2) * (zak_val / 100), 2),
                 }
             except Exception:
                 results[tf] = {"signal": "N/A", "confidence": 0, "risk_level": "N/A"}
@@ -507,7 +507,7 @@ def api_logs(
 
 VALID_TIMEFRAMES = {"1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d"}
 
-# ZAK — Zaman Dilimi Ağırlık Katsayısı
+# ZAK — Timeframe Weight Coefficient
 ZAK = {
     "1d": 95, "12h": 90, "8h": 85, "6h": 80, "4h": 75,
     "2h": 65, "1h": 58, "30m": 48, "15m": 38, "5m": 25,
@@ -515,7 +515,7 @@ ZAK = {
 }
 
 def _calc_nss(confidence: float, tf: str) -> float:
-    """Nihai Sinyal Skoru = (güven²) × (ZAK / 100)"""
+    """Net Signal Score (NSS) = (confidence²) × (ZAK / 100)."""
     return round((confidence ** 2) * (ZAK.get(tf, 50) / 100), 2)
 
 def _read_config() -> dict[str, Any]:
@@ -903,7 +903,7 @@ def api_scanner_start(min_confidence: int = Form(55)):
     # Block if auto-scan is running
     if _is_auto_scan_active():
         return JSONResponse(
-            {"error": "Otomatik tarama devam ediyor, lütfen bitmesini bekleyin."},
+            {"error": "Auto-scan in progress, please wait for it to finish."},
             status_code=409,
         )
     scanner = _get_scanner()
@@ -1082,8 +1082,8 @@ def _build_cross_ranking(tf_data: dict, full_tf_data: dict | None = None) -> lis
                 symbol_counts[sym]["best_conf"] = conf
                 symbol_counts[sym]["price"] = r.get("price", 0)
             symbol_counts[sym]["tfs"].append(tf)
-            symbol_counts[sym]["signals"][tf] = {"signal": r["signal"], "confidence": conf, "zak": zak, "nihai_skor": nss}
-            symbol_counts[sym]["all_signals"][tf] = {"signal": r["signal"], "confidence": conf, "zak": zak, "nihai_skor": nss, "in_top15": True}
+            symbol_counts[sym]["signals"][tf] = {"signal": r["signal"], "confidence": conf, "zak": zak, "final_score": nss}
+            symbol_counts[sym]["all_signals"][tf] = {"signal": r["signal"], "confidence": conf, "zak": zak, "final_score": nss, "in_top15": True}
 
     # Calculate net_nss: dominant - opposing
     for sym, s in symbol_counts.items():
@@ -1112,7 +1112,7 @@ def _build_cross_ranking(tf_data: dict, full_tf_data: dict | None = None) -> lis
                             nss = _calc_nss(conf, tf)
                             c["all_signals"][tf] = {
                                 "signal": r["signal"], "confidence": conf,
-                                "zak": zak, "nihai_skor": nss, "in_top15": False,
+                                "zak": zak, "final_score": nss, "in_top15": False,
                             }
                             break
 
@@ -1121,11 +1121,11 @@ def _build_cross_ranking(tf_data: dict, full_tf_data: dict | None = None) -> lis
 
 @app.post("/api/scanner/multi-start", response_class=JSONResponse)
 def api_scanner_multi_start():
-    """Start parallel scans for all timeframes >= 15m."""
+    """Start parallel scans for all 12 timeframes."""
     # Block if bot's auto-scan is running
     if _is_auto_scan_active():
         return JSONResponse(
-            {"error": "Otomatik tarama devam ediyor, lütfen bitmesini bekleyin."},
+            {"error": "Auto-scan in progress, please wait for it to finish."},
             status_code=409,
         )
 
@@ -1227,7 +1227,7 @@ def api_auto_scan_progress():
     """Return bot's auto-scan progress (read from file written by bot_service).
 
     S8: the response always carries a top-level ``state`` field so the
-    tarama UI can render the honest state (idle / scanning / disabled /
+    scan UI can render the honest state (idle / scanning / disabled /
     complete / error / stale) instead of silently implying ``idle`` when
     the bot has not written a progress file yet.
     """
@@ -1240,7 +1240,7 @@ def api_auto_scan_progress():
 
 @app.get("/api/scanner/multi-progress", response_class=JSONResponse)
 def api_scanner_multi_progress():
-    """Return progress and results for all 4 timeframe scanners."""
+    """Return progress and results for all 12 timeframe scanners."""
     any_scanning = False
     all_idle = True
     tf_data = {}
@@ -1258,11 +1258,11 @@ def api_scanner_multi_progress():
         if scanner.is_scanning:
             any_scanning = True
 
-        # ZAK-weighted sorting: nihai_skor = (conf²) × (ZAK/100)
+        # ZAK-weighted sorting: final_score = (conf²) × (ZAK/100)
         for r in results:
-            r["nihai_skor"] = _calc_nss(r["confidence"], tf)
+            r["final_score"] = _calc_nss(r["confidence"], tf)
             r["zak"] = ZAK.get(tf, 50)
-        top15 = sorted(results, key=lambda r: r.get("nihai_skor", 0), reverse=True)[:15] if results else []
+        top15 = sorted(results, key=lambda r: r.get("final_score", 0), reverse=True)[:15] if results else []
 
         tf_data[tf] = {
             "scanning": scanner.is_scanning,
@@ -1277,7 +1277,7 @@ def api_scanner_multi_progress():
         if saved:
             return saved
 
-    # Find coins that appear in ALL 4 completed top15 lists
+    # Find coins that appear in ALL 12 completed top15 lists
     all_complete = True
     common_symbols = None
     for tf in _MULTI_TFS:
@@ -1323,45 +1323,45 @@ def api_scanner_multi_progress():
 
 # Risk = how much of your balance you put on the line per trade
 RISK_PRESETS = {
-    "very_low":  {"risk_per_trade": 0.02, "confidence_threshold": 60, "label": "Çok Düşük"},
-    "low":       {"risk_per_trade": 0.05, "confidence_threshold": 50, "label": "Düşük"},
-    "medium":    {"risk_per_trade": 0.10, "confidence_threshold": 35, "label": "Orta"},
-    "high":      {"risk_per_trade": 0.20, "confidence_threshold": 30, "label": "Yüksek"},
-    "very_high": {"risk_per_trade": 0.35, "confidence_threshold": 25, "label": "Çok Yüksek"},
+    "very_low":  {"risk_per_trade": 0.02, "confidence_threshold": 60, "label": "Very Low"},
+    "low":       {"risk_per_trade": 0.05, "confidence_threshold": 50, "label": "Low"},
+    "medium":    {"risk_per_trade": 0.10, "confidence_threshold": 35, "label": "Medium"},
+    "high":      {"risk_per_trade": 0.20, "confidence_threshold": 30, "label": "High"},
+    "very_high": {"risk_per_trade": 0.35, "confidence_threshold": 25, "label": "Very High"},
 }
 
 # Trading mode = TP/SL style (values are PRICE MOVEMENT percentages, NOT divided by leverage)
 # Leverage already multiplies PnL via position size; SL/TP stay as price %
-# Scalp: çok kısa, sıkı TP/SL, hızlı giriş-çıkış
-# Normal: standart swing trading
-# Long: uzun vadeli, geniş TP/SL, sabırlı
+# Scalp: very short, tight TP/SL, fast in-and-out
+# Normal: standard swing trading
+# Long: long-term, wide TP/SL, patient
 TRADING_MODES = {
     "scalp": {
         "label": "Scalp",
-        "stop_loss_pct": 0.005,                # %0.5 fiyat hareketi
-        "take_profit_pct": 0.01,               # %1 fiyat hareketi
+        "stop_loss_pct": 0.005,                # 0.5% price move
+        "take_profit_pct": 0.01,               # 1% price move
         "trailing_stop_pct": 0.003,            # %0.3
         "trailing_stop_activation_pct": 0.005, # %0.5
         "break_even_trigger_pct": 0.004,       # %0.4
-        "desc": "Hızlı giriş-çıkış, sıkı SL/TP",
+        "desc": "Fast in-and-out, tight SL/TP",
     },
     "normal": {
         "label": "Normal",
-        "stop_loss_pct": 0.015,                # %1.5 fiyat hareketi
-        "take_profit_pct": 0.03,               # %3 fiyat hareketi
+        "stop_loss_pct": 0.015,                # 1.5% price move
+        "take_profit_pct": 0.03,               # 3% price move
         "trailing_stop_pct": 0.01,             # %1
         "trailing_stop_activation_pct": 0.015, # %1.5
         "break_even_trigger_pct": 0.01,        # %1
-        "desc": "Standart swing trading",
+        "desc": "Standard swing trading",
     },
     "long_term": {
-        "label": "Uzun Vadeli",
-        "stop_loss_pct": 0.04,                 # %4 fiyat hareketi
-        "take_profit_pct": 0.10,               # %10 fiyat hareketi
+        "label": "Long Term",
+        "stop_loss_pct": 0.04,                 # 4% price move
+        "take_profit_pct": 0.10,               # 10% price move
         "trailing_stop_pct": 0.03,             # %3
         "trailing_stop_activation_pct": 0.04,  # %4
         "break_even_trigger_pct": 0.025,       # %2.5
-        "desc": "Geniş SL/TP, sabırlı pozisyon",
+        "desc": "Wide SL/TP, patient position",
     },
 }
 
@@ -1666,8 +1666,8 @@ def page_index(request: Request):
     )
 
 
-@app.get("/tarama", response_class=HTMLResponse)
-def page_tarama(request: Request):
+@app.get("/scan", response_class=HTMLResponse)
+def page_scan(request: Request):
     status = _read_json(STATUS_FILE)
     # Merge auto-scan data
     scan_progress = _read_json(RUNTIME_DIR / "auto_scan_progress.json")
@@ -1684,10 +1684,10 @@ def page_tarama(request: Request):
     scan_reason = scan_progress.get("reason", "") if scan_progress else ""
     return templates.TemplateResponse(
         request=request,
-        name="tarama.html",
+        name="scan.html",
         context={
             "status": status,
-            "page": "tarama",
+            "page": "scan",
             "bot_running": _is_bot_running(),
             "data_stale": _is_stale(status),
             "scan_state": scan_state,

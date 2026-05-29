@@ -15,7 +15,7 @@ What this file pins (and why):
       promises — we now have a runtime test that proves it.
 
     * **Auto-scan state visibility** — ``/api/auto-scan-progress`` always
-      carries a top-level ``state`` field; ``/tarama`` renders a visible,
+      carries a top-level ``state`` field; ``/scan`` renders a visible,
       data-testid-tagged badge for each of the canonical states. Silent
       "implies idle" is no longer possible.
 
@@ -150,7 +150,7 @@ class TestEmptyRuntimeBootstrap:
     a fresh CI runner is even emptier. The dashboard must not blow up.
     """
 
-    @pytest.mark.parametrize("route", ["/", "/positions", "/signals", "/tarama", "/settings"])
+    @pytest.mark.parametrize("route", ["/", "/positions", "/signals", "/scan", "/settings"])
     def test_visible_page_renders_with_no_runtime_json(self, tmp_path, route):
         client, cleanup = _bind_dashboard_to_tmp(tmp_path, bot_running=False, seed_status=False)
         try:
@@ -274,7 +274,7 @@ class TestIncidentReplayIsolation:
 
 
 class TestAutoScanStateUI:
-    """The tarama page must render a visible scan-state badge, and the API
+    """The scan page must render a visible scan-state badge, and the API
     must always emit ``state``. No silent ``idle`` paths."""
 
     @pytest.mark.parametrize("state_payload, expected_state", [
@@ -296,16 +296,16 @@ class TestAutoScanStateUI:
             cleanup()
 
     @pytest.mark.parametrize("state_payload, expected_state, expected_label", [
-        ({"scanning": True, "total": 12, "done": 3}, "scanning", "Taraniyor"),
-        ({"scanning": False, "total": 12, "done": 12}, "complete", "Tamamlandi"),
-        ({"reason": "auto_scan_disabled_flag"}, "disabled", "Devre Disi"),
-        ({"error": "boom"}, "error", "Hata"),
+        ({"scanning": True, "total": 12, "done": 3}, "scanning", "Scanning"),
+        ({"scanning": False, "total": 12, "done": 12}, "complete", "Completed"),
+        ({"reason": "auto_scan_disabled_flag"}, "disabled", "Disabled"),
+        ({"error": "boom"}, "error", "Error"),
     ])
-    def test_tarama_renders_badge_for_state(self, tmp_path, state_payload, expected_state, expected_label):
+    def test_scan_renders_badge_for_state(self, tmp_path, state_payload, expected_state, expected_label):
         client, cleanup = _bind_dashboard_to_tmp(tmp_path, bot_running=True)
         try:
             (tmp_path / "auto_scan_progress.json").write_text(json.dumps(state_payload))
-            r = client.get("/tarama")
+            r = client.get("/scan")
             assert r.status_code == 200
             assert f'data-scan-state="{expected_state}"' in r.text, (
                 f"state badge missing for {expected_state!r}"
@@ -315,14 +315,14 @@ class TestAutoScanStateUI:
         finally:
             cleanup()
 
-    def test_tarama_badge_idle_when_no_progress_file(self, tmp_path):
+    def test_scan_badge_idle_when_no_progress_file(self, tmp_path):
         client, cleanup = _bind_dashboard_to_tmp(tmp_path, bot_running=True)
         try:
             assert not (tmp_path / "auto_scan_progress.json").exists()
-            r = client.get("/tarama")
+            r = client.get("/scan")
             assert r.status_code == 200
             assert 'data-scan-state="idle"' in r.text
-            assert "Beklemede" in r.text
+            assert "Idle" in r.text
         finally:
             cleanup()
 
@@ -351,7 +351,7 @@ class TestSettingsSecretDisabled:
         try:
             r = client.get("/settings")
             # The disabled label and the disabled attribute appear together.
-            assert "API Anahtarlarını Kaydet (devre dışı)" in r.text
+            assert "Save API Keys (disabled)" in r.text
             # Sanity: the disabled attribute is present.
             assert 'disabled aria-disabled="true"' in r.text
         finally:

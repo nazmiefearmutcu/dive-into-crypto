@@ -158,7 +158,7 @@ class TestPriceDisplayPrefersDisplayPrice:
         s["current_price"] = None
         out = _price_display(s, bot_running=False)
         assert out["state"] == "unavailable"
-        assert out["text"] == "Veri Yok"
+        assert out["text"] == "No Data"
         # Even with display_price null, signal_price/decision must NOT leak.
         assert _DECISION_MARKER not in {out.get("raw"), out["text"]}
         # Defensive: explicitly add decision marker to make the contract obvious
@@ -226,7 +226,7 @@ class TestApiStatusSurface:
             pd = data["_price_display"]
             # The display must be honest:
             assert pd["state"] == "unavailable"
-            assert pd["text"] == "Veri Yok"
+            assert pd["text"] == "No Data"
             # And the decision-price marker must not leak into _price_display.
             assert _DECISION_MARKER not in {pd.get("raw"), pd.get("text")}
             # latest_decision.price is exposed (it's just metadata) but the
@@ -243,7 +243,7 @@ class TestNoDecisionPriceLeak:
     def test_helper_never_reads_latest_decision_price_even_with_canonical_fields(self):
         """Cover the hostile case: display_price is None, current_price is
         None, but latest_decision.price is a plausible-looking number.
-        The helper MUST return 'unavailable' / 'Veri Yok' and MUST NOT
+        The helper MUST return 'unavailable' / 'No Data' and MUST NOT
         produce the decision-price marker anywhere in its output."""
         from dashboard.app import _price_display
         s = _make_s3_status()

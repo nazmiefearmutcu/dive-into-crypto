@@ -1,6 +1,41 @@
-# Trading Bot - Indicator Consensus Trading System
+# Trading Bot — Multi-Coin, Multi-Timeframe Indicator-Consensus Engine
 
-Production-grade automated trading bot that makes autonomous buy/sell decisions based on technical indicator consensus. Designed for Binance spot markets with futures-ready architecture.
+At its core this system scans the **entire Binance USDT-margined perpetual-futures
+universe — every listed coin** — running a **15-indicator weighted consensus on all
+12 timeframes (`1m` → `1d`)** and cross-ranking the results to surface the coins with
+the strongest, most consistent multi-timeframe agreement.
+
+> **15 indicators × 12 timeframes × every coin on the market.**
+
+The same consensus engine also drives an autonomous paper/live execution bot and a
+real-time dashboard, but the headline capability is that breadth-first scan.
+
+## Core Capability — Multi-Coin / Multi-Timeframe Scanner
+
+For **every** USDT-margined perpetual-futures pair listed on Binance (the full live
+universe, discovered dynamically and ranked by 24h volume; stablecoin pairs such as
+USDC/BUSD/TUSD/DAI/FDUSD are skipped), the scanner:
+
+1. Runs all **15 technical indicators** on **each of the 12 timeframes**
+   (`1m, 3m, 5m, 15m, 30m, 1h, 2h, 4h, 6h, 8h, 12h, 1d`).
+2. Aggregates them into a weighted **consensus** per *(coin, timeframe)* — a signal
+   (`STRONG_BUY … NEUTRAL … STRONG_SELL`) plus a `0–100` confidence.
+3. Scores each timeframe with **NSS** (Net Signal Score) = `confidence² × (ZAK / 100)`,
+   where **ZAK** is the per-timeframe weight (higher timeframes count for more).
+4. **Cross-ranks** every coin by net NSS (dominant direction minus the opposing
+   one), and separately highlights any coin that lands in the top 15 on **all 12
+   timeframes at once**.
+
+The output is one ranked table — the coins with the strongest multi-timeframe signal
+across the whole market — and any row can be promoted to the bot's active trading
+symbol with a single click. Because the universe is fetched live, the scan always
+covers however many coins Binance currently lists, not a fixed subset.
+
+The sections below document the per-symbol **execution core** that trades the
+selected coin using the same 15-indicator consensus. Note that the scanner reads
+Binance's USDT-margined futures market to build the universe, while the execution
+bot itself trades **spot by default** (long-only); futures/short support is
+architecture-ready.
 
 ## System Architecture
 

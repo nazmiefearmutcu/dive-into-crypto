@@ -143,7 +143,7 @@ class TestCanonicalFields:
     def test_unavailable_price_keeps_display_null(self, tmp_path, cfg, state):
         """When the cycle has no price at all (no ticker, no close), the
         canonical contract is: display_price=None, signal_price=None,
-        source="unavailable", age=None. The dashboard renders 'Veri Yok'."""
+        source="unavailable", age=None. The dashboard renders 'No Data'."""
         ex = StatusExporter(str(tmp_path / "ds.json"))
         ex.export(
             config=cfg, state=state, consensus=None, indicator_results=None,

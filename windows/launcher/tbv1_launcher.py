@@ -1,29 +1,29 @@
 """Trading Bot v1 - Windows Launcher.
 
-Tek bir cift-tiklamayla calisir:
-  1. Tkinter splash ekrani aciyor (uygulama acilirken kullaniciya bilgi verir).
-  2. Preflight kontrolleri (Python, port, config, .env) yapip hata kodu ile durur.
-  3. Uvicorn'u alt surec olarak baslatip HTTP 200'e kadar bekliyor.
-  4. Varsayilan tarayicida yeni sekmede http://127.0.0.1:8080 aciyor.
-  5. "Calisiyor" durum penceresini gosteriyor; kullanici buradan botu durdurabiliyor.
+Runs from a single double-click:
+  1. Opens a Tkinter splash screen (informs the user while the app starts up).
+  2. Runs preflight checks (Python, port, config, .env) and stops with an error code on failure.
+  3. Starts uvicorn as a subprocess and waits until it returns HTTP 200.
+  4. Opens http://127.0.0.1:8080 in a new tab of the default browser.
+  5. Shows a "Running" status window; from here the user can stop the bot.
 
-PyInstaller ile paketlenince tek .exe olur. .exe acilinca bu dosya calisir.
+When packaged with PyInstaller it becomes a single .exe. Opening the .exe runs this file.
 
-Bagimliliklar:
+Dependencies:
   - tkinter        (stdlib)
   - urllib         (stdlib)
   - subprocess     (stdlib)
   - webbrowser     (stdlib)
   - threading      (stdlib)
-  - PyInstaller'in icine gomulu Python + uvicorn + FastAPI bundle
+  - Python embedded inside PyInstaller + the uvicorn + FastAPI bundle
 
-KOSULLAR:
-  - "app/" klasoru launcher.py ile yan yana DURMALI (PyInstaller bunu --add-data ile gomer).
-  - "tbv1.ico" ayni klasorde.
+REQUIREMENTS:
+  - The "app/" folder MUST sit next to launcher.py (PyInstaller embeds it via --add-data).
+  - "tbv1.ico" in the same folder.
 
-KULLANIM:
-  python launcher/tbv1_launcher.py            # gelistirici modu
-  TradingBotV1.exe                            # paketlenmis surum (Windows)
+USAGE:
+  python launcher/tbv1_launcher.py            # developer mode
+  TradingBotV1.exe                            # packaged version (Windows)
 """
 from __future__ import annotations
 
@@ -44,24 +44,24 @@ from typing import Optional
 from urllib.request import urlopen
 from urllib.error import URLError
 
-# Tkinter - stdlib, ekstra bagimllik yok
+# Tkinter - stdlib, no extra dependency
 try:
     import tkinter as tk
     from tkinter import ttk, scrolledtext, messagebox
-except Exception:  # pragma: no cover - tkinter sistem paketi
-    sys.stderr.write("FATAL: Tkinter bulunamadi. Bu Windows .exe icin imkansiz. Python kuruluminiz bozuk.\n")
+except Exception:  # pragma: no cover - tkinter is a system package
+    sys.stderr.write("FATAL: Tkinter not found. This is impossible for this Windows .exe. Your Python installation is broken.\n")
     sys.exit(2)
 
-# Hata katalogu - ayni klasorde
+# Error catalog - in the same folder
 try:
     from error_codes import ErrorCatalog, LauncherError
 except ImportError:
-    # PyInstaller icinde direct import calismayabilir; ayni klasore ekle
+    # Direct import may not work inside PyInstaller; add the same folder
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from error_codes import ErrorCatalog, LauncherError  # type: ignore
 
 
-# ── Sabitler ────────────────────────────────────────────────────────────────
+# ── Constants ─────────────────────────────────────────────────────────────────
 APP_NAME = "Trading Bot v1"
 APP_VERSION = "1.0.0"
 DEFAULT_HOST = "127.0.0.1"
@@ -72,41 +72,41 @@ LOCK_FILENAME = ".launcher.lock"
 LOG_FILENAME = "launcher.log"
 THEME_BG = "#1e1e1e"
 THEME_FG = "#e8e8e8"
-THEME_ACCENT = "#f5c518"  # ikondaki sari tona uyumlu
+THEME_ACCENT = "#f5c518"  # matches the yellow tone in the icon
 THEME_DANGER = "#e0524a"
 THEME_OK = "#3ad28a"
 THEME_MUTED = "#888888"
 
 
-# ── PyInstaller path helper'lari ────────────────────────────────────────────
+# ── PyInstaller path helpers ────────────────────────────────────────────────
 def resource_dir() -> Path:
-    """PyInstaller --onefile ile paketlenmisse _MEIPASS, degilse bu dosyanin parent'i."""
+    """If packaged with PyInstaller --onefile, _MEIPASS; otherwise this file's parent."""
     if hasattr(sys, "_MEIPASS"):
         return Path(sys._MEIPASS)  # type: ignore[attr-defined]
     return Path(__file__).resolve().parent
 
 
 def app_dir() -> Path:
-    """Calistirilabilirin yaninda 'app/' klasoru.
+    """The 'app/' folder next to the executable.
 
-    PyInstaller spec dosyasi 'app' klasorunu _MEIPASS/app altina goem(uy)or; bu
-    yaklasimda kullanici yazilabilir runtime/, config/, .env gibi dosyalari
-    LAUNCHER YANINDAKI app/ klasorunde tutuyoruz, _MEIPASS read-only.
+    The PyInstaller spec file places the 'app' folder under _MEIPASS/app; in this
+    approach we keep the user-writable runtime/, config/, .env files in the app/
+    folder NEXT TO THE LAUNCHER, since _MEIPASS is read-only.
     """
     if hasattr(sys, "_MEIPASS"):
-        # .exe yaninda olusturulan/var olan app/
+        # app/ created/existing next to the .exe
         exe_dir = Path(sys.executable).resolve().parent
         external = exe_dir / "app"
         if external.exists():
             return external
-        # ilk acilista MEIPASS'ten kopyala
+        # On first launch, copy it from MEIPASS
         internal = Path(sys._MEIPASS) / "app"  # type: ignore[attr-defined]
         if internal.exists() and not external.exists():
             import shutil
             shutil.copytree(internal, external)
             return external
         return internal
-    # Gelistirici modu
+    # Developer mode
     return Path(__file__).resolve().parent.parent / "app"
 
 
@@ -123,7 +123,7 @@ def icon_path() -> Optional[Path]:
 
 # ── Logger ───────────────────────────────────────────────────────────────────
 class Logger:
-    """Hem dosyaya hem stdout'a hem de Tkinter Text widget'ina yazar."""
+    """Writes to the file, to stdout, and to the Tkinter Text widget."""
 
     def __init__(self, log_file: Path):
         self.log_file = log_file
@@ -180,11 +180,11 @@ class Logger:
 # ── Preflight checks ────────────────────────────────────────────────────────
 def check_python_version() -> None:
     if sys.version_info < (3, 10):
-        raise LauncherError("E001", detail=f"Mevcut: {sys.version.split()[0]}")
+        raise LauncherError("E001", detail=f"Current: {sys.version.split()[0]}")
 
 
 def check_port_free(host: str, port: int) -> None:
-    """Loopback adresinde port bos mu? Bos degilse E003."""
+    """Is the port free on the loopback address? If not, E003."""
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.settimeout(0.5)
     try:
@@ -199,7 +199,7 @@ def check_config_exists(root: Path) -> None:
     cfg = root / "config" / "default.yaml"
     if not cfg.exists():
         raise LauncherError("E004", detail=str(cfg))
-    # YAML parse denemesi
+    # Attempt to parse the YAML
     try:
         import yaml
         with open(cfg, "r", encoding="utf-8") as fh:
@@ -211,10 +211,10 @@ def check_config_exists(root: Path) -> None:
 
 
 def check_env_file(root: Path, log: Logger) -> None:
-    """.env yoksa uyari (fatal degil — paper mode calismaya devam eder)."""
+    """If .env is missing, warn (not fatal — paper mode keeps running)."""
     env = root / ".env"
     if not env.exists():
-        log.warn(f"[E006] .env bulunamadi: {env} -- paper-trading modunda devam edilebilir.")
+        log.warn(f"[E006] .env not found: {env} -- can continue in paper-trading mode.")
 
 
 def check_writable(root: Path) -> None:
@@ -233,7 +233,7 @@ def check_writable(root: Path) -> None:
 
 
 def check_memory(log: Logger) -> None:
-    """Kullanilabilir RAM 200MB altindaysa E017 uyari (fatal degil)."""
+    """If available RAM is below 200MB, warn with E017 (not fatal)."""
     try:
         if platform.system() == "Windows":
             import ctypes
@@ -254,13 +254,13 @@ def check_memory(log: Logger) -> None:
             ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(mem))
             avail_mb = mem.ullAvailPhys / (1024 * 1024)
             if avail_mb < 200:
-                log.warn(f"[E017] Yetersiz bellek: {avail_mb:.0f}MB serbest.")
+                log.warn(f"[E017] Insufficient memory: {avail_mb:.0f}MB free.")
     except Exception:
-        pass  # bellek kontrolu kritik degil
+        pass  # the memory check is not critical
 
 
 def acquire_lock(root: Path) -> Path:
-    """Tek instance kilidi. Eskimisse (3 dk hareketsiz) sil ve tekrar al."""
+    """Single-instance lock. If stale (3 min idle), delete it and re-acquire."""
     lockfile = root / "runtime" / LOCK_FILENAME
     lockfile.parent.mkdir(parents=True, exist_ok=True)
     if lockfile.exists():
@@ -269,18 +269,18 @@ def acquire_lock(root: Path) -> Path:
             pid = int(lockfile.read_text(encoding="utf-8").strip() or "0")
         except Exception:
             pid = 0
-        # Eski kilit (3 dk uzerinden gecmis) veya pid 0 -> stale
+        # Stale lock (older than 3 min) or pid 0 -> stale
         if age > 180 or pid == 0:
             lockfile.unlink(missing_ok=True)
         else:
-            raise LauncherError("E015", detail=f"PID={pid}, lock yas={age:.0f}s")
+            raise LauncherError("E015", detail=f"PID={pid}, lock age={age:.0f}s")
     lockfile.write_text(str(os.getpid()), encoding="utf-8")
     return lockfile
 
 
-# ── Dashboard yonetimi ──────────────────────────────────────────────────────
+# ── Dashboard management ────────────────────────────────────────────────────
 class DashboardProcess:
-    """Uvicorn alt surecini sarmalayan ince katman."""
+    """A thin layer wrapping the uvicorn subprocess."""
 
     def __init__(self, root: Path, host: str, port: int, log: Logger):
         self.root = root
@@ -290,20 +290,20 @@ class DashboardProcess:
         self.proc: Optional[subprocess.Popen] = None
 
     def start(self) -> None:
-        # PyInstaller ile paketlenmis exe'de uvicorn modul olarak gomulu olur;
-        # subprocess yerine ic-Python (worker thread) ile baslat.
+        # In an exe packaged with PyInstaller, uvicorn is embedded as a module;
+        # start it with in-process Python (worker thread) instead of a subprocess.
         if hasattr(sys, "_MEIPASS"):
             self._start_inproc()
         else:
             self._start_subprocess()
 
     def _start_inproc(self) -> None:
-        """Tek-exe modunda alt-Python ayrildigi icin uvicorn'u ayni surecte thread'de calistir.
+        """In single-exe mode, since the sub-Python is split off, run uvicorn in a thread in the same process.
 
-        Tkinter mainloop ana thread'de; uvicorn worker thread'inde."""
+        Tkinter mainloop on the main thread; uvicorn on a worker thread."""
         def runner():
             try:
-                # PYTHONPATH'i ayarla
+                # Set up PYTHONPATH
                 sys.path.insert(0, str(self.root))
                 os.chdir(self.root)
                 import uvicorn
@@ -315,7 +315,7 @@ class DashboardProcess:
                     access_log=False,
                 )
                 server = uvicorn.Server(cfg)
-                # Server'i log dosyasina yonlendirmek icin stdout/stderr swap kullaniyoruz
+                # Use a stdout/stderr swap to redirect the server into the log file
                 server.run()
             except Exception:
                 self.log.error("Dashboard inproc crash:\n" + traceback.format_exc())
@@ -345,7 +345,7 @@ class DashboardProcess:
             kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW  # type: ignore[assignment]
         self.proc = subprocess.Popen(cmd, **kwargs)  # type: ignore[arg-type]
 
-        # stdout reader thread - log dosyasina aktar
+        # stdout reader thread - forward into the log file
         def reader():
             assert self.proc and self.proc.stdout
             for line in self.proc.stdout:
@@ -360,7 +360,7 @@ class DashboardProcess:
         return getattr(self, "_thread", None) is not None and self._thread.is_alive()
 
     def wait_until_responding(self, timeout: float) -> None:
-        """HTTP /healthz veya / ye GET at, 200 gelene kadar bekle."""
+        """Send a GET to HTTP /healthz or /, and wait until a 200 comes back."""
         deadline = time.time() + timeout
         url = f"http://{self.host}:{self.port}/"
         last_err: Optional[str] = None
@@ -377,7 +377,7 @@ class DashboardProcess:
             except Exception as exc:
                 last_err = repr(exc)
             time.sleep(HEALTH_POLL_INTERVAL)
-        raise LauncherError("E008", detail=f"son hata: {last_err}, port: {self.port}")
+        raise LauncherError("E008", detail=f"last error: {last_err}, port: {self.port}")
 
     def stop(self) -> None:
         if self.proc is not None:
@@ -389,13 +389,13 @@ class DashboardProcess:
                     self.proc.kill()
             except Exception:
                 pass
-        # in-proc thread'i nazikce durdurmak icin uvicorn server.should_exit setlenebilirdi;
-        # ancak Tkinter kapanisinda zaten butun surec olur.
+        # To stop the in-proc thread gracefully we could set uvicorn server.should_exit;
+        # but on Tkinter shutdown the whole process exits anyway.
 
 
 # ── GUI ─────────────────────────────────────────────────────────────────────
 class LauncherApp:
-    """Ana Tkinter uygulamasi."""
+    """The main Tkinter application."""
 
     def __init__(self):
         self.root = tk.Tk()
@@ -404,7 +404,7 @@ class LauncherApp:
         self.root.geometry("760x540")
         self.root.minsize(640, 420)
 
-        # Ikon
+        # Icon
         ico = icon_path()
         if ico:
             try:
@@ -418,14 +418,14 @@ class LauncherApp:
 
         # Logger
         log_path = (app_dir().parent if app_dir().name == "app" else app_dir()) / "runtime" / LOG_FILENAME
-        # daha guvenli: uygulamanin yanindaki packaging/launcher.log
+        # safer: packaging/launcher.log next to the application
         try:
             log_path = (Path(sys.executable).resolve().parent if hasattr(sys, "_MEIPASS")
                         else Path(__file__).resolve().parent.parent / "packaging") / LOG_FILENAME
         except Exception:
             pass
         self.log = Logger(log_path)
-        self.log.info(f"==== {APP_NAME} v{APP_VERSION} acildi ====")
+        self.log.info(f"==== {APP_NAME} v{APP_VERSION} opened ====")
         self.log.info(f"Python {sys.version.split()[0]} on {platform.platform()}")
 
         self.lock_file: Optional[Path] = None
@@ -454,7 +454,7 @@ class LauncherApp:
                  font=("Segoe UI", 10)).pack(side="left", pady=(10, 0))
 
         # ── Status strip ──
-        self.status_var = tk.StringVar(value="HAZIR")
+        self.status_var = tk.StringVar(value="READY")
         self.status_lbl = tk.Label(self.root, textvariable=self.status_var,
                                     bg=THEME_BG, fg=THEME_ACCENT,
                                     font=("Segoe UI", 12, "bold"))
@@ -466,17 +466,17 @@ class LauncherApp:
         self.url_var = tk.StringVar(value=self.url)
         tk.Label(actions, textvariable=self.url_var, bg=THEME_BG, fg=THEME_FG,
                  font=("Consolas", 11)).pack(side="left")
-        self.btn_open = ttk.Button(actions, text="Tarayicida Ac", command=self.open_browser, state="disabled")
+        self.btn_open = ttk.Button(actions, text="Open in Browser", command=self.open_browser, state="disabled")
         self.btn_open.pack(side="right", padx=4)
-        self.btn_stop = ttk.Button(actions, text="Durdur", command=self.stop_bot, state="disabled", style="Danger.TButton")
+        self.btn_stop = ttk.Button(actions, text="Stop", command=self.stop_bot, state="disabled", style="Danger.TButton")
         self.btn_stop.pack(side="right", padx=4)
-        self.btn_start = ttk.Button(actions, text="Botu Calistir", command=self.start_bot, style="Accent.TButton")
+        self.btn_start = ttk.Button(actions, text="Start Bot", command=self.start_bot, style="Accent.TButton")
         self.btn_start.pack(side="right", padx=4)
 
         # ── Log panel ──
         log_frame = tk.Frame(self.root, bg=THEME_BG)
         log_frame.pack(fill="both", expand=True, padx=20, pady=10)
-        tk.Label(log_frame, text="Kayit defteri", bg=THEME_BG, fg=THEME_MUTED,
+        tk.Label(log_frame, text="Log", bg=THEME_BG, fg=THEME_MUTED,
                  font=("Segoe UI", 9)).pack(anchor="w")
         self.log_text = scrolledtext.ScrolledText(
             log_frame, bg="#0d0d0d", fg=THEME_FG, font=("Consolas", 9),
@@ -493,48 +493,48 @@ class LauncherApp:
         footer = tk.Frame(self.root, bg=THEME_BG, pady=8)
         footer.pack(fill="x", side="bottom")
         tk.Label(footer,
-                 text="Hata olusursa ekranda hata kodu ve cozumu gosterilir. Detayli log: packaging/launcher.log",
+                 text="If an error occurs, the error code and remedy are shown on screen. Detailed log: packaging/launcher.log",
                  bg=THEME_BG, fg=THEME_MUTED, font=("Segoe UI", 8)).pack(side="left", padx=20)
 
-    # ── Olaylar ──────────────────────────────────────────────────────────
+    # ── Events ───────────────────────────────────────────────────────────
     def start_bot(self) -> None:
         if self.is_running:
             return
         self.btn_start.configure(state="disabled")
-        self.status_var.set("BASLATILIYOR...")
+        self.status_var.set("STARTING...")
         self.status_lbl.configure(fg=THEME_ACCENT)
         threading.Thread(target=self._startup_flow, daemon=True, name="startup").start()
 
     def _startup_flow(self) -> None:
         try:
             root = app_dir()
-            self.log.info(f"Uygulama kok: {root}")
+            self.log.info(f"Application root: {root}")
 
-            self.log.info("[1/7] Python surumu kontrol ediliyor...")
+            self.log.info("[1/7] Checking Python version...")
             check_python_version()
 
-            self.log.info("[2/7] Disk yazma izni kontrol ediliyor...")
+            self.log.info("[2/7] Checking disk write permission...")
             check_writable(root)
 
-            self.log.info("[3/7] Bellek kontrol ediliyor...")
+            self.log.info("[3/7] Checking memory...")
             check_memory(self.log)
 
-            self.log.info("[4/7] Tek-instance kilidi aliniyor...")
+            self.log.info("[4/7] Acquiring single-instance lock...")
             self.lock_file = acquire_lock(root)
 
-            self.log.info("[5/7] Port 8080 bos mu?")
+            self.log.info("[5/7] Is port 8080 free?")
             check_port_free(DEFAULT_HOST, DEFAULT_PORT)
 
-            self.log.info("[6/7] Konfigurasyon dosyalari okunuyor...")
+            self.log.info("[6/7] Reading configuration files...")
             check_config_exists(root)
             check_env_file(root, self.log)
 
-            self.log.info("[7/7] Dashboard sunucusu baslatiliyor...")
+            self.log.info("[7/7] Starting the dashboard server...")
             self.dashboard = DashboardProcess(root, DEFAULT_HOST, DEFAULT_PORT, self.log)
             self.dashboard.start()
             self.dashboard.wait_until_responding(STARTUP_TIMEOUT_SECONDS)
 
-            self.log.info(f"BAGLANTI HAZIR: {self.url}")
+            self.log.info(f"CONNECTION READY: {self.url}")
             self._mark_running()
             time.sleep(0.4)
             self.open_browser()
@@ -543,12 +543,12 @@ class LauncherApp:
             self._show_error(exc)
         except Exception:
             self.log.error(traceback.format_exc())
-            self._show_error(LauncherError("E014", detail="bkz. launcher.log"))
+            self._show_error(LauncherError("E014", detail="see launcher.log"))
 
     def _mark_running(self) -> None:
         def update():
             self.is_running = True
-            self.status_var.set("CALISIYOR")
+            self.status_var.set("RUNNING")
             self.status_lbl.configure(fg=THEME_OK)
             self.btn_open.configure(state="normal")
             self.btn_stop.configure(state="normal")
@@ -556,25 +556,25 @@ class LauncherApp:
 
     def open_browser(self) -> None:
         try:
-            ok = webbrowser.open(self.url, new=2)  # new=2 yeni sekme
+            ok = webbrowser.open(self.url, new=2)  # new=2 new tab
             if not ok:
                 raise LauncherError("E009", detail="webbrowser.open returned False")
-            self.log.info(f"Tarayici acildi: {self.url}")
+            self.log.info(f"Browser opened: {self.url}")
             self._show_browser_notice()
         except Exception:
             self.log.warn(traceback.format_exc())
-            self._show_error(LauncherError("E009", detail="webbrowser modulu"), fatal=False)
+            self._show_error(LauncherError("E009", detail="webbrowser module"), fatal=False)
 
     def _show_browser_notice(self) -> None:
-        """Tarayici acildigi anda bir bilgilendirme dialog goster."""
+        """Show an info dialog the moment the browser opens."""
         def show():
             messagebox.showinfo(
-                title="Trading Bot v1 - Tarayici acildi",
+                title="Trading Bot v1 - Browser opened",
                 message=(
-                    "Dashboard tarayicinizda acildi.\n\n"
-                    f"Adres: {self.url}\n\n"
-                    "Bu pencereyi acik birakin; pencereyi kapatirsaniz bot durur.\n"
-                    "Manuel olarak durdurmak icin 'Durdur' butonunu kullanin."
+                    "The dashboard opened in your browser.\n\n"
+                    f"Address: {self.url}\n\n"
+                    "Keep this window open; if you close it the bot stops.\n"
+                    "To stop manually, use the 'Stop' button."
                 ),
             )
         self.root.after(150, show)
@@ -582,17 +582,17 @@ class LauncherApp:
     def stop_bot(self) -> None:
         if not self.is_running:
             return
-        self.log.info("Durdurma istegi alindi...")
-        self.status_var.set("DURDURULUYOR...")
+        self.log.info("Stop request received...")
+        self.status_var.set("STOPPING...")
         if self.dashboard:
             self.dashboard.stop()
         self.is_running = False
         self.btn_open.configure(state="disabled")
         self.btn_stop.configure(state="disabled")
         self.btn_start.configure(state="normal")
-        self.status_var.set("DURDURULDU")
+        self.status_var.set("STOPPED")
         self.status_lbl.configure(fg=THEME_MUTED)
-        # Kilidi birak
+        # Release the lock
         if self.lock_file and self.lock_file.exists():
             try:
                 self.lock_file.unlink()
@@ -602,20 +602,20 @@ class LauncherApp:
     def _show_error(self, exc: LauncherError, fatal: bool = True) -> None:
         entry = exc.entry
         code = exc.code
-        title = entry.title if entry else "Bilinmeyen hata"
+        title = entry.title if entry else "Unknown error"
         cause = entry.cause if entry else (exc.detail or "")
-        remedy = entry.remedy if entry else "launcher.log dosyasina bakin."
+        remedy = entry.remedy if entry else "See the launcher.log file."
         severity = entry.severity if entry else "fatal"
 
-        self.log.error(f"[{code}] {title} -- detay: {exc.detail or 'yok'}")
+        self.log.error(f"[{code}] {title} -- detail: {exc.detail or 'none'}")
 
         def show():
-            self.status_var.set(f"HATA {code}")
+            self.status_var.set(f"ERROR {code}")
             self.status_lbl.configure(fg=THEME_DANGER if severity == "fatal" else THEME_ACCENT)
             self.btn_start.configure(state="normal" if not fatal else "normal")
 
             dlg = tk.Toplevel(self.root)
-            dlg.title(f"Hata {code}")
+            dlg.title(f"Error {code}")
             dlg.configure(bg=THEME_BG)
             dlg.geometry("560x360")
             dlg.transient(self.root)
@@ -631,26 +631,26 @@ class LauncherApp:
             body = tk.Frame(dlg, bg=THEME_BG)
             body.pack(fill="both", expand=True, padx=18, pady=4)
 
-            tk.Label(body, text="Olasi neden:", bg=THEME_BG, fg=THEME_MUTED,
+            tk.Label(body, text="Possible cause:", bg=THEME_BG, fg=THEME_MUTED,
                      font=("Segoe UI", 9, "bold"), anchor="w").pack(fill="x")
             tk.Label(body, text=cause, bg=THEME_BG, fg=THEME_FG,
                      font=("Segoe UI", 10), wraplength=520, justify="left", anchor="w").pack(fill="x", pady=(0, 8))
 
-            tk.Label(body, text="Cozum:", bg=THEME_BG, fg=THEME_MUTED,
+            tk.Label(body, text="Remedy:", bg=THEME_BG, fg=THEME_MUTED,
                      font=("Segoe UI", 9, "bold"), anchor="w").pack(fill="x")
             tk.Label(body, text=remedy, bg=THEME_BG, fg=THEME_FG,
                      font=("Segoe UI", 10), wraplength=520, justify="left", anchor="w").pack(fill="x", pady=(0, 8))
 
             if exc.detail:
-                tk.Label(body, text="Detay:", bg=THEME_BG, fg=THEME_MUTED,
+                tk.Label(body, text="Detail:", bg=THEME_BG, fg=THEME_MUTED,
                          font=("Segoe UI", 9, "bold"), anchor="w").pack(fill="x")
                 tk.Label(body, text=str(exc.detail), bg=THEME_BG, fg=THEME_DANGER,
                          font=("Consolas", 9), wraplength=520, justify="left", anchor="w").pack(fill="x")
 
             btn_row = tk.Frame(dlg, bg=THEME_BG, pady=10)
             btn_row.pack(fill="x", side="bottom")
-            ttk.Button(btn_row, text="Logu Ac", command=self._open_log_file).pack(side="left", padx=16)
-            ttk.Button(btn_row, text="Tamam", command=dlg.destroy, style="Accent.TButton").pack(side="right", padx=16)
+            ttk.Button(btn_row, text="Open Log", command=self._open_log_file).pack(side="left", padx=16)
+            ttk.Button(btn_row, text="OK", command=dlg.destroy, style="Accent.TButton").pack(side="right", padx=16)
         self.root.after(0, show)
 
     def _open_log_file(self) -> None:
@@ -663,18 +663,18 @@ class LauncherApp:
             else:
                 subprocess.Popen(["xdg-open", str(log_file)])
         except Exception as exc:
-            self.log.warn(f"Log acilamadi: {exc}")
+            self.log.warn(f"Could not open log: {exc}")
 
     def _on_close(self) -> None:
         if self.is_running:
             if not messagebox.askyesno(
-                "Cikis Onayi",
-                "Bot calisiyor. Cikmak gercekten istediginizden emin misiniz?\n"
-                "Tum acik islemler kaydedilip kapatilacak."
+                "Exit Confirmation",
+                "The bot is running. Are you sure you want to exit?\n"
+                "All open operations will be saved and closed."
             ):
                 return
             self.stop_bot()
-        self.log.info("==== Launcher kapaniyor ====")
+        self.log.info("==== Launcher closing ====")
         self.log.close()
         if self.lock_file and self.lock_file.exists():
             try:
@@ -687,7 +687,7 @@ class LauncherApp:
         self.root.mainloop()
 
 
-# ── Giris noktasi ───────────────────────────────────────────────────────────
+# ── Entry point ───────────────────────────────────────────────────────────────
 def main() -> int:
     try:
         app = LauncherApp()
@@ -695,13 +695,13 @@ def main() -> int:
         return 0
     except Exception:
         sys.stderr.write("FATAL launcher crash:\n" + traceback.format_exc())
-        # Tkinter henuz yokken hatayi gostermek icin son care: messagebox
+        # Last resort to show the error while Tkinter isn't up yet: messagebox
         try:
             tk_root = tk.Tk()
             tk_root.withdraw()
             messagebox.showerror(
-                "Trading Bot v1 - Kritik Hata",
-                f"Beklenmedik bir hata olustu (E014).\n\nDetay:\n{traceback.format_exc()[-800:]}",
+                "Trading Bot v1 - Critical Error",
+                f"An unexpected error occurred (E014).\n\nDetail:\n{traceback.format_exc()[-800:]}",
             )
         except Exception:
             pass

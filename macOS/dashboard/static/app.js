@@ -14,8 +14,8 @@
     // Pages that use AJAX updates — no full reload
     var path = window.location.pathname;
     var isDashboard = path === "/" || path === "";
-    var isTarama = path === "/tarama";
-    var isAjaxPage = isDashboard || isTarama;
+    var isScan = path === "/scan";
+    var isAjaxPage = isDashboard || isScan;
 
     function tick() {
         // Pause auto-refresh while scanner is running
@@ -32,8 +32,8 @@
             countdown = REFRESH_INTERVAL;
             if (isDashboard) {
                 refreshDashboard();
-            } else if (isTarama) {
-                // Tarama page: no reload, JS polling handles updates
+            } else if (isScan) {
+                // Scan page: no reload, JS polling handles updates
             } else {
                 window.location.reload();
             }
@@ -57,7 +57,7 @@
                         else if (ago < 3600) agoText = Math.floor(ago / 60) + "m " + (ago % 60) + "s ago";
                         else if (ago < 86400) agoText = Math.floor(ago / 3600) + "h " + Math.floor((ago % 3600) / 60) + "m ago";
                         else agoText = Math.floor(ago / 86400) + "d ago";
-                        luEl.textContent = "Son güncelleme: " + agoText;
+                        luEl.textContent = "Last update: " + agoText;
                     }
                     if (s._stale) {
                         luEl.classList.add("stale");
@@ -74,19 +74,19 @@
                 if (priceEl) {
                     var pd = s._price_display || {};
                     var state = pd.state || "unavailable";
-                    var text = pd.text || "Veri Yok";
+                    var text = pd.text || "No Data";
                     priceEl.textContent = text;
                     priceEl.dataset.state = state;
                     priceEl.className = "value price-value price-" + state;
                     if (priceTagEl) {
                         if (state === "live") {
-                            priceTagEl.textContent = "CANLI";
+                            priceTagEl.textContent = "LIVE";
                             priceTagEl.className = "price-tag price-tag-live";
                         } else if (state === "snapshot") {
                             priceTagEl.textContent = "SNAPSHOT";
                             priceTagEl.className = "price-tag price-tag-snapshot";
                         } else {
-                            priceTagEl.textContent = "CANLI YOK";
+                            priceTagEl.textContent = "OFFLINE";
                             priceTagEl.className = "price-tag price-tag-unavailable";
                         }
                     }

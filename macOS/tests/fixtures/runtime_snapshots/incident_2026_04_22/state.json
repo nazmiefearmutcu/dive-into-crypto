@@ -536,7 +536,7 @@
       "fee": 5.3376,
       "entry_time": "2026-04-07T09:30:15.898332+00:00",
       "exit_time": "2026-04-07T11:34:26.968469+00:00",
-      "reason": "Sinyal tersine d\u00f6nd\u00fc: LONG \u2192 SELL"
+      "reason": "Signal reversed: LONG \u2192 SELL"
     },
     {
       "symbol": "AIOTUSDT",
@@ -549,7 +549,7 @@
       "fee": 4.6978,
       "entry_time": "2026-04-07T10:35:46.768543+00:00",
       "exit_time": "2026-04-07T11:34:29.584413+00:00",
-      "reason": "Sinyal tersine d\u00f6nd\u00fc: LONG \u2192 SELL"
+      "reason": "Signal reversed: LONG \u2192 SELL"
     },
     {
       "symbol": "AIAUSDT",
@@ -1082,7 +1082,7 @@
       "fee": 543.8168,
       "entry_time": "2026-04-08T02:34:10.926043+00:00",
       "exit_time": "2026-04-09T23:41:20.237036+00:00",
-      "reason": "Sinyal tersine d\u00f6nd\u00fc: LONG \u2192 SELL"
+      "reason": "Signal reversed: LONG \u2192 SELL"
     },
     {
       "symbol": "TAOUSDT",
@@ -1095,7 +1095,7 @@
       "fee": 93.8336,
       "entry_time": "2026-04-09T20:14:34.381563+00:00",
       "exit_time": "2026-04-10T00:00:19.220538+00:00",
-      "reason": "Sinyal tersine d\u00f6nd\u00fc: LONG \u2192 SELL"
+      "reason": "Signal reversed: LONG \u2192 SELL"
     },
     {
       "symbol": "CLOUSDT",
@@ -1108,7 +1108,7 @@
       "fee": 2978.4233,
       "entry_time": "2026-04-08T22:45:38.614763+00:00",
       "exit_time": "2026-04-10T04:02:24.001313+00:00",
-      "reason": "Sinyal tersine d\u00f6nd\u00fc: LONG \u2192 SELL"
+      "reason": "Signal reversed: LONG \u2192 SELL"
     },
     {
       "symbol": "CROSSUSDT",
@@ -1160,7 +1160,7 @@
       "fee": 5952.0929,
       "entry_time": "2026-04-08T16:44:24.096974+00:00",
       "exit_time": "2026-04-10T21:14:43.037244+00:00",
-      "reason": "take_profit tetiklendi \u2014 otomatik kapat\u0131ld\u0131"
+      "reason": "take_profit triggered \u2014 auto-closed"
     },
     {
       "symbol": "DAMUSDT",
@@ -1173,7 +1173,7 @@
       "fee": 6569.786,
       "entry_time": "2026-04-09T00:26:58.704574+00:00",
       "exit_time": "2026-04-10T21:14:43.488972+00:00",
-      "reason": "trailing_stop tetiklendi \u2014 otomatik kapat\u0131ld\u0131"
+      "reason": "trailing_stop triggered \u2014 auto-closed"
     },
     {
       "symbol": "TAKEUSDT",
@@ -1186,7 +1186,7 @@
       "fee": 4603.9359,
       "entry_time": "2026-04-09T00:41:23.473174+00:00",
       "exit_time": "2026-04-10T21:14:44.432270+00:00",
-      "reason": "trailing_stop tetiklendi \u2014 otomatik kapat\u0131ld\u0131"
+      "reason": "trailing_stop triggered \u2014 auto-closed"
     },
     {
       "symbol": "EULUSDT",
@@ -1199,7 +1199,7 @@
       "fee": 1183.4055,
       "entry_time": "2026-04-09T04:16:05.322029+00:00",
       "exit_time": "2026-04-10T21:14:44.940237+00:00",
-      "reason": "trailing_stop tetiklendi \u2014 otomatik kapat\u0131ld\u0131"
+      "reason": "trailing_stop triggered \u2014 auto-closed"
     },
     {
       "symbol": "ARCUSDT",
@@ -1212,7 +1212,7 @@
       "fee": 861.0113,
       "entry_time": "2026-04-09T08:22:48.011055+00:00",
       "exit_time": "2026-04-10T21:14:45.582454+00:00",
-      "reason": "trailing_stop tetiklendi \u2014 otomatik kapat\u0131ld\u0131"
+      "reason": "trailing_stop triggered \u2014 auto-closed"
     },
     {
       "symbol": "RENDERUSDT",
@@ -1225,7 +1225,7 @@
       "fee": 403.0709,
       "entry_time": "2026-04-09T10:03:07.231920+00:00",
       "exit_time": "2026-04-10T21:14:45.980155+00:00",
-      "reason": "trailing_stop tetiklendi \u2014 otomatik kapat\u0131ld\u0131"
+      "reason": "trailing_stop triggered \u2014 auto-closed"
     },
     {
       "symbol": "UBUSDT",
@@ -1238,7 +1238,7 @@
       "fee": 422.3554,
       "entry_time": "2026-04-09T12:26:46.142166+00:00",
       "exit_time": "2026-04-10T21:14:47.503125+00:00",
-      "reason": "trailing_stop tetiklendi \u2014 otomatik kapat\u0131ld\u0131"
+      "reason": "trailing_stop triggered \u2014 auto-closed"
     },
     {
       "symbol": "ARBUSDT",
@@ -1251,7 +1251,7 @@
       "fee": 888.1922,
       "entry_time": "2026-04-09T12:35:57.876961+00:00",
       "exit_time": "2026-04-10T21:14:48.050723+00:00",
-      "reason": "take_profit tetiklendi \u2014 otomatik kapat\u0131ld\u0131"
+      "reason": "take_profit triggered \u2014 auto-closed"
     },
     {
       "symbol": "ZBTUSDT",
@@ -1264,7 +1264,7 @@
       "fee": 232.4011,
       "entry_time": "2026-04-09T16:44:16.772889+00:00",
       "exit_time": "2026-04-10T21:14:48.455435+00:00",
-      "reason": "trailing_stop tetiklendi \u2014 otomatik kapat\u0131ld\u0131"
+      "reason": "trailing_stop triggered \u2014 auto-closed"
     },
     {
       "symbol": "LYNUSDT",
@@ -1277,7 +1277,7 @@
       "fee": 3330.9836,
       "entry_time": "2026-04-10T18:14:44.855937+00:00",
       "exit_time": "2026-04-11T15:38:34.194835+00:00",
-      "reason": "Sinyal tersine d\u00f6nd\u00fc: SHORT \u2192 BUY"
+      "reason": "Signal reversed: SHORT \u2192 BUY"
     },
     {
       "symbol": "LAUSDT",
@@ -1368,7 +1368,7 @@
       "fee": 790.2263,
       "entry_time": "2026-04-12T22:45:26.392338+00:00",
       "exit_time": "2026-04-14T20:22:21.968251+00:00",
-      "reason": "Sinyal tersine d\u00f6nd\u00fc: SHORT \u2192 BUY"
+      "reason": "Signal reversed: SHORT \u2192 BUY"
     },
     {
       "symbol": "MELANIAUSDT",
@@ -1381,7 +1381,7 @@
       "fee": 2049.9416,
       "entry_time": "2026-04-12T14:21:43.242801+00:00",
       "exit_time": "2026-04-22T22:33:12.464540+00:00",
-      "reason": "Sinyal tersine d\u00f6nd\u00fc: SHORT \u2192 BUY"
+      "reason": "Signal reversed: SHORT \u2192 BUY"
     },
     {
       "symbol": "BLESSUSDT",
@@ -1394,7 +1394,7 @@
       "fee": 4180.3536,
       "entry_time": "2026-04-11T06:18:43.646512+00:00",
       "exit_time": "2026-04-22T23:03:11.127819+00:00",
-      "reason": "Sinyal tersine d\u00f6nd\u00fc: LONG \u2192 SELL"
+      "reason": "Signal reversed: LONG \u2192 SELL"
     },
     {
       "symbol": "IRYSUSDT",
@@ -1407,7 +1407,7 @@
       "fee": 2700.9143,
       "entry_time": "2026-04-11T07:51:16.759933+00:00",
       "exit_time": "2026-05-19T10:54:48.465528+00:00",
-      "reason": "Sinyal tersine d\u00f6nd\u00fc: LONG \u2192 SELL"
+      "reason": "Signal reversed: LONG \u2192 SELL"
     },
     {
       "symbol": "SWARMSUSDT",
@@ -1420,7 +1420,7 @@
       "fee": 14276.3923,
       "entry_time": "2026-04-12T08:28:07.576580+00:00",
       "exit_time": "2026-05-19T10:54:50.383478+00:00",
-      "reason": "Sinyal tersine d\u00f6nd\u00fc: LONG \u2192 SELL"
+      "reason": "Signal reversed: LONG \u2192 SELL"
     },
     {
       "symbol": "ETHUSDT",
@@ -1433,7 +1433,7 @@
       "fee": 37848.9653,
       "entry_time": "2026-04-12T09:55:55.562623+00:00",
       "exit_time": "2026-05-19T10:54:51.348021+00:00",
-      "reason": "Sinyal tersine d\u00f6nd\u00fc: LONG \u2192 SELL"
+      "reason": "Signal reversed: LONG \u2192 SELL"
     }
   ],
   "bot_start_time": "2026-05-19T10:54:45.102058+00:00",
@@ -1455,37 +1455,37 @@
           "signal": "BUY",
           "confidence": 38,
           "zak": 48,
-          "nihai_skor": 693.12
+          "final_score": 693.12
         },
         "1h": {
           "signal": "BUY",
           "confidence": 39,
           "zak": 58,
-          "nihai_skor": 882.18
+          "final_score": 882.18
         },
         "2h": {
           "signal": "BUY",
           "confidence": 42,
           "zak": 65,
-          "nihai_skor": 1146.6
+          "final_score": 1146.6
         },
         "4h": {
           "signal": "BUY",
           "confidence": 53,
           "zak": 75,
-          "nihai_skor": 2106.75
+          "final_score": 2106.75
         },
         "6h": {
           "signal": "BUY",
           "confidence": 46,
           "zak": 80,
-          "nihai_skor": 1692.8
+          "final_score": 1692.8
         },
         "12h": {
           "signal": "BUY",
           "confidence": 51,
           "zak": 90,
-          "nihai_skor": 2340.9
+          "final_score": 2340.9
         }
       },
       "all_signals": {
@@ -1493,77 +1493,77 @@
           "signal": "BUY",
           "confidence": 38,
           "zak": 48,
-          "nihai_skor": 693.12,
+          "final_score": 693.12,
           "in_top15": true
         },
         "1h": {
           "signal": "BUY",
           "confidence": 39,
           "zak": 58,
-          "nihai_skor": 882.18,
+          "final_score": 882.18,
           "in_top15": true
         },
         "2h": {
           "signal": "BUY",
           "confidence": 42,
           "zak": 65,
-          "nihai_skor": 1146.6,
+          "final_score": 1146.6,
           "in_top15": true
         },
         "4h": {
           "signal": "BUY",
           "confidence": 53,
           "zak": 75,
-          "nihai_skor": 2106.75,
+          "final_score": 2106.75,
           "in_top15": true
         },
         "6h": {
           "signal": "BUY",
           "confidence": 46,
           "zak": 80,
-          "nihai_skor": 1692.8,
+          "final_score": 1692.8,
           "in_top15": true
         },
         "12h": {
           "signal": "BUY",
           "confidence": 51,
           "zak": 90,
-          "nihai_skor": 2340.9,
+          "final_score": 2340.9,
           "in_top15": true
         },
         "1m": {
           "signal": "NEUTRAL",
           "confidence": 18,
           "zak": 8,
-          "nihai_skor": 25.92,
+          "final_score": 25.92,
           "in_top15": false
         },
         "3m": {
           "signal": "NEUTRAL",
           "confidence": 12,
           "zak": 15,
-          "nihai_skor": 21.6,
+          "final_score": 21.6,
           "in_top15": false
         },
         "15m": {
           "signal": "BUY",
           "confidence": 32,
           "zak": 38,
-          "nihai_skor": 389.12,
+          "final_score": 389.12,
           "in_top15": false
         },
         "8h": {
           "signal": "BUY",
           "confidence": 44,
           "zak": 85,
-          "nihai_skor": 1645.6,
+          "final_score": 1645.6,
           "in_top15": false
         },
         "1d": {
           "signal": "BUY",
           "confidence": 40,
           "zak": 95,
-          "nihai_skor": 1520.0,
+          "final_score": 1520.0,
           "in_top15": false
         }
       },
@@ -1584,31 +1584,31 @@
           "signal": "SELL",
           "confidence": 36,
           "zak": 15,
-          "nihai_skor": 194.4
+          "final_score": 194.4
         },
         "2h": {
           "signal": "BUY",
           "confidence": 42,
           "zak": 65,
-          "nihai_skor": 1146.6
+          "final_score": 1146.6
         },
         "4h": {
           "signal": "BUY",
           "confidence": 55,
           "zak": 75,
-          "nihai_skor": 2268.75
+          "final_score": 2268.75
         },
         "6h": {
           "signal": "BUY",
           "confidence": 51,
           "zak": 80,
-          "nihai_skor": 2080.8
+          "final_score": 2080.8
         },
         "1d": {
           "signal": "BUY",
           "confidence": 52,
           "zak": 95,
-          "nihai_skor": 2568.8
+          "final_score": 2568.8
         }
       },
       "all_signals": {
@@ -1616,77 +1616,77 @@
           "signal": "SELL",
           "confidence": 36,
           "zak": 15,
-          "nihai_skor": 194.4,
+          "final_score": 194.4,
           "in_top15": true
         },
         "2h": {
           "signal": "BUY",
           "confidence": 42,
           "zak": 65,
-          "nihai_skor": 1146.6,
+          "final_score": 1146.6,
           "in_top15": true
         },
         "4h": {
           "signal": "BUY",
           "confidence": 55,
           "zak": 75,
-          "nihai_skor": 2268.75,
+          "final_score": 2268.75,
           "in_top15": true
         },
         "6h": {
           "signal": "BUY",
           "confidence": 51,
           "zak": 80,
-          "nihai_skor": 2080.8,
+          "final_score": 2080.8,
           "in_top15": true
         },
         "1d": {
           "signal": "BUY",
           "confidence": 52,
           "zak": 95,
-          "nihai_skor": 2568.8,
+          "final_score": 2568.8,
           "in_top15": true
         },
         "1m": {
           "signal": "NEUTRAL",
           "confidence": 20,
           "zak": 8,
-          "nihai_skor": 32.0,
+          "final_score": 32.0,
           "in_top15": false
         },
         "15m": {
           "signal": "SELL",
           "confidence": 32,
           "zak": 38,
-          "nihai_skor": 389.12,
+          "final_score": 389.12,
           "in_top15": false
         },
         "30m": {
           "signal": "NEUTRAL",
           "confidence": 12,
           "zak": 48,
-          "nihai_skor": 69.12,
+          "final_score": 69.12,
           "in_top15": false
         },
         "1h": {
           "signal": "NEUTRAL",
           "confidence": 12,
           "zak": 58,
-          "nihai_skor": 83.52,
+          "final_score": 83.52,
           "in_top15": false
         },
         "8h": {
           "signal": "BUY",
           "confidence": 43,
           "zak": 85,
-          "nihai_skor": 1571.65,
+          "final_score": 1571.65,
           "in_top15": false
         },
         "12h": {
           "signal": "BUY",
           "confidence": 33,
           "zak": 90,
-          "nihai_skor": 980.1,
+          "final_score": 980.1,
           "in_top15": false
         }
       },
@@ -1707,25 +1707,25 @@
           "signal": "BUY",
           "confidence": 43,
           "zak": 75,
-          "nihai_skor": 1386.75
+          "final_score": 1386.75
         },
         "6h": {
           "signal": "BUY",
           "confidence": 49,
           "zak": 80,
-          "nihai_skor": 1920.8
+          "final_score": 1920.8
         },
         "8h": {
           "signal": "BUY",
           "confidence": 52,
           "zak": 85,
-          "nihai_skor": 2298.4
+          "final_score": 2298.4
         },
         "12h": {
           "signal": "BUY",
           "confidence": 50,
           "zak": 90,
-          "nihai_skor": 2250.0
+          "final_score": 2250.0
         }
       },
       "all_signals": {
@@ -1733,77 +1733,77 @@
           "signal": "BUY",
           "confidence": 43,
           "zak": 75,
-          "nihai_skor": 1386.75,
+          "final_score": 1386.75,
           "in_top15": true
         },
         "6h": {
           "signal": "BUY",
           "confidence": 49,
           "zak": 80,
-          "nihai_skor": 1920.8,
+          "final_score": 1920.8,
           "in_top15": true
         },
         "8h": {
           "signal": "BUY",
           "confidence": 52,
           "zak": 85,
-          "nihai_skor": 2298.4,
+          "final_score": 2298.4,
           "in_top15": true
         },
         "12h": {
           "signal": "BUY",
           "confidence": 50,
           "zak": 90,
-          "nihai_skor": 2250.0,
+          "final_score": 2250.0,
           "in_top15": true
         },
         "1m": {
           "signal": "NEUTRAL",
           "confidence": 14,
           "zak": 8,
-          "nihai_skor": 15.68,
+          "final_score": 15.68,
           "in_top15": false
         },
         "3m": {
           "signal": "NEUTRAL",
           "confidence": 21,
           "zak": 15,
-          "nihai_skor": 66.15,
+          "final_score": 66.15,
           "in_top15": false
         },
         "15m": {
           "signal": "NEUTRAL",
           "confidence": 16,
           "zak": 38,
-          "nihai_skor": 97.28,
+          "final_score": 97.28,
           "in_top15": false
         },
         "30m": {
           "signal": "NEUTRAL",
           "confidence": 8,
           "zak": 48,
-          "nihai_skor": 30.72,
+          "final_score": 30.72,
           "in_top15": false
         },
         "1h": {
           "signal": "BUY",
           "confidence": 37,
           "zak": 58,
-          "nihai_skor": 794.02,
+          "final_score": 794.02,
           "in_top15": false
         },
         "2h": {
           "signal": "NEUTRAL",
           "confidence": 14,
           "zak": 65,
-          "nihai_skor": 127.4,
+          "final_score": 127.4,
           "in_top15": false
         },
         "1d": {
           "signal": "NEUTRAL",
           "confidence": 27,
           "zak": 95,
-          "nihai_skor": 692.55,
+          "final_score": 692.55,
           "in_top15": false
         }
       },
@@ -1824,31 +1824,31 @@
           "signal": "SELL",
           "confidence": 41,
           "zak": 38,
-          "nihai_skor": 638.78
+          "final_score": 638.78
         },
         "1h": {
           "signal": "SELL",
           "confidence": 44,
           "zak": 58,
-          "nihai_skor": 1122.88
+          "final_score": 1122.88
         },
         "2h": {
           "signal": "SELL",
           "confidence": 48,
           "zak": 65,
-          "nihai_skor": 1497.6
+          "final_score": 1497.6
         },
         "8h": {
           "signal": "SELL",
           "confidence": 48,
           "zak": 85,
-          "nihai_skor": 1958.4
+          "final_score": 1958.4
         },
         "12h": {
           "signal": "SELL",
           "confidence": 52,
           "zak": 90,
-          "nihai_skor": 2433.6
+          "final_score": 2433.6
         }
       },
       "all_signals": {
@@ -1856,77 +1856,77 @@
           "signal": "SELL",
           "confidence": 41,
           "zak": 38,
-          "nihai_skor": 638.78,
+          "final_score": 638.78,
           "in_top15": true
         },
         "1h": {
           "signal": "SELL",
           "confidence": 44,
           "zak": 58,
-          "nihai_skor": 1122.88,
+          "final_score": 1122.88,
           "in_top15": true
         },
         "2h": {
           "signal": "SELL",
           "confidence": 48,
           "zak": 65,
-          "nihai_skor": 1497.6,
+          "final_score": 1497.6,
           "in_top15": true
         },
         "8h": {
           "signal": "SELL",
           "confidence": 48,
           "zak": 85,
-          "nihai_skor": 1958.4,
+          "final_score": 1958.4,
           "in_top15": true
         },
         "12h": {
           "signal": "SELL",
           "confidence": 52,
           "zak": 90,
-          "nihai_skor": 2433.6,
+          "final_score": 2433.6,
           "in_top15": true
         },
         "1m": {
           "signal": "NEUTRAL",
           "confidence": 17,
           "zak": 8,
-          "nihai_skor": 23.12,
+          "final_score": 23.12,
           "in_top15": false
         },
         "3m": {
           "signal": "SELL",
           "confidence": 28,
           "zak": 15,
-          "nihai_skor": 117.6,
+          "final_score": 117.6,
           "in_top15": false
         },
         "30m": {
           "signal": "NEUTRAL",
           "confidence": 25,
           "zak": 48,
-          "nihai_skor": 300.0,
+          "final_score": 300.0,
           "in_top15": false
         },
         "4h": {
           "signal": "SELL",
           "confidence": 40,
           "zak": 75,
-          "nihai_skor": 1200.0,
+          "final_score": 1200.0,
           "in_top15": false
         },
         "6h": {
           "signal": "SELL",
           "confidence": 35,
           "zak": 80,
-          "nihai_skor": 980.0,
+          "final_score": 980.0,
           "in_top15": false
         },
         "1d": {
           "signal": "SELL",
           "confidence": 28,
           "zak": 95,
-          "nihai_skor": 744.8,
+          "final_score": 744.8,
           "in_top15": false
         }
       },
@@ -1947,31 +1947,31 @@
           "signal": "SELL",
           "confidence": 36,
           "zak": 8,
-          "nihai_skor": 103.68
+          "final_score": 103.68
         },
         "3m": {
           "signal": "SELL",
           "confidence": 51,
           "zak": 15,
-          "nihai_skor": 390.15
+          "final_score": 390.15
         },
         "6h": {
           "signal": "SELL",
           "confidence": 44,
           "zak": 80,
-          "nihai_skor": 1548.8
+          "final_score": 1548.8
         },
         "8h": {
           "signal": "SELL",
           "confidence": 49,
           "zak": 85,
-          "nihai_skor": 2040.85
+          "final_score": 2040.85
         },
         "1d": {
           "signal": "SELL",
           "confidence": 52,
           "zak": 95,
-          "nihai_skor": 2568.8
+          "final_score": 2568.8
         }
       },
       "all_signals": {
@@ -1979,77 +1979,77 @@
           "signal": "SELL",
           "confidence": 36,
           "zak": 8,
-          "nihai_skor": 103.68,
+          "final_score": 103.68,
           "in_top15": true
         },
         "3m": {
           "signal": "SELL",
           "confidence": 51,
           "zak": 15,
-          "nihai_skor": 390.15,
+          "final_score": 390.15,
           "in_top15": true
         },
         "6h": {
           "signal": "SELL",
           "confidence": 44,
           "zak": 80,
-          "nihai_skor": 1548.8,
+          "final_score": 1548.8,
           "in_top15": true
         },
         "8h": {
           "signal": "SELL",
           "confidence": 49,
           "zak": 85,
-          "nihai_skor": 2040.85,
+          "final_score": 2040.85,
           "in_top15": true
         },
         "1d": {
           "signal": "SELL",
           "confidence": 52,
           "zak": 95,
-          "nihai_skor": 2568.8,
+          "final_score": 2568.8,
           "in_top15": true
         },
         "15m": {
           "signal": "NEUTRAL",
           "confidence": 20,
           "zak": 38,
-          "nihai_skor": 152.0,
+          "final_score": 152.0,
           "in_top15": false
         },
         "30m": {
           "signal": "NEUTRAL",
           "confidence": 23,
           "zak": 48,
-          "nihai_skor": 253.92,
+          "final_score": 253.92,
           "in_top15": false
         },
         "1h": {
           "signal": "NEUTRAL",
           "confidence": 24,
           "zak": 58,
-          "nihai_skor": 334.08,
+          "final_score": 334.08,
           "in_top15": false
         },
         "2h": {
           "signal": "NEUTRAL",
           "confidence": 30,
           "zak": 65,
-          "nihai_skor": 585.0,
+          "final_score": 585.0,
           "in_top15": false
         },
         "4h": {
           "signal": "SELL",
           "confidence": 35,
           "zak": 75,
-          "nihai_skor": 918.75,
+          "final_score": 918.75,
           "in_top15": false
         },
         "12h": {
           "signal": "NEUTRAL",
           "confidence": 32,
           "zak": 90,
-          "nihai_skor": 921.6,
+          "final_score": 921.6,
           "in_top15": false
         }
       },
@@ -2070,31 +2070,31 @@
           "signal": "SELL",
           "confidence": 37,
           "zak": 8,
-          "nihai_skor": 109.52
+          "final_score": 109.52
         },
         "2h": {
           "signal": "SELL",
           "confidence": 39,
           "zak": 65,
-          "nihai_skor": 988.65
+          "final_score": 988.65
         },
         "4h": {
           "signal": "SELL",
           "confidence": 44,
           "zak": 75,
-          "nihai_skor": 1452.0
+          "final_score": 1452.0
         },
         "6h": {
           "signal": "SELL",
           "confidence": 44,
           "zak": 80,
-          "nihai_skor": 1548.8
+          "final_score": 1548.8
         },
         "1d": {
           "signal": "SELL",
           "confidence": 51,
           "zak": 95,
-          "nihai_skor": 2470.95
+          "final_score": 2470.95
         }
       },
       "all_signals": {
@@ -2102,70 +2102,70 @@
           "signal": "SELL",
           "confidence": 37,
           "zak": 8,
-          "nihai_skor": 109.52,
+          "final_score": 109.52,
           "in_top15": true
         },
         "2h": {
           "signal": "SELL",
           "confidence": 39,
           "zak": 65,
-          "nihai_skor": 988.65,
+          "final_score": 988.65,
           "in_top15": true
         },
         "4h": {
           "signal": "SELL",
           "confidence": 44,
           "zak": 75,
-          "nihai_skor": 1452.0,
+          "final_score": 1452.0,
           "in_top15": true
         },
         "6h": {
           "signal": "SELL",
           "confidence": 44,
           "zak": 80,
-          "nihai_skor": 1548.8,
+          "final_score": 1548.8,
           "in_top15": true
         },
         "1d": {
           "signal": "SELL",
           "confidence": 51,
           "zak": 95,
-          "nihai_skor": 2470.95,
+          "final_score": 2470.95,
           "in_top15": true
         },
         "3m": {
           "signal": "NEUTRAL",
           "confidence": 31,
           "zak": 15,
-          "nihai_skor": 144.15,
+          "final_score": 144.15,
           "in_top15": false
         },
         "15m": {
           "signal": "NEUTRAL",
           "confidence": 9,
           "zak": 38,
-          "nihai_skor": 30.78,
+          "final_score": 30.78,
           "in_top15": false
         },
         "30m": {
           "signal": "NEUTRAL",
           "confidence": 10,
           "zak": 48,
-          "nihai_skor": 48.0,
+          "final_score": 48.0,
           "in_top15": false
         },
         "8h": {
           "signal": "SELL",
           "confidence": 40,
           "zak": 85,
-          "nihai_skor": 1360.0,
+          "final_score": 1360.0,
           "in_top15": false
         },
         "12h": {
           "signal": "SELL",
           "confidence": 36,
           "zak": 90,
-          "nihai_skor": 1166.4,
+          "final_score": 1166.4,
           "in_top15": false
         }
       },
@@ -2186,43 +2186,43 @@
           "signal": "SELL",
           "confidence": 38,
           "zak": 8,
-          "nihai_skor": 115.52
+          "final_score": 115.52
         },
         "3m": {
           "signal": "SELL",
           "confidence": 38,
           "zak": 15,
-          "nihai_skor": 216.6
+          "final_score": 216.6
         },
         "15m": {
           "signal": "SELL",
           "confidence": 36,
           "zak": 38,
-          "nihai_skor": 492.48
+          "final_score": 492.48
         },
         "30m": {
           "signal": "SELL",
           "confidence": 36,
           "zak": 48,
-          "nihai_skor": 622.08
+          "final_score": 622.08
         },
         "1h": {
           "signal": "SELL",
           "confidence": 42,
           "zak": 58,
-          "nihai_skor": 1023.12
+          "final_score": 1023.12
         },
         "4h": {
           "signal": "SELL",
           "confidence": 47,
           "zak": 75,
-          "nihai_skor": 1656.75
+          "final_score": 1656.75
         },
         "6h": {
           "signal": "SELL",
           "confidence": 47,
           "zak": 80,
-          "nihai_skor": 1767.2
+          "final_score": 1767.2
         }
       },
       "all_signals": {
@@ -2230,77 +2230,77 @@
           "signal": "SELL",
           "confidence": 38,
           "zak": 8,
-          "nihai_skor": 115.52,
+          "final_score": 115.52,
           "in_top15": true
         },
         "3m": {
           "signal": "SELL",
           "confidence": 38,
           "zak": 15,
-          "nihai_skor": 216.6,
+          "final_score": 216.6,
           "in_top15": true
         },
         "15m": {
           "signal": "SELL",
           "confidence": 36,
           "zak": 38,
-          "nihai_skor": 492.48,
+          "final_score": 492.48,
           "in_top15": true
         },
         "30m": {
           "signal": "SELL",
           "confidence": 36,
           "zak": 48,
-          "nihai_skor": 622.08,
+          "final_score": 622.08,
           "in_top15": true
         },
         "1h": {
           "signal": "SELL",
           "confidence": 42,
           "zak": 58,
-          "nihai_skor": 1023.12,
+          "final_score": 1023.12,
           "in_top15": true
         },
         "4h": {
           "signal": "SELL",
           "confidence": 47,
           "zak": 75,
-          "nihai_skor": 1656.75,
+          "final_score": 1656.75,
           "in_top15": true
         },
         "6h": {
           "signal": "SELL",
           "confidence": 47,
           "zak": 80,
-          "nihai_skor": 1767.2,
+          "final_score": 1767.2,
           "in_top15": true
         },
         "2h": {
           "signal": "SELL",
           "confidence": 35,
           "zak": 65,
-          "nihai_skor": 796.25,
+          "final_score": 796.25,
           "in_top15": false
         },
         "8h": {
           "signal": "SELL",
           "confidence": 35,
           "zak": 85,
-          "nihai_skor": 1041.25,
+          "final_score": 1041.25,
           "in_top15": false
         },
         "12h": {
           "signal": "SELL",
           "confidence": 44,
           "zak": 90,
-          "nihai_skor": 1742.4,
+          "final_score": 1742.4,
           "in_top15": false
         },
         "1d": {
           "signal": "SELL",
           "confidence": 38,
           "zak": 95,
-          "nihai_skor": 1371.8,
+          "final_score": 1371.8,
           "in_top15": false
         }
       },
@@ -2321,37 +2321,37 @@
           "signal": "SELL",
           "confidence": 40,
           "zak": 8,
-          "nihai_skor": 128.0
+          "final_score": 128.0
         },
         "3m": {
           "signal": "SELL",
           "confidence": 36,
           "zak": 15,
-          "nihai_skor": 194.4
+          "final_score": 194.4
         },
         "1h": {
           "signal": "SELL",
           "confidence": 42,
           "zak": 58,
-          "nihai_skor": 1023.12
+          "final_score": 1023.12
         },
         "2h": {
           "signal": "SELL",
           "confidence": 40,
           "zak": 65,
-          "nihai_skor": 1040.0
+          "final_score": 1040.0
         },
         "4h": {
           "signal": "SELL",
           "confidence": 51,
           "zak": 75,
-          "nihai_skor": 1950.75
+          "final_score": 1950.75
         },
         "6h": {
           "signal": "SELL",
           "confidence": 43,
           "zak": 80,
-          "nihai_skor": 1479.2
+          "final_score": 1479.2
         }
       },
       "all_signals": {
@@ -2359,70 +2359,70 @@
           "signal": "SELL",
           "confidence": 40,
           "zak": 8,
-          "nihai_skor": 128.0,
+          "final_score": 128.0,
           "in_top15": true
         },
         "3m": {
           "signal": "SELL",
           "confidence": 36,
           "zak": 15,
-          "nihai_skor": 194.4,
+          "final_score": 194.4,
           "in_top15": true
         },
         "1h": {
           "signal": "SELL",
           "confidence": 42,
           "zak": 58,
-          "nihai_skor": 1023.12,
+          "final_score": 1023.12,
           "in_top15": true
         },
         "2h": {
           "signal": "SELL",
           "confidence": 40,
           "zak": 65,
-          "nihai_skor": 1040.0,
+          "final_score": 1040.0,
           "in_top15": true
         },
         "4h": {
           "signal": "SELL",
           "confidence": 51,
           "zak": 75,
-          "nihai_skor": 1950.75,
+          "final_score": 1950.75,
           "in_top15": true
         },
         "6h": {
           "signal": "SELL",
           "confidence": 43,
           "zak": 80,
-          "nihai_skor": 1479.2,
+          "final_score": 1479.2,
           "in_top15": true
         },
         "15m": {
           "signal": "SELL",
           "confidence": 32,
           "zak": 38,
-          "nihai_skor": 389.12,
+          "final_score": 389.12,
           "in_top15": false
         },
         "8h": {
           "signal": "SELL",
           "confidence": 42,
           "zak": 85,
-          "nihai_skor": 1499.4,
+          "final_score": 1499.4,
           "in_top15": false
         },
         "12h": {
           "signal": "SELL",
           "confidence": 41,
           "zak": 90,
-          "nihai_skor": 1512.9,
+          "final_score": 1512.9,
           "in_top15": false
         },
         "1d": {
           "signal": "SELL",
           "confidence": 43,
           "zak": 95,
-          "nihai_skor": 1756.55,
+          "final_score": 1756.55,
           "in_top15": false
         }
       },
@@ -2443,31 +2443,31 @@
           "signal": "SELL",
           "confidence": 38,
           "zak": 8,
-          "nihai_skor": 115.52
+          "final_score": 115.52
         },
         "30m": {
           "signal": "SELL",
           "confidence": 38,
           "zak": 48,
-          "nihai_skor": 693.12
+          "final_score": 693.12
         },
         "1h": {
           "signal": "SELL",
           "confidence": 38,
           "zak": 58,
-          "nihai_skor": 837.52
+          "final_score": 837.52
         },
         "2h": {
           "signal": "SELL",
           "confidence": 37,
           "zak": 65,
-          "nihai_skor": 889.85
+          "final_score": 889.85
         },
         "1d": {
           "signal": "SELL",
           "confidence": 58,
           "zak": 95,
-          "nihai_skor": 3195.8
+          "final_score": 3195.8
         }
       },
       "all_signals": {
@@ -2475,70 +2475,70 @@
           "signal": "SELL",
           "confidence": 38,
           "zak": 8,
-          "nihai_skor": 115.52,
+          "final_score": 115.52,
           "in_top15": true
         },
         "30m": {
           "signal": "SELL",
           "confidence": 38,
           "zak": 48,
-          "nihai_skor": 693.12,
+          "final_score": 693.12,
           "in_top15": true
         },
         "1h": {
           "signal": "SELL",
           "confidence": 38,
           "zak": 58,
-          "nihai_skor": 837.52,
+          "final_score": 837.52,
           "in_top15": true
         },
         "2h": {
           "signal": "SELL",
           "confidence": 37,
           "zak": 65,
-          "nihai_skor": 889.85,
+          "final_score": 889.85,
           "in_top15": true
         },
         "1d": {
           "signal": "SELL",
           "confidence": 58,
           "zak": 95,
-          "nihai_skor": 3195.8,
+          "final_score": 3195.8,
           "in_top15": true
         },
         "3m": {
           "signal": "NEUTRAL",
           "confidence": 22,
           "zak": 15,
-          "nihai_skor": 72.6,
+          "final_score": 72.6,
           "in_top15": false
         },
         "15m": {
           "signal": "NEUTRAL",
           "confidence": 27,
           "zak": 38,
-          "nihai_skor": 277.02,
+          "final_score": 277.02,
           "in_top15": false
         },
         "4h": {
           "signal": "SELL",
           "confidence": 35,
           "zak": 75,
-          "nihai_skor": 918.75,
+          "final_score": 918.75,
           "in_top15": false
         },
         "8h": {
           "signal": "SELL",
           "confidence": 25,
           "zak": 85,
-          "nihai_skor": 531.25,
+          "final_score": 531.25,
           "in_top15": false
         },
         "12h": {
           "signal": "SELL",
           "confidence": 30,
           "zak": 90,
-          "nihai_skor": 810.0,
+          "final_score": 810.0,
           "in_top15": false
         }
       },
@@ -2559,25 +2559,25 @@
           "signal": "SELL",
           "confidence": 38,
           "zak": 38,
-          "nihai_skor": 548.72
+          "final_score": 548.72
         },
         "4h": {
           "signal": "BUY",
           "confidence": 42,
           "zak": 75,
-          "nihai_skor": 1323.0
+          "final_score": 1323.0
         },
         "6h": {
           "signal": "BUY",
           "confidence": 57,
           "zak": 80,
-          "nihai_skor": 2599.2
+          "final_score": 2599.2
         },
         "8h": {
           "signal": "BUY",
           "confidence": 52,
           "zak": 85,
-          "nihai_skor": 2298.4
+          "final_score": 2298.4
         }
       },
       "all_signals": {
@@ -2585,77 +2585,77 @@
           "signal": "SELL",
           "confidence": 38,
           "zak": 38,
-          "nihai_skor": 548.72,
+          "final_score": 548.72,
           "in_top15": true
         },
         "4h": {
           "signal": "BUY",
           "confidence": 42,
           "zak": 75,
-          "nihai_skor": 1323.0,
+          "final_score": 1323.0,
           "in_top15": true
         },
         "6h": {
           "signal": "BUY",
           "confidence": 57,
           "zak": 80,
-          "nihai_skor": 2599.2,
+          "final_score": 2599.2,
           "in_top15": true
         },
         "8h": {
           "signal": "BUY",
           "confidence": 52,
           "zak": 85,
-          "nihai_skor": 2298.4,
+          "final_score": 2298.4,
           "in_top15": true
         },
         "1m": {
           "signal": "NEUTRAL",
           "confidence": 10,
           "zak": 8,
-          "nihai_skor": 8.0,
+          "final_score": 8.0,
           "in_top15": false
         },
         "3m": {
           "signal": "NEUTRAL",
           "confidence": 21,
           "zak": 15,
-          "nihai_skor": 66.15,
+          "final_score": 66.15,
           "in_top15": false
         },
         "30m": {
           "signal": "NEUTRAL",
           "confidence": 18,
           "zak": 48,
-          "nihai_skor": 155.52,
+          "final_score": 155.52,
           "in_top15": false
         },
         "1h": {
           "signal": "NEUTRAL",
           "confidence": 13,
           "zak": 58,
-          "nihai_skor": 98.02,
+          "final_score": 98.02,
           "in_top15": false
         },
         "2h": {
           "signal": "NEUTRAL",
           "confidence": 11,
           "zak": 65,
-          "nihai_skor": 78.65,
+          "final_score": 78.65,
           "in_top15": false
         },
         "12h": {
           "signal": "BUY",
           "confidence": 32,
           "zak": 90,
-          "nihai_skor": 921.6,
+          "final_score": 921.6,
           "in_top15": false
         },
         "1d": {
           "signal": "BUY",
           "confidence": 36,
           "zak": 95,
-          "nihai_skor": 1231.2,
+          "final_score": 1231.2,
           "in_top15": false
         }
       },

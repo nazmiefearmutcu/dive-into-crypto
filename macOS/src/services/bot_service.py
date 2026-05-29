@@ -164,7 +164,7 @@ class BotService:
             key=lambda t: int(t[:-1]) * _TF_MINUTES.get(t[-1], 1),
         )
 
-        # ZAK — Zaman Dilimi Ağırlık Katsayısı
+        # ZAK — Timeframe Weight Coefficient
         self._ZAK = {
             "1d": 95, "12h": 90, "8h": 85, "6h": 80, "4h": 75,
             "2h": 65, "1h": 58, "30m": 48, "15m": 38, "5m": 25,
@@ -864,7 +864,7 @@ class BotService:
                                 "symbol": sym,
                                 "quantity": pos.quantity,
                                 "price": price,
-                                "reason": f"Sinyal tersine döndü: {pos.side.value} → {final_signal}",
+                                "reason": f"Signal reversed: {pos.side.value} → {final_signal}",
                                 "timestamp": iso_now(),
                                 "consensus_signal": final_signal,
                                 "confidence": confidence,
@@ -923,7 +923,7 @@ class BotService:
                             "confidence": conf,
                             "risk_level": consensus["risk_level"],
                             "zak": zak,
-                            "nihai_skor": round((conf ** 2) * (zak / 100), 2),
+                            "final_score": round((conf ** 2) * (zak / 100), 2),
                         }
                     except Exception as e:
                         logger.debug(f"Active coin signal calc failed for {tf}: {e}")
@@ -1166,12 +1166,12 @@ class BotService:
                     self._auto_scan_scanners[tf] = scanner
                     scanner.scan(min_confidence=0)
                     results = scanner.results
-                    # Nihai sinyal skoru = (güven²) × (ZAK / 100)
+                    # Net Signal Score (NSS) = (confidence²) × (ZAK / 100)
                     zak = self._ZAK.get(tf, 50)
                     for r in results:
                         r["zak"] = zak
-                        r["nihai_skor"] = round((r["confidence"] ** 2) * (zak / 100), 2)
-                    top15 = sorted(results, key=lambda r: r["nihai_skor"], reverse=True)[:15]
+                        r["final_score"] = round((r["confidence"] ** 2) * (zak / 100), 2)
+                    top15 = sorted(results, key=lambda r: r["final_score"], reverse=True)[:15]
 
                     with self._scan_lock:
                         self._multi_scan_results[tf] = top15
@@ -1217,7 +1217,7 @@ class BotService:
             for tf in _phase1_tfs:
                 for r in self._multi_scan_full.get(tf, []):
                     sym = r["symbol"]
-                    _p1_scores[sym] = _p1_scores.get(sym, 0) + r.get("nihai_skor", 0)
+                    _p1_scores[sym] = _p1_scores.get(sym, 0) + r.get("final_score", 0)
 
             # Top N coins by Phase 1 aggregate NSS
             _survivors = sorted(_p1_scores.items(), key=lambda x: -x[1])[:_PHASE2_TOP_N]
@@ -1269,10 +1269,10 @@ class BotService:
                         symbol_stats[sym]["best_conf"] = conf
                         symbol_stats[sym]["price"] = r.get("price", 0)
                     symbol_stats[sym]["signals"][tf] = {
-                        "signal": r["signal"], "confidence": conf, "zak": zak, "nihai_skor": nss,
+                        "signal": r["signal"], "confidence": conf, "zak": zak, "final_score": nss,
                     }
                     symbol_stats[sym]["all_signals"][tf] = {
-                        "signal": r["signal"], "confidence": conf, "zak": zak, "nihai_skor": nss, "in_top15": True,
+                        "signal": r["signal"], "confidence": conf, "zak": zak, "final_score": nss, "in_top15": True,
                     }
 
             # Calculate net_nss: dominant direction NSS minus opposing direction NSS
@@ -1285,7 +1285,7 @@ class BotService:
                     s["net_nss"] = round(s["sell_nss"] - s["buy_nss"], 2)
                 s["total_nss"] = s["net_nss"]  # for backward compat
 
-            # Sıralama: net NSS'e göre (karşı yön çıkarılmış)
+            # Sort: by net NSS (opposing direction subtracted)
             cross_ranked = sorted(
                 symbol_stats.values(),
                 key=lambda x: -x["net_nss"],
@@ -1306,14 +1306,14 @@ class BotService:
                                 nss = round((conf ** 2) * (zak / 100), 2)
                                 c["all_signals"][tf] = {
                                     "signal": r["signal"], "confidence": conf,
-                                    "zak": zak, "nihai_skor": nss, "in_top15": False,
+                                    "zak": zak, "final_score": nss, "in_top15": False,
                                 }
                                 break
 
             # Log cross-ranking top 10
             logger.info(f"🏆 Multi-TF cross-ranking (top 10 — net NSS):")
             for i, c in enumerate(cross_ranked[:10]):
-                tfs_str = ", ".join(f"{tf}={c['signals'][tf]['nihai_skor']:.0f}" for tf in self._multi_tfs if tf in c['signals'])
+                tfs_str = ", ".join(f"{tf}={c['signals'][tf]['final_score']:.0f}" for tf in self._multi_tfs if tf in c['signals'])
                 logger.info(f"  #{i+1} {c['symbol']:12s} | {c['dominant_dir']} net={c['net_nss']:.0f} | {c['count']}/{total_tfs} TF | {tfs_str}")
 
             # Auto-select: ONLY pick a coin if ALL 9 TFs agree on direction

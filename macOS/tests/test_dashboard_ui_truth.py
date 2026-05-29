@@ -8,7 +8,7 @@ displayed price is live. Specifically:
     field is captured at decision time and is stale by definition between
     cycles. We were doing this on AJAX refresh; this test family makes that
     impossible to silently reintroduce.
-  - When `current_price` is null/missing, the UI must show "Veri Yok" (or
+  - When `current_price` is null/missing, the UI must show "No Data" (or
     equivalent unavailable state), never `$0.0000`, and never any other
     price-shaped number scraped from a different field.
   - When the bot is stopped or the data is stale, the snapshot banner must
@@ -212,7 +212,7 @@ class TestPriceDisplayHelper:
         out = _price_display(_make_incident_status(), bot_running=False)
         assert out["state"] == "unavailable"
         assert out["is_live"] is False
-        assert out["text"] == "Veri Yok"
+        assert out["text"] == "No Data"
         # Critically: helper must NEVER fall back to latest_decision.price
         assert _decision_price_marker() not in {out.get("raw"), out["text"]}
 
@@ -281,8 +281,8 @@ class TestDashboardLivePriceRender:
             # Live price element must NOT show the decision-price marker
             assert str(_decision_price_marker()) not in r.text
             assert "0.44751337" not in r.text
-            # Live price element MUST show the honest "Veri Yok"
-            assert "Veri Yok" in r.text
+            # Live price element MUST show the honest "No Data"
+            assert "No Data" in r.text
             assert 'id="live-price"' in r.text
             # And the element carries the unavailable state attribute
             assert 'data-state="unavailable"' in r.text
@@ -303,8 +303,8 @@ class TestDashboardLivePriceRender:
             )
             assert m, "live-price span not found in rendered HTML"
             price_text = m.group(1).strip()
-            assert price_text == "Veri Yok", (
-                f"#live-price should show 'Veri Yok' for null current_price, "
+            assert price_text == "No Data", (
+                f"#live-price should show 'No Data' for null current_price, "
                 f"got {price_text!r}"
             )
         finally:
@@ -315,8 +315,8 @@ class TestDashboardLivePriceRender:
         try:
             r = client.get("/")
             assert "snapshot-banner" in r.text
-            # Banner text mentions Bot durdu (the actual stopped reason)
-            assert "Bot durdu" in r.text
+            # Banner text mentions Bot stopped (the actual stopped reason)
+            assert "Bot stopped" in r.text
         finally:
             cleanup()
 
@@ -359,7 +359,7 @@ class TestApiStatusPriceContract:
             pd = data["_price_display"]
             assert pd["state"] == "unavailable"
             assert pd["is_live"] is False
-            assert pd["text"] == "Veri Yok"
+            assert pd["text"] == "No Data"
             # And the API must surface _bot_running so JS can drive the banner
             assert data["_bot_running"] is False
             assert data["_stale"] is True
@@ -402,8 +402,8 @@ class TestPositionsCardTruth:
             # Card must contain SNAPSHOT chip somewhere on the PnL bar
             assert "SNAPSHOT" in r.text
             # And the page banner mentions the bot is stopped
-            assert "Bot durdu" in r.text
-            # Güncel cell shows the muted dash, not $0.0000
+            assert "Bot stopped" in r.text
+            # Current cell shows the muted dash, not $0.0000
             assert 'class="pos-info-value muted"' in r.text
             assert "—" in r.text
             # The decision-price marker must not leak into the page
@@ -420,7 +420,7 @@ class TestSignalsAndPerformanceBanners:
         try:
             r = client.get("/signals")
             assert "snapshot-banner" in r.text
-            assert "Bot durdu" in r.text
+            assert "Bot stopped" in r.text
         finally:
             cleanup()
 
@@ -429,16 +429,16 @@ class TestSignalsAndPerformanceBanners:
         try:
             r = client.get("/performance")
             assert "snapshot-banner" in r.text
-            assert "Bot durdu" in r.text
+            assert "Bot stopped" in r.text
         finally:
             cleanup()
 
-    def test_tarama_shows_snapshot_banner_when_stopped(self, tmp_path):
+    def test_scan_shows_snapshot_banner_when_stopped(self, tmp_path):
         client, cleanup = _build_client(tmp_path, _make_incident_status(), bot_running=False)
         try:
-            r = client.get("/tarama")
+            r = client.get("/scan")
             assert "snapshot-banner" in r.text
-            assert "Bot durdu" in r.text
+            assert "Bot stopped" in r.text
         finally:
             cleanup()
 

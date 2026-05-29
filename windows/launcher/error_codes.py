@@ -1,13 +1,13 @@
-"""Trading Bot v1 - Hata Kodlari Katalogu.
+"""Trading Bot v1 - Error Code Catalog.
 
-Her hata kodu uc bilesenden olusur:
-  - code:     E001..E099 araliginda benzersiz tanitici
-  - title:    Kisa Turkce baslik (UI'da gosterilir)
-  - cause:    Neden olusabilecegine dair aciklama
-  - remedy:   Kullanicinin yapmasi gereken adimlar
+Each error code consists of five components:
+  - code:     unique identifier in the range E001..E099
+  - title:    short English title (shown in the UI)
+  - cause:    explanation of what may have caused it
+  - remedy:   the steps the user should take
   - severity: 'fatal' | 'warning' | 'info'
 
-`raise LauncherError(code='E007', ...)` veya `ErrorCatalog.get('E007')` ile kullanilir.
+Used via `raise LauncherError(code='E007', ...)` or `ErrorCatalog.get('E007')`.
 """
 from __future__ import annotations
 
@@ -27,152 +27,152 @@ class ErrorEntry:
 _CATALOG: Dict[str, ErrorEntry] = {
     "E001": ErrorEntry(
         code="E001",
-        title="Python surumu uyumsuz",
-        cause="Trading Bot v1 en az Python 3.10 gerektirir. Mevcut surum cok eski.",
-        remedy="https://www.python.org/downloads/ adresinden Python 3.11+ kurun ve 'Add to PATH' secenegini isaretleyin.",
+        title="Incompatible Python version",
+        cause="Trading Bot v1 requires at least Python 3.10. The current version is too old.",
+        remedy="Install Python 3.11+ from https://www.python.org/downloads/ and check the 'Add to PATH' option.",
         severity="fatal",
     ),
     "E002": ErrorEntry(
         code="E002",
-        title="Gerekli paket bulunamadi",
-        cause="Bir veya birden fazla bagimlilik kurulu degil (fastapi, uvicorn, pandas, vb.).",
-        remedy="Komut satirinda: pip install -r requirements.txt komutunu calistirin. Paketlenmis .exe sururken bu hata gormezsiniz; sadece kaynak koddan calistirirken cikar.",
+        title="Required package not found",
+        cause="One or more dependencies are not installed (fastapi, uvicorn, pandas, etc.).",
+        remedy="On the command line, run: pip install -r requirements.txt. You won't see this error when running the packaged .exe; it only appears when running from source.",
         severity="fatal",
     ),
     "E003": ErrorEntry(
         code="E003",
-        title="Port 8080 baskasi tarafindan kullaniliyor",
-        cause="Bilgisayarda baska bir program 8080 numarali portu acmis. (Onceki TBV1 hala calisiyor olabilir.)",
-        remedy="Gorev Yoneticisi > Ayrintilar sekmesinden 'python.exe' veya 'TradingBotV1.exe' surecini bitirin. Sonra tekrar deneyin. Alternatif: launcher penceresindeki Port alanini 8081 vb. yapin.",
+        title="Port 8080 is in use by another process",
+        cause="Another program on the computer has opened port 8080. (A previous TBV1 instance may still be running.)",
+        remedy="In Task Manager > Details tab, end the 'python.exe' or 'TradingBotV1.exe' process. Then try again. Alternative: change the Port field in the launcher window to 8081, etc.",
         severity="fatal",
     ),
     "E004": ErrorEntry(
         code="E004",
-        title="Konfigurasyon dosyasi yok",
-        cause="config/default.yaml bulunamadi. Bu dosya botun davranisini tanimlar.",
-        remedy="Uygulama klasoru bozulmus olabilir. Kurulumu yeniden yapin veya yedek default.yaml dosyasini yerine kopyalayin.",
+        title="Configuration file missing",
+        cause="config/default.yaml was not found. This file defines the bot's behavior.",
+        remedy="The application folder may be corrupted. Reinstall, or copy a backup default.yaml file into place.",
         severity="fatal",
     ),
     "E005": ErrorEntry(
         code="E005",
-        title="Konfigurasyon dosyasi okunamiyor",
-        cause="default.yaml dosyasinda gecersiz YAML sozdizimi var (girinti hatasi, eksik iki nokta vb.).",
-        remedy="Dosyayi bir text editor (Notepad++, VS Code) ile acin ve hatali satiri duzeltin. Detayli mesaj log dosyasinda.",
+        title="Configuration file cannot be read",
+        cause="default.yaml contains invalid YAML syntax (indentation error, missing colon, etc.).",
+        remedy="Open the file in a text editor (Notepad++, VS Code) and fix the broken line. A detailed message is in the log file.",
         severity="fatal",
     ),
     "E006": ErrorEntry(
         code="E006",
-        title=".env dosyasi yok",
-        cause="API anahtarlarini iceren .env dosyasi bulunamadi. Paper-trading modda calismaya devam edilebilir.",
-        remedy="Canli alim-satim icin: Uygulama klasorunde .env adli dosya olusturun ve icine BINANCE_API_KEY=... ve BINANCE_API_SECRET=... satirlarini ekleyin.",
+        title=".env file missing",
+        cause="The .env file containing the API keys was not found. The bot can keep running in paper-trading mode.",
+        remedy="For live trading: create a file named .env in the application folder and add the lines BINANCE_API_KEY=... and BINANCE_API_SECRET=... to it.",
         severity="warning",
     ),
     "E007": ErrorEntry(
         code="E007",
-        title="Dashboard sunucusu baslatilamadi",
-        cause="Uvicorn alt sureci baslar baslamaz cikti. Antivirus engellemis veya kritik dosya silinmis olabilir.",
-        remedy="(1) Windows Defender > 'Uygulama izin verilenler' listesine TradingBotV1.exe ekleyin. (2) packaging/launcher.log dosyasini acip son satirlardaki Python hata izini paylasin.",
+        title="Dashboard server failed to start",
+        cause="The uvicorn subprocess exited as soon as it started. Antivirus may have blocked it, or a critical file may have been deleted.",
+        remedy="(1) Add TradingBotV1.exe to the Windows Defender > 'Allowed apps' list. (2) Open packaging/launcher.log and share the Python traceback from the last lines.",
         severity="fatal",
     ),
     "E008": ErrorEntry(
         code="E008",
-        title="Dashboard yanit vermiyor",
-        cause="Sunucu basladi ama 30 saniye icinde HTTP yaniti uretmedi. Yavas disk, bellek yetersizligi veya sonsuz dongu olabilir.",
-        remedy="Once bilgisayari yeniden baslatip tekrar deneyin. Devam ederse: Gorev Yoneticisi > Performans sekmesinden RAM kullanimini kontrol edin (>%90 ise diger programlari kapatin).",
+        title="Dashboard not responding",
+        cause="The server started but did not produce an HTTP response within 30 seconds. This may be a slow disk, low memory, or an infinite loop.",
+        remedy="First restart the computer and try again. If it persists: check RAM usage in Task Manager > Performance tab (if >90%, close other programs).",
         severity="fatal",
     ),
     "E009": ErrorEntry(
         code="E009",
-        title="Tarayici acilmadi",
-        cause="webbrowser modulu varsayilan tarayiciyi calistiramadi. Tarayici yuklu olmayabilir veya kayit defteri bozuk olabilir.",
-        remedy="Tarayicinizi (Chrome/Edge/Firefox) manuel olarak acin ve adres cubuguna yazin: http://127.0.0.1:8080  -- Bot zaten arka planda calisiyor, sadece otomatik tarayici acma basarisiz oldu.",
+        title="Browser did not open",
+        cause="The webbrowser module could not launch the default browser. A browser may not be installed, or the registry may be corrupted.",
+        remedy="Open your browser (Chrome/Edge/Firefox) manually and type into the address bar: http://127.0.0.1:8080  -- The bot is already running in the background; only the automatic browser launch failed.",
         severity="warning",
     ),
     "E010": ErrorEntry(
         code="E010",
-        title="Klasore yazma izni yok",
-        cause="Uygulama runtime/ klasorune log/state yazamiyor. Bu klasor read-only veya antivirus tarafindan kilitli olabilir.",
-        remedy="(1) TradingBotV1.exe dosyasini sag tiklayip 'Yonetici olarak calistir' secin. (2) Uygulama klasorunu C:\\Program Files yerine kullanicininizin Documents klasorune tasiyin.",
+        title="No write permission for folder",
+        cause="The application cannot write log/state to the runtime/ folder. This folder may be read-only or locked by antivirus.",
+        remedy="(1) Right-click TradingBotV1.exe and choose 'Run as administrator'. (2) Move the application folder out of C:\\Program Files and into your Documents folder.",
         severity="fatal",
     ),
     "E011": ErrorEntry(
         code="E011",
-        title="Disk dolu",
-        cause="Disk'te yeterli alan kalmadi. Trading bot dakikada bir log yazar; ~10MB serbest alan gerekir.",
-        remedy="Disk Temizleme aracini calistirin. C:\\Users\\<sizinad>\\AppData\\Local\\Temp icindeki dosyalari silin. En az 500MB serbest alan brakin.",
+        title="Disk full",
+        cause="There is not enough space left on the disk. The trading bot writes a log every minute; about 10MB of free space is required.",
+        remedy="Run the Disk Cleanup tool. Delete the files in C:\\Users\\<yourname>\\AppData\\Local\\Temp. Leave at least 500MB of free space.",
         severity="fatal",
     ),
     "E012": ErrorEntry(
         code="E012",
-        title="Binance API anahtari gecersiz",
-        cause="Binance HTTP 401/403 dondu. Anahtar yanlis, suresi dolmus veya IP whitelisting aktif.",
-        remedy=".env dosyasindaki BINANCE_API_KEY ve BINANCE_API_SECRET degerlerini Binance hesabinizdaki Yeni anahtar uretip kopyalayarak guncelleyin. IP kisitlamasi varsa devre disi birakin veya genel IP'nizi ekleyin.",
+        title="Invalid Binance API key",
+        cause="Binance returned HTTP 401/403. The key is wrong, expired, or IP whitelisting is active.",
+        remedy="Update the BINANCE_API_KEY and BINANCE_API_SECRET values in the .env file by generating and copying a new key from your Binance account. If there is an IP restriction, disable it or add your public IP.",
         severity="warning",
     ),
     "E013": ErrorEntry(
         code="E013",
-        title="Binance baglantisi yok",
-        cause="api.binance.com adresine ulasilamiyor. Internet kesik, DNS sorunu veya Turkiye'de Binance erisimi kisitli olabilir.",
-        remedy="Tarayicidan https://api.binance.com/api/v3/ping adresini acin. JSON donmuyorsa: (1) VPN deneyin (yasal sinirlar dahilinde). (2) Modeminizi yeniden baslatin. (3) Antivirus/firewall'da Python.exe'ye internet izni verin.",
+        title="No connection to Binance",
+        cause="api.binance.com is unreachable. The internet may be down, there may be a DNS issue, or Binance access may be restricted in your region.",
+        remedy="Open https://api.binance.com/api/v3/ping in your browser. If no JSON is returned: (1) Try a VPN (within legal limits). (2) Restart your modem. (3) Grant Python.exe internet access in your antivirus/firewall.",
         severity="warning",
     ),
     "E014": ErrorEntry(
         code="E014",
-        title="Beklenmedik ic hata",
-        cause="Yakalanmamis bir Python istisnasi olustu. Bu bir hata raporu olarak iletilmelidir.",
-        remedy="packaging/launcher.log dosyasinin SON 100 satirini kopyalayip gelistirici ile paylasin. Bot durdurulup yeniden baslatilabilir, ancak ayni hata tekrarlayabilir.",
+        title="Unexpected internal error",
+        cause="An uncaught Python exception occurred. This should be reported as a bug.",
+        remedy="Copy the LAST 100 lines of packaging/launcher.log and share them with the developer. The bot can be stopped and restarted, but the same error may recur.",
         severity="fatal",
     ),
     "E015": ErrorEntry(
         code="E015",
-        title="Birden fazla kopya tespit edildi",
-        cause="TradingBotV1 zaten calisiyor (lockfile mevcut). Iki kopya ayni anda calisirsa veriler bozulur.",
-        remedy="Mevcut kopyaya gecip onu kullanin. Eski bir kopya kilitli kalmissa: Gorev Yoneticisi'nde TradingBotV1.exe'yi bitirin ve runtime/.launcher.lock dosyasini silin.",
+        title="Multiple instances detected",
+        cause="TradingBotV1 is already running (a lockfile exists). If two copies run at the same time, the data will be corrupted.",
+        remedy="Switch to the existing instance and use that. If an old copy is stuck holding the lock: end TradingBotV1.exe in Task Manager and delete the runtime/.launcher.lock file.",
         severity="fatal",
     ),
     "E016": ErrorEntry(
         code="E016",
-        title="Windows Firewall engelliyor",
-        cause="Windows Guvenlik Duvari, dashboard'un kendine baglanmasini engelliyor (loopback 127.0.0.1).",
-        remedy="Windows Defender Firewall > 'Uygulama veya ozellik izin ver' menusunden TradingBotV1.exe icin hem 'Ozel' hem 'Genel' sutununu isaretleyin.",
+        title="Windows Firewall is blocking",
+        cause="Windows Firewall is preventing the dashboard from connecting to itself (loopback 127.0.0.1).",
+        remedy="In Windows Defender Firewall > 'Allow an app or feature', check both the 'Private' and 'Public' columns for TradingBotV1.exe.",
         severity="fatal",
     ),
     "E017": ErrorEntry(
         code="E017",
-        title="Bellek yetersiz",
-        cause="Sistemde 200MB'tan az kullanilabilir bellek var. Bot baslatilirsa Windows takilabilir.",
-        remedy="Diger programlari kapatin (ozellikle tarayicilar, Discord, Slack). Sistemi yeniden baslatip tekrar deneyin. Cok eski (4GB RAM altinda) PC'lerde sik gorulen sorundur.",
+        title="Insufficient memory",
+        cause="Less than 200MB of available memory on the system. Windows may freeze if the bot is started.",
+        remedy="Close other programs (especially browsers, Discord, Slack). Restart the system and try again. This is common on very old PCs (under 4GB RAM).",
         severity="warning",
     ),
     "E018": ErrorEntry(
         code="E018",
-        title="Saat ayari bozuk",
-        cause="Windows sistem saati Binance sunucu saatinden 1 dakikadan fazla farkli. Binance imza dogrulamasi reddediyor.",
-        remedy="Windows Saat ayarlari > 'Saati otomatik ayarla' seceneklerini acin ve 'Hemen senkronize et' butonuna basin. NTP sunucu erisimi engelliyse zaman senkronizasyonu icin time.windows.com kullanin.",
+        title="Clock setting is off",
+        cause="The Windows system clock differs from the Binance server clock by more than 1 minute. Binance is rejecting signature verification.",
+        remedy="In Windows Time settings > enable 'Set time automatically' and click 'Sync now'. If NTP server access is blocked, use time.windows.com for time synchronization.",
         severity="warning",
     ),
     "E019": ErrorEntry(
         code="E019",
-        title="State dosyasi bozuk",
-        cause="runtime/state.json gecersiz JSON. Onceki cikiste yarim kalmis olabilir.",
-        remedy="Otomatik kurtarma denenir. Basarisizsa: runtime/state.json dosyasini silin (varolan pozisyonlar paper modunda ise kaybolur, canli modda sadece izleme metadatasi kaybedilir).",
+        title="State file corrupted",
+        cause="runtime/state.json contains invalid JSON. It may have been left half-written on the previous exit.",
+        remedy="Automatic recovery is attempted. If it fails: delete the runtime/state.json file (existing positions are lost in paper mode; in live mode only tracking metadata is lost).",
         severity="warning",
     ),
     "E020": ErrorEntry(
         code="E020",
-        title="Calistirma izni reddedildi",
-        cause="Windows SmartScreen veya antivirus, imzasiz .exe'yi engelliyor.",
-        remedy="SmartScreen uyari ekraninda 'Ek bilgi' > 'Yine de calistir' tiklayin. Antivirus icin: TradingBotV1.exe yi 'Guvenli uygulamalar' (whitelist / exclusion) listesine ekleyin. Cogu false-positive'dir.",
+        title="Run permission denied",
+        cause="Windows SmartScreen or antivirus is blocking the unsigned .exe.",
+        remedy="On the SmartScreen warning screen, click 'More info' > 'Run anyway'. For antivirus: add TradingBotV1.exe to the 'Safe apps' (whitelist / exclusion) list. Most are false positives.",
         severity="fatal",
     ),
 }
 
 
 class LauncherError(Exception):
-    """Hata kodlu launcher istisnasi.
+    """Launcher exception with an error code.
 
-    Kullanim:
-        raise LauncherError("E003", detail="Port 8080 zaten dolu")
+    Usage:
+        raise LauncherError("E003", detail="Port 8080 is already in use")
     """
 
     def __init__(self, code: str, detail: Optional[str] = None) -> None:
@@ -180,13 +180,13 @@ class LauncherError(Exception):
         self.entry = _CATALOG.get(code)
         self.detail = detail
         if self.entry is None:
-            super().__init__(f"[{code}] Bilinmeyen hata: {detail or ''}")
+            super().__init__(f"[{code}] Unknown error: {detail or ''}")
         else:
             super().__init__(f"[{code}] {self.entry.title}: {detail or self.entry.cause}")
 
 
 class ErrorCatalog:
-    """Statik erisim noktasi - launcher ve dashboard tarafindan ortak kullanilir."""
+    """Static access point - shared by the launcher and the dashboard."""
 
     @staticmethod
     def get(code: str) -> Optional[ErrorEntry]:
@@ -198,27 +198,27 @@ class ErrorCatalog:
 
     @staticmethod
     def render_markdown() -> str:
-        """Tum hatalari Markdown tablosu olarak don (HATA_KODLARI.md icin)."""
-        rows = ["# Trading Bot v1 - Hata Kodlari", "", "| Kod | Baslik | Onem | Cozum |", "|---|---|---|---|"]
+        """Return all errors as a Markdown table (for ERROR_CODES.md)."""
+        rows = ["# Trading Bot v1 - Error Codes", "", "| Code | Title | Severity | Remedy |", "|---|---|---|---|"]
         for code in sorted(_CATALOG.keys()):
             e = _CATALOG[code]
             rows.append(f"| **{e.code}** | {e.title} | {e.severity} | {e.remedy[:80]}... |")
         rows.append("")
-        rows.append("## Detayli Aciklamalar")
+        rows.append("## Detailed Descriptions")
         rows.append("")
         for code in sorted(_CATALOG.keys()):
             e = _CATALOG[code]
             rows.append(f"### {e.code} - {e.title}")
             rows.append(f"")
-            rows.append(f"**Onem:** `{e.severity}`")
+            rows.append(f"**Severity:** `{e.severity}`")
             rows.append(f"")
-            rows.append(f"**Olasi Neden:** {e.cause}")
+            rows.append(f"**Possible Cause:** {e.cause}")
             rows.append(f"")
-            rows.append(f"**Cozum:** {e.remedy}")
+            rows.append(f"**Remedy:** {e.remedy}")
             rows.append(f"")
         return "\n".join(rows)
 
 
 if __name__ == "__main__":
-    # Komut satirindan calistirilirsa Markdown ciktisi bas
+    # When run from the command line, print the Markdown output
     print(ErrorCatalog.render_markdown())

@@ -206,9 +206,8 @@ class TestSettingsPage:
     def test_settings_page_renders(self, client):
         r = client.get("/settings")
         assert r.status_code == 200
-        # Dashboard UI is intentionally Turkish — "Ayarlar" = "Settings".
-        # If you ever localize this back to English, change to "Settings".
-        assert "Ayarlar" in r.text
+        # Settings page heading is "Settings".
+        assert "Settings" in r.text
         assert "paper" in r.text
 
     def test_update_config(self, client):
@@ -302,10 +301,10 @@ class TestBotControl:
     def test_index_shows_start_button(self, client):
         r = client.get("/")
         assert r.status_code == 200
-        # Dashboard UI is intentionally Turkish — "Botu Başlat" = "Start Bot",
-        # "Bot durdu" = "Bot is stopped".
-        assert "Botu Başlat" in r.text
-        assert "Bot durdu" in r.text
+        # Dashboard UI is in English — the stopped state shows "Start Bot",
+        # and "Bot stopped" in the uptime area.
+        assert "Start Bot" in r.text
+        assert "Bot stopped" in r.text
 
     def test_bot_stop_when_not_running(self, client):
         # `_stop_bot()` has two paths: (1) PID file says alive → SIGTERM it;
