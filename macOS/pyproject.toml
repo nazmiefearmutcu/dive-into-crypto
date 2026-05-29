@@ -1,0 +1,22 @@
+# S7: minimal project + pytest configuration.
+#
+# This file is intentionally NOT a packaging declaration. The macOS/ tree
+# imports via sys.path manipulation at runtime (see dashboard/app.py and
+# src/main.py) — we deliberately do not turn it into an installable
+# distribution. The [tool.pytest.ini_options] section is the substantive
+# part: it pins test discovery, marker strictness, and the pythonpath.
+
+[tool.pytest.ini_options]
+minversion = "7.4"
+testpaths = ["tests"]
+# Mirror the runtime import root so pytest can resolve ``dashboard.app``
+# and ``src.*`` without each test re-adding sys.path entries.
+pythonpath = ["."]
+# --strict-markers: typos in @pytest.mark.<name> become collection
+#   errors instead of silently skipped tests.
+# --strict-config: typos in pytest config keys become hard errors.
+# -ra: short summary of skips/xfails/errors after the run.
+addopts = ["-ra", "--strict-markers", "--strict-config"]
+# Declare any non-builtin markers here. ``parametrize`` is built into
+# pytest and does not need to be listed.
+markers = []

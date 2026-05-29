@@ -1,32 +1,32 @@
 {% extends "base.html" %}
-{% block title_extra %} - Loglar{% endblock %}
+{% block title_extra %} - Logs{% endblock %}
 
 {% block content %}
 
 <div class="page-header">
-    <h1>Sistem Logları</h1>
-    <span class="update-time">Son {{ entries | length }} kayıt gösteriliyor</span>
+    <h1>System Logs</h1>
+    <span class="update-time">Showing the last {{ entries | length }} entries</span>
 </div>
 
 <!-- Filters -->
 <div class="card log-filters">
     <form method="get" action="/logs" class="filter-form">
         <div class="filter-group">
-            <label>Seviye:</label>
-            <a href="/logs" class="filter-btn {% if current_level == 'ALL' %}active{% endif %}">HEPSİ</a>
+            <label>Level:</label>
+            <a href="/logs" class="filter-btn {% if current_level == 'ALL' %}active{% endif %}">ALL</a>
             <a href="/logs?level=INFO{% if current_search %}&search={{ current_search }}{% endif %}" class="filter-btn {% if current_level == 'INFO' %}active{% endif %}">INFO</a>
             <a href="/logs?level=WARNING{% if current_search %}&search={{ current_search }}{% endif %}" class="filter-btn {% if current_level == 'WARNING' %}active{% endif %}">WARNING</a>
             <a href="/logs?level=ERROR{% if current_search %}&search={{ current_search }}{% endif %}" class="filter-btn {% if current_level == 'ERROR' %}active{% endif %}">ERROR</a>
         </div>
         <div class="filter-group">
-            <label for="search">Ara:</label>
-            <input type="text" id="search" name="search" value="{{ current_search }}" placeholder="Log filtrele...">
+            <label for="search">Search:</label>
+            <input type="text" id="search" name="search" value="{{ current_search }}" placeholder="Filter logs...">
             {% if current_level != 'ALL' %}
             <input type="hidden" name="level" value="{{ current_level }}">
             {% endif %}
-            <button type="submit" class="filter-btn">Filtrele</button>
+            <button type="submit" class="filter-btn">Filter</button>
             {% if current_search %}
-            <a href="/logs{% if current_level != 'ALL' %}?level={{ current_level }}{% endif %}" class="filter-btn">Temizle</a>
+            <a href="/logs{% if current_level != 'ALL' %}?level={{ current_level }}{% endif %}" class="filter-btn">Clear</a>
             {% endif %}
         </div>
     </form>
@@ -53,7 +53,7 @@
         })();
     </script>
     {% else %}
-    <div class="empty-state">Log kaydı bulunamadı{% if current_level != 'ALL' %} seviye {{ current_level }}{% endif %}{% if current_search %} eşleşen "{{ current_search }}"{% endif %}</div>
+    <div class="empty-state">No log entries found{% if current_level != 'ALL' %} for level {{ current_level }}{% endif %}{% if current_search %} matching "{{ current_search }}"{% endif %}</div>
     {% endif %}
 </div>
 

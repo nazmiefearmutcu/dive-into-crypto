@@ -1,3 +1,29 @@
+# Rescue defaults (S8)
+#
+# Conservative on purpose. Every knob below is checked by
+# ``src.utils.validators.validate_rescue_safety``; a stock checkout of
+# this file MUST pass that check with no warnings. Operators who knowingly
+# want a hotter profile can override per-deploy — do not loosen the on-disk
+# default and call it a hotfix.
+#
+# Migration note (S8 vs S7):
+#   * ``risk.risk_per_trade`` 0.35 -> 0.02   (rescue cap is 0.05)
+#   * ``risk.daily_loss_limit_enabled`` false -> true
+#   * ``risk.max_open_positions`` 10 -> 3
+#   * ``risk.confidence_threshold`` 25 -> 55
+#   * ``risk.stop_loss_pct`` 0.04 -> 0.025
+#   * ``risk.take_profit_pct`` 0.10 -> 0.05
+#   * ``risk.trailing_stop_pct`` 0.03 -> 0.02
+#   * ``risk.trailing_stop_activation_pct`` 0.04 -> 0.03
+#   * ``risk.break_even_trigger_pct`` 0.025 -> 0.02
+#   * ``market_type`` futures -> spot           (live futures needs explicit opt-in)
+#   * ``no_trade.min_confidence`` 30 -> 40
+#   * ``dashboard_fallback_enabled`` (unset, defaulted True) -> false
+#                                                explicit so the dashboard
+#                                                surfaces real staleness
+#                                                instead of replaying stale
+#                                                fallback data.
+#   * ``leverage.enabled`` true -> false        (rescue: no autoleverage)
 active_symbol_path: runtime/active_symbol.txt
 auto_scan_enabled: false
 auto_select_enabled: false
@@ -13,6 +39,7 @@ cooldown:
   min_candles_between_trades: 3
   reentry_cooldown_seconds: 180
   trade_cooldown_seconds: 60
+dashboard_fallback_enabled: false
 indicator_thresholds:
   adx_di:
     period: 14
@@ -97,32 +124,32 @@ indicator_weights:
   stochastic: 1.2
   williams_r: 1.0
 leverage:
-  enabled: true
+  enabled: false
   min_leverage: 2
   scale_ratio: 0.8
 log_path: runtime/bot.log
-market_type: futures
+market_type: spot
 mode: paper
 no_trade:
   adx_min: 15.0
   atr_high_percentile: 95.0
-  min_confidence: 30.0
+  min_confidence: 40.0
 paper:
   fee_pct: 0.001
   starting_balance: 10000.0
 polling_interval_seconds: 1
 risk:
-  break_even_trigger_pct: 0.025
-  confidence_threshold: 25
-  daily_loss_limit_enabled: false
+  break_even_trigger_pct: 0.02
+  confidence_threshold: 55
+  daily_loss_limit_enabled: true
   daily_loss_limit_pct: 0.05
-  max_open_positions: 10
+  max_open_positions: 3
   max_risk_level: MEDIUM
-  risk_per_trade: 0.35
-  stop_loss_pct: 0.04
-  take_profit_pct: 0.1
-  trailing_stop_activation_pct: 0.04
-  trailing_stop_pct: 0.03
+  risk_per_trade: 0.02
+  stop_loss_pct: 0.025
+  take_profit_pct: 0.05
+  trailing_stop_activation_pct: 0.03
+  trailing_stop_pct: 0.02
 state_path: runtime/state.json
 timeframe: 4h
 trading_mode: long_term

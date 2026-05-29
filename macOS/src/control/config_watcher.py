@@ -6,7 +6,7 @@ from typing import Any, Optional
 import yaml
 
 from src.utils.logger import get_logger
-from src.utils.validators import validate_config
+from src.utils.validators import validate_config, validate_rescue_safety
 
 logger = get_logger("control.config_watcher")
 
@@ -40,6 +40,14 @@ def load_config(config_path: Optional[str] = None) -> dict[str, Any]:
         for err in errors:
             logger.error(f"Config validation error: {err}")
         raise ValueError(f"Config validation failed: {'; '.join(errors)}")
+
+    # S7 rescue-safety pass: surface risky-but-legal config as warnings.
+    # Never raises and never mutates config.
+    rescue_errors, rescue_warnings = validate_rescue_safety(config)
+    for warning in rescue_warnings:
+        logger.warning(f"Rescue safety: {warning}")
+    for err in rescue_errors:
+        logger.error(f"Rescue safety: {err}")
 
     logger.info(f"Config loaded from {path} | mode={config.get('mode')} | timeframe={config.get('timeframe')}")
     return config

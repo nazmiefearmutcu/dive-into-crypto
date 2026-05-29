@@ -1,22 +1,42 @@
 {% extends "base.html" %}
-{% block title_extra %} - Pozisyonlar{% endblock %}
+{% block title_extra %} - Positions{% endblock %}
 
 {% block content %}
 {% set s = status or {} %}
 {% set positions = s.get("open_positions", []) %}
 {% set history = s.get("trade_history", []) %}
+{% set stale = data_stale if data_stale is defined else is_stale(s) %}
+{% set bot_off = not (bot_running if bot_running is defined else true) %}
 
 <div class="page-header">
-    <h1>Pozisyonlar ve İşlem Geçmişi</h1>
-    <span class="update-time" id="last-update">Son güncelleme: {{ format_dt(s.get("last_update", "")) }}</span>
+    <h1>Positions & Trade History</h1>
+    <span class="update-time {% if stale %}stale{% endif %}" id="last-update">
+        Last update: {{ format_dt(s.get("last_update", "")) }}
+        {% if stale %}<span class="badge badge-red">STALE</span>{% endif %}
+    </span>
 </div>
+
+{% if bot_off or stale %}
+<div class="snapshot-banner snapshot-banner-{{ 'stale' if stale else 'stopped' }}">
+    <span class="snapshot-banner-icon" aria-hidden="true">⚠</span>
+    <span class="snapshot-banner-text">
+        {% if bot_off %}
+            <strong>Snapshot — Bot stopped.</strong>
+            Position current prices and PnL values are from the last bot cycle.
+        {% else %}
+            <strong>Data is stale.</strong>
+            Position current prices are no longer being refreshed.
+        {% endif %}
+    </span>
+</div>
+{% endif %}
 
 <!-- Close result toast -->
 <div id="close-toast" class="toast" style="display:none"></div>
 
 <!-- Open Positions — Binance-style cards -->
 <div class="card">
-    <h3>Açık Pozisyonlar ({{ positions | length }})</h3>
+    <h3>Open Positions ({{ positions | length }})</h3>
 </div>
 
 {% if positions %}
@@ -27,8 +47,10 @@
     {% set side = p.get("side", "LONG") %}
     {% set is_long = side == "LONG" %}
     {% set entry = p.get("entry_price", 0) %}
-    {% set cur = (p.get("current_price", 0) or 0) %}
-    {% set pnl_pct = ((cur - entry) / entry * 100) if entry > 0 else 0 %}
+    {% set cur_raw = p.get("current_price") %}
+    {% set cur = cur_raw if (cur_raw is not none and cur_raw|float > 0) else 0 %}
+    {% set has_cur = cur > 0 %}
+    {% set pnl_pct = ((cur - entry) / entry * 100) if (entry > 0 and has_cur) else 0 %}
     {% if not is_long %}{% set pnl_pct = -pnl_pct %}{% endif %}
     {% set ts_pct = p.get("trailing_stop") or 0 %}
     {% set highest = p.get("highest_price") %}
@@ -46,32 +68,40 @@
                 <span class="pos-lev">{{ p.get("leverage", 1) }}x</span>
             </div>
             <button class="btn btn-danger btn-sm" onclick="closePosition('{{ p.get('symbol', '') }}')" id="close-btn-{{ p.get('symbol', '') }}">
-                Kapat
+                Close
             </button>
         </div>
 
-        <!-- PnL bar -->
+        <!-- PnL bar (PnL %, if no live price we hide the %, the $ value is last-known) -->
         <div class="pos-pnl-bar {{ 'pos-pnl-positive' if pnl_positive else 'pos-pnl-negative' }}">
-            <span class="pos-pnl-value">${{ pnl | price }}</span>
+            <span class="pos-pnl-value">${{ pnl | price }}{% if not has_cur %}<span class="pos-pnl-stale-tag">SNAPSHOT</span>{% endif %}</span>
+            {% if has_cur %}
             <span class="pos-pnl-pct">({{ "%+.2f" | format(pnl_pct) }}%)</span>
+            {% else %}
+            <span class="pos-pnl-pct muted">(—)</span>
+            {% endif %}
         </div>
 
         <!-- Price info -->
         <div class="pos-info-grid">
             <div class="pos-info-item">
-                <span class="pos-info-label">Giriş</span>
+                <span class="pos-info-label">Entry</span>
                 <span class="pos-info-value">${{ entry | price }}</span>
             </div>
             <div class="pos-info-item">
-                <span class="pos-info-label">Güncel</span>
+                <span class="pos-info-label">Current</span>
+                {% if has_cur %}
                 <span class="pos-info-value">${{ cur | price }}</span>
+                {% else %}
+                <span class="pos-info-value muted">—</span>
+                {% endif %}
             </div>
             <div class="pos-info-item">
-                <span class="pos-info-label">Miktar</span>
+                <span class="pos-info-label">Quantity</span>
                 <span class="pos-info-value">{{ "%.4f" | format(p.get("quantity", 0)) }}</span>
             </div>
             <div class="pos-info-item">
-                <span class="pos-info-label">Lik. Fiyatı</span>
+                <span class="pos-info-label">Liq. Price</span>
                 <span class="pos-info-value negative">
                     {% if p.get("liquidation_price") %}${{ p.get("liquidation_price", 0) | price }}{% else %}—{% endif %}
                 </span>
@@ -97,7 +127,7 @@
                         {% set ts_price = highest * (1 + ts_pct) %}
                     {% endif %}
                     <span class="pos-level-value highlight">${{ ts_price | price }}</span>
-                    <span class="pos-level-sub">{{ "dip" if not is_long else "zirve" }}: ${{ highest | price }}</span>
+                    <span class="pos-level-sub">{{ "low" if not is_long else "high" }}: ${{ highest | price }}</span>
                 {% else %}
                     <span class="pos-level-value muted">—</span>
                 {% endif %}
@@ -109,18 +139,18 @@
             <div class="pos-signal">
                 {% if sig %}
                     {% if (is_long and sig in ["SELL", "STRONG_SELL"]) or (not is_long and sig in ["BUY", "STRONG_BUY"]) %}
-                        <span class="warning-badge">⚡ {{ sig }} %{{ conf }}</span>
+                        <span class="warning-badge">⚡ {{ sig }} {{ conf }}%</span>
                     {% elif (is_long and sig in ["BUY", "STRONG_BUY"]) or (not is_long and sig in ["SELL", "STRONG_SELL"]) %}
-                        <span class="ok-badge">{{ sig }} %{{ conf }}</span>
+                        <span class="ok-badge">{{ sig }} {{ conf }}%</span>
                     {% else %}
-                        <span class="signal-badge signal-neutral">{{ sig }} %{{ conf }}</span>
+                        <span class="signal-badge signal-neutral">{{ sig }} {{ conf }}%</span>
                     {% endif %}
                 {% endif %}
 
                 {% if warning %}
                     <span class="warning-badge">⚠ {{ warning | upper }}</span>
                 {% else %}
-                    <span class="ok-badge">Aktif</span>
+                    <span class="ok-badge">Active</span>
                 {% endif %}
             </div>
             <span class="pos-time muted">{{ format_dt(p.get("open_time", "")) }}</span>
@@ -132,7 +162,7 @@
     <div class="pos-card pos-card-empty">
         <div class="pos-card-empty-inner">
             <span class="pos-empty-icon">+</span>
-            <span class="pos-empty-text">Yeni pozisyon bekleniyor</span>
+            <span class="pos-empty-text">Waiting for a new position</span>
         </div>
     </div>
 </div>
@@ -141,7 +171,7 @@
     <div class="pos-card pos-card-empty">
         <div class="pos-card-empty-inner">
             <span class="pos-empty-icon">+</span>
-            <span class="pos-empty-text">Açık pozisyon yok</span>
+            <span class="pos-empty-text">No open positions</span>
         </div>
     </div>
 </div>
@@ -149,21 +179,21 @@
 
 <!-- Trade History -->
 <div class="card" style="margin-top: 24px;">
-    <h3>Son İşlemler ({{ history | length }})</h3>
+    <h3>Recent Trades ({{ history | length }})</h3>
     {% if history %}
     <div class="table-wrap">
         <table>
             <thead>
                 <tr>
-                    <th>Sembol</th>
-                    <th>Yön</th>
-                    <th>Giriş Fiyatı</th>
-                    <th>Çıkış Fiyatı</th>
-                    <th>Miktar</th>
+                    <th>Symbol</th>
+                    <th>Side</th>
+                    <th>Entry Price</th>
+                    <th>Exit Price</th>
+                    <th>Quantity</th>
                     <th>PnL</th>
-                    <th>Komisyon</th>
-                    <th>Sebep</th>
-                    <th>Çıkış Zamanı</th>
+                    <th>Fee</th>
+                    <th>Reason</th>
+                    <th>Exit Time</th>
                 </tr>
             </thead>
             <tbody>
@@ -186,17 +216,17 @@
         </table>
     </div>
     {% else %}
-    <div class="empty-state">Henüz işlem geçmişi yok</div>
+    <div class="empty-state">No trade history yet</div>
     {% endif %}
 </div>
 
 <script>
 function closePosition(symbol) {
     var btn = document.getElementById("close-btn-" + symbol);
-    if (!confirm(symbol + " pozisyonunu piyasa fiyatından kapatmak istiyor musunuz?")) return;
+    if (!confirm("Close " + symbol + " position at market price?")) return;
 
     btn.disabled = true;
-    btn.textContent = "Kapatılıyor...";
+    btn.textContent = "Closing...";
 
     var formData = new FormData();
     formData.append("symbol", symbol);
@@ -208,7 +238,7 @@ function closePosition(symbol) {
             if (data.status === "closed") {
                 var pnlClass = data.pnl >= 0 ? "toast-success" : "toast-error";
                 toast.className = "toast " + pnlClass;
-                toast.textContent = symbol + " kapatıldı | PnL: $" + data.pnl.toFixed(4) +
+                toast.textContent = symbol + " closed | PnL: $" + data.pnl.toFixed(4) +
                     " | Exit: $" + data.exit_price.toFixed(2) +
                     " | Balance: $" + data.balance_after.toFixed(2);
                 toast.style.display = "block";
@@ -217,19 +247,19 @@ function closePosition(symbol) {
                 setTimeout(function() { window.location.reload(); }, 2000);
             } else {
                 toast.className = "toast toast-error";
-                toast.textContent = data.error || "Pozisyon kapatılamadı";
+                toast.textContent = data.error || "Could not close position";
                 toast.style.display = "block";
                 btn.disabled = false;
-                btn.textContent = "Kapat";
+                btn.textContent = "Close";
             }
         })
         .catch(function(err) {
             var toast = document.getElementById("close-toast");
             toast.className = "toast toast-error";
-            toast.textContent = "Hata: " + err.message;
+            toast.textContent = "Error: " + err.message;
             toast.style.display = "block";
             btn.disabled = false;
-            btn.textContent = "Kapat";
+            btn.textContent = "Close";
         });
 }
 </script>

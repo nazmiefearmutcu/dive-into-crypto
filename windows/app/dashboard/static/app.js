@@ -14,8 +14,8 @@
     // Pages that use AJAX updates — no full reload
     var path = window.location.pathname;
     var isDashboard = path === "/" || path === "";
-    var isTarama = path === "/tarama";
-    var isAjaxPage = isDashboard || isTarama;
+    var isScan = path === "/scan";
+    var isAjaxPage = isDashboard || isScan;
 
     function tick() {
         // Pause auto-refresh while scanner is running
@@ -32,8 +32,8 @@
             countdown = REFRESH_INTERVAL;
             if (isDashboard) {
                 refreshDashboard();
-            } else if (isTarama) {
-                // Tarama page: no reload, JS polling handles updates
+            } else if (isScan) {
+                // Scanner page: no reload, JS polling handles updates
             } else {
                 window.location.reload();
             }
@@ -51,7 +51,7 @@
                     if (lu) {
                         var ago = Math.round((Date.now() - new Date(lu).getTime()) / 1000);
                         var agoText = ago < 60 ? ago + "s ago" : Math.floor(ago/60) + "m ago";
-                        luEl.textContent = "Son güncelleme: " + agoText;
+                        luEl.textContent = "Last update: " + agoText;
                     }
                 }
 

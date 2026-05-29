@@ -1,58 +1,58 @@
 {% extends "base.html" %}
-{% block title_extra %} - Ayarlar{% endblock %}
+{% block title_extra %} - Settings{% endblock %}
 {% block content %}
 
 <div class="page-header">
-    <h1>Ayarlar</h1>
+    <h1>Settings</h1>
 </div>
 
 {% if saved == "config" %}
-<div class="toast toast-success">Ayarlar başarıyla kaydedildi.</div>
+<div class="toast toast-success">Settings saved successfully.</div>
 {% elif saved == "weights" %}
-<div class="toast toast-success">İndikatör ağırlıkları kaydedildi.</div>
+<div class="toast toast-success">Indicator weights saved.</div>
 {% elif saved == "env" %}
-<div class="toast toast-success">API anahtarları kaydedildi.</div>
+<div class="toast toast-success">API keys saved.</div>
 {% elif saved == "symbol" %}
-<div class="toast toast-success">Aktif sembol güncellendi.</div>
+<div class="toast toast-success">Active symbol updated.</div>
 {% elif saved == "error_timeframe" %}
-<div class="toast toast-error">Geçersiz zaman dilimi.</div>
+<div class="toast toast-error">Invalid timeframe.</div>
 {% elif saved == "error_symbol" %}
-<div class="toast toast-error">Geçersiz sembol formatı (sadece harf ve rakam).</div>
+<div class="toast toast-error">Invalid symbol format (letters and digits only).</div>
 {% endif %}
 
-<!-- ─── Aktif Sembol ─── -->
+<!-- ─── Active Symbol ─── -->
 <div class="card">
-    <h3>Aktif Sembol</h3>
+    <h3>Active Symbol</h3>
     <form method="post" action="/settings/symbol" class="settings-form-inline">
         <div class="form-group">
-            <label>Sembol</label>
+            <label>Symbol</label>
             <input type="text" name="symbol" value="{{ symbol }}" class="form-input" placeholder="BTCUSDT" style="width:200px">
         </div>
-        <button type="submit" class="btn btn-primary">Sembolü Güncelle</button>
+        <button type="submit" class="btn btn-primary">Update Symbol</button>
     </form>
 </div>
 
-<!-- ─── Genel Ayarlar ─── -->
+<!-- ─── General Settings ─── -->
 <form method="post" action="/settings/config">
 <div class="card">
-    <h3>Genel</h3>
+    <h3>General</h3>
     <div class="settings-grid">
         <div class="form-group">
-            <label>Mod</label>
+            <label>Mode</label>
             <select name="mode" class="form-input">
-                <option value="paper" {% if config.mode == "paper" %}selected{% endif %}>Kağıt</option>
-                <option value="live" {% if config.mode == "live" %}selected{% endif %}>Canlı</option>
+                <option value="paper" {% if config.mode == "paper" %}selected{% endif %}>Paper</option>
+                <option value="live" {% if config.mode == "live" %}selected{% endif %}>Live</option>
             </select>
         </div>
         <div class="form-group">
-            <label>Piyasa Türü</label>
+            <label>Market Type</label>
             <select name="market_type" class="form-input">
                 <option value="spot" {% if config.market_type == "spot" %}selected{% endif %}>Spot</option>
                 <option value="futures" {% if config.market_type == "futures" %}selected{% endif %}>Futures</option>
             </select>
         </div>
         <div class="form-group">
-            <label>Zaman Dilimi</label>
+            <label>Timeframe</label>
             <select name="timeframe" class="form-input">
                 {% for tf in valid_timeframes %}
                 <option value="{{ tf }}" {% if config.timeframe == tf %}selected{% endif %}>{{ tf }}</option>
@@ -60,65 +60,65 @@
             </select>
         </div>
         <div class="form-group">
-            <label>Yoklama Aralığı (sn)</label>
+            <label>Polling Interval (s)</label>
             <input type="number" name="polling_interval_seconds" value="{{ config.polling_interval_seconds or 1 }}" class="form-input" min="1" max="3600">
             <div class="sub-text" style="color: var(--yellow); margin-top:4px; font-size:11px;">
-                ⚠ Mum değişmeden yeni pozisyon açılmaz. Düşük interval = daha hızlı SL/TP tespiti, trade spam'i değil.
+                ⚠ No new position opens until the candle changes. Lower interval = faster SL/TP detection, not trade spam.
             </div>
         </div>
         <div class="form-group">
-            <label>Mum Limiti</label>
+            <label>Candle Limit</label>
             <input type="number" name="candle_limit" value="{{ config.candle_limit or 200 }}" class="form-input" min="50" max="1000">
         </div>
     </div>
 </div>
 
-<!-- ─── Risk Yönetimi ─── -->
+<!-- ─── Risk Management ─── -->
 <div class="card">
-    <h3>Risk Yönetimi</h3>
+    <h3>Risk Management</h3>
     {% set r = config.risk or {} %}
     <div class="settings-grid">
         <div class="form-group">
-            <label>İşlem Başı Risk</label>
+            <label>Risk Per Trade</label>
             <input type="number" name="risk_per_trade" value="{{ r.risk_per_trade or 0.02 }}" class="form-input" step="0.001" min="0.001" max="0.5">
         </div>
         <div class="form-group">
-            <label>Zarar Durdur %</label>
+            <label>Stop Loss %</label>
             <input type="number" name="stop_loss_pct" value="{{ r.stop_loss_pct or 0.025 }}" class="form-input" step="0.001" min="0.001" max="0.5">
         </div>
         <div class="form-group">
-            <label>Kar Al %</label>
+            <label>Take Profit %</label>
             <input type="number" name="take_profit_pct" value="{{ r.take_profit_pct or 0.05 }}" class="form-input" step="0.001" min="0.001" max="1.0">
         </div>
         <div class="form-group">
-            <label>Takip Eden Stop %</label>
+            <label>Trailing Stop %</label>
             <input type="number" name="trailing_stop_pct" value="{{ r.trailing_stop_pct or 0.02 }}" class="form-input" step="0.001" min="0.001" max="0.5">
         </div>
         <div class="form-group">
-            <label>Takip Aktivasyon %</label>
+            <label>Trailing Activation %</label>
             <input type="number" name="trailing_stop_activation_pct" value="{{ r.trailing_stop_activation_pct or 0.03 }}" class="form-input" step="0.001" min="0.001" max="0.5">
         </div>
         <div class="form-group">
-            <label>Maks. Açık Pozisyon</label>
+            <label>Max Open Positions</label>
             <input type="number" name="max_open_positions" value="{{ r.max_open_positions or 1 }}" class="form-input" min="1" max="10">
         </div>
         <div class="form-group">
-            <label>Günlük Kayıp Limiti</label>
+            <label>Daily Loss Limit</label>
             <select name="daily_loss_limit_enabled" class="form-input">
-                <option value="true" {% if r.get("daily_loss_limit_enabled", true) %}selected{% endif %}>Açık</option>
-                <option value="false" {% if not r.get("daily_loss_limit_enabled", true) %}selected{% endif %}>Kapalı</option>
+                <option value="true" {% if r.get("daily_loss_limit_enabled", true) %}selected{% endif %}>Enabled</option>
+                <option value="false" {% if not r.get("daily_loss_limit_enabled", true) %}selected{% endif %}>Disabled</option>
             </select>
         </div>
         <div class="form-group">
-            <label>Günlük Kayıp Limiti %</label>
+            <label>Daily Loss Limit %</label>
             <input type="number" name="daily_loss_limit_pct" value="{{ r.daily_loss_limit_pct or 0.05 }}" class="form-input" step="0.01" min="0.01" max="1.0">
         </div>
         <div class="form-group">
-            <label>Güven Eşiği</label>
+            <label>Confidence Threshold</label>
             <input type="number" name="confidence_threshold" value="{{ r.confidence_threshold or 55 }}" class="form-input" min="0" max="100">
         </div>
         <div class="form-group">
-            <label>Maks. Risk Seviyesi</label>
+            <label>Max Risk Level</label>
             <select name="max_risk_level" class="form-input">
                 <option value="LOW" {% if r.max_risk_level == "LOW" %}selected{% endif %}>LOW</option>
                 <option value="MEDIUM" {% if r.max_risk_level == "MEDIUM" %}selected{% endif %}>MEDIUM</option>
@@ -126,68 +126,68 @@
             </select>
         </div>
         <div class="form-group">
-            <label>Başabaş Tetik %</label>
+            <label>Break-Even Trigger %</label>
             <input type="number" name="break_even_trigger_pct" value="{{ r.break_even_trigger_pct or 0.02 }}" class="form-input" step="0.001" min="0.001" max="0.5">
         </div>
     </div>
 </div>
 
-<!-- ─── Kaldıraç ─── -->
+<!-- ─── Leverage ─── -->
 <div class="card">
-    <h3>Dinamik Kaldıraç (Vadeli)</h3>
+    <h3>Dynamic Leverage (Futures)</h3>
     {% set lev = config.leverage or {} %}
     <div class="settings-grid">
         <div class="form-group">
-            <label>Açık</label>
+            <label>Enabled</label>
             <select name="leverage_enabled" class="form-input">
-                <option value="true" {% if lev.get("enabled", true) %}selected{% endif %}>Evet</option>
-                <option value="false" {% if not lev.get("enabled", true) %}selected{% endif %}>Hayır</option>
+                <option value="true" {% if lev.get("enabled", true) %}selected{% endif %}>Yes</option>
+                <option value="false" {% if not lev.get("enabled", true) %}selected{% endif %}>No</option>
             </select>
         </div>
         <div class="form-group">
-            <label>Ölçek Oranı (BTC ref: 0.80 = 100x/125x)</label>
+            <label>Scale Ratio (BTC ref: 0.80 = 100x/125x)</label>
             <input type="number" name="leverage_scale_ratio" value="{{ lev.get('scale_ratio', 0.80) }}" class="form-input" step="0.05" min="0.1" max="1.0">
         </div>
         <div class="form-group">
-            <label>Minimum Kaldıraç</label>
+            <label>Minimum Leverage</label>
             <input type="number" name="leverage_min" value="{{ lev.get('min_leverage', 2) }}" class="form-input" min="1" max="50">
         </div>
     </div>
     <div class="sub-text" style="margin-top:8px; color: #888;">
-        Formül: kaldıraç = maks_borsa_kaldıracı &times; ölçek_oranı &times; (güven / 100). BTC örneği: 125x &times; 0.80 &times; %90 = 90x
+        Formula: leverage = max_exchange_leverage &times; scale_ratio &times; (confidence / 100). BTC example: 125x &times; 0.80 &times; 90% = 90x
     </div>
 </div>
 
-<!-- ─── Kağıt İşlem ─── -->
+<!-- ─── Paper Trading ─── -->
 <div class="card">
-    <h3>Kağıt İşlem</h3>
+    <h3>Paper Trading</h3>
     {% set p = config.paper or {} %}
     <div class="settings-grid">
         <div class="form-group">
-            <label>Başlangıç Bakiyesi (USDT)</label>
+            <label>Starting Balance (USDT)</label>
             <input type="number" name="starting_balance" value="{{ p.starting_balance or 10000 }}" class="form-input" step="100" min="100">
         </div>
         <div class="form-group">
-            <label>Komisyon %</label>
+            <label>Fee %</label>
             <input type="number" name="fee_pct" value="{{ p.fee_pct or 0.001 }}" class="form-input" step="0.0001" min="0" max="0.01">
         </div>
     </div>
 </div>
 
-<!-- ─── Kağıt Sıfırlama (form çakışmasını önlemek için dışarıda) ─── -->
+<!-- ─── Paper Reset (outside the form to avoid form conflicts) ─── -->
 <div class="card">
-    <h3>Kağıt Sıfırlama</h3>
+    <h3>Paper Reset</h3>
     <div class="reset-row">
         <div class="form-group" style="margin-bottom:0">
-            <label>Yeni Bakiye (USDT)</label>
+            <label>New Balance (USDT)</label>
             <input type="number" id="reset-balance" value="{{ (config.paper or {}).starting_balance or 10000 }}" class="form-input" step="100" min="100" style="width:160px">
         </div>
         <button type="button" class="btn btn-danger" id="reset-btn" onclick="resetPaper()">
-            Kağıt İşlemi Sıfırla
+            Reset Paper Trading
         </button>
     </div>
     <div class="sub-text" style="margin-top:6px; color: var(--red);">
-        Tum pozisyonlari, trade gecmisini, PnL'i siler ve bakiyeyi sifirlar. Bot otomatik durur. Bu islem geri alinamaz.
+        Clears all positions, trade history and PnL, and resets the balance. The bot stops automatically. This action cannot be undone.
     </div>
     <div id="reset-toast" class="toast" style="display:none"></div>
 </div>
@@ -195,10 +195,10 @@
 <script>
 function resetPaper() {
     var bal = document.getElementById("reset-balance").value;
-    if (!confirm("Paper trading tamamen sifirlanacak.\nTum pozisyonlar ve gecmis silinecek.\nYeni bakiye: $" + bal + "\n\nEmin misin?")) return;
+    if (!confirm("Paper trading will be fully reset.\nAll positions and history will be deleted.\nNew balance: $" + bal + "\n\nAre you sure?")) return;
     var btn = document.getElementById("reset-btn");
     btn.disabled = true;
-    btn.textContent = "Sıfırlanıyor...";
+    btn.textContent = "Resetting...";
     var formData = new FormData();
     formData.append("balance", bal);
     fetch("/api/paper/reset", { method: "POST", body: formData })
@@ -215,51 +215,51 @@ function resetPaper() {
                 toast.textContent = data.error || "Failed";
                 toast.style.display = "block";
                 btn.disabled = false;
-                btn.textContent = "Kağıt İşlemi Sıfırla";
+                btn.textContent = "Reset Paper Trading";
             }
         })
         .catch(function() {
             btn.disabled = false;
-            btn.textContent = "Kağıt İşlemi Sıfırla";
+            btn.textContent = "Reset Paper Trading";
         });
 }
 </script>
 
-<!-- ─── Konsensüs Motoru ─── -->
+<!-- ─── Consensus Engine ─── -->
 <div class="card">
-    <h3>Konsensüs Motoru</h3>
+    <h3>Consensus Engine</h3>
     {% set c = config.consensus or {} %}
     <div class="settings-grid">
         <div class="form-group">
-            <label>Güçlü Alış Eşiği</label>
+            <label>Strong Buy Threshold</label>
             <input type="number" name="strong_buy_threshold" value="{{ c.strong_buy_threshold or 1.2 }}" class="form-input" step="0.1">
         </div>
         <div class="form-group">
-            <label>Alış Eşiği</label>
+            <label>Buy Threshold</label>
             <input type="number" name="buy_threshold" value="{{ c.buy_threshold or 0.4 }}" class="form-input" step="0.1">
         </div>
         <div class="form-group">
-            <label>Satış Eşiği</label>
+            <label>Sell Threshold</label>
             <input type="number" name="sell_threshold" value="{{ c.sell_threshold or -0.4 }}" class="form-input" step="0.1">
         </div>
         <div class="form-group">
-            <label>Güçlü Satış Eşiği</label>
+            <label>Strong Sell Threshold</label>
             <input type="number" name="strong_sell_threshold" value="{{ c.strong_sell_threshold or -1.2 }}" class="form-input" step="0.1">
         </div>
         <div class="form-group">
-            <label>Min. Aktif Sinyal</label>
+            <label>Min. Active Signals</label>
             <input type="number" name="min_active_signals" value="{{ c.min_active_signals or 4 }}" class="form-input" min="1" max="15">
         </div>
         <div class="form-group">
-            <label>Çelişki Oranı Eşiği</label>
+            <label>Conflict Ratio Threshold</label>
             <input type="number" name="conflict_ratio_threshold" value="{{ c.conflict_ratio_threshold or 0.6 }}" class="form-input" step="0.05" min="0" max="1">
         </div>
     </div>
 </div>
 
-<!-- ─── İşlem Yapılmama Koşulları ─── -->
+<!-- ─── No-Trade Conditions ─── -->
 <div class="card">
-    <h3>İşlem Yapılmama Koşulları</h3>
+    <h3>No-Trade Conditions</h3>
     {% set nt = config.no_trade or {} %}
     <div class="settings-grid">
         <div class="form-group">
@@ -267,26 +267,26 @@ function resetPaper() {
             <input type="number" name="adx_min" value="{{ nt.adx_min or 15 }}" class="form-input" step="1" min="0" max="100">
         </div>
         <div class="form-group">
-            <label>ATR Yüksek Yüzdelik</label>
+            <label>ATR High Percentile</label>
             <input type="number" name="atr_high_percentile" value="{{ nt.atr_high_percentile or 95 }}" class="form-input" step="1" min="50" max="100">
         </div>
         <div class="form-group">
-            <label>Min. Güven</label>
+            <label>Min. Confidence</label>
             <input type="number" name="min_confidence" value="{{ nt.min_confidence or 40 }}" class="form-input" step="1" min="0" max="100">
         </div>
     </div>
 </div>
 
 <div class="settings-actions">
-    <button type="submit" class="btn btn-primary btn-lg">Ayarları Kaydet</button>
+    <button type="submit" class="btn btn-primary btn-lg">Save Settings</button>
 </div>
 </form>
 
-<!-- ─── İndikatör Ağırlıkları ─── -->
+<!-- ─── Indicator Weights ─── -->
 <form method="post" action="/settings/weights">
 <div class="card">
-    <h3>İndikatör Ağırlıkları</h3>
-    <p class="sub-text" style="margin-bottom:14px">Yüksek ağırlık = son karar üzerinde daha fazla etki. Devre dışı bırakmak için 0 yapın.</p>
+    <h3>Indicator Weights</h3>
+    <p class="sub-text" style="margin-bottom:14px">Higher weight = more influence on the final decision. Set to 0 to disable.</p>
     <div class="settings-grid">
         {% for name, weight in (config.indicator_weights or {}).items() %}
         <div class="form-group">
@@ -296,45 +296,45 @@ function resetPaper() {
         {% endfor %}
     </div>
     <div class="settings-actions" style="margin-top:16px">
-        <button type="submit" class="btn btn-primary">Ağırlıkları Kaydet</button>
+        <button type="submit" class="btn btn-primary">Save Weights</button>
     </div>
 </div>
 </form>
 
-<!-- ─── API Anahtarları ─── -->
-<form method="post" action="/settings/env">
-<div class="card">
-    <h3>API Anahtarları (.env)</h3>
-    <p class="sub-text" style="margin-bottom:14px">Mevcut değerleri korumak için alanları değiştirmeyin. Maskeli değerler mevcut anahtarları üzerine yazmaz.</p>
+<!-- ─── API Keys (S7: rescue build — read-only) ─── -->
+<div class="card" data-testid="api-keys-readonly">
+    <h3>API Keys (.env)</h3>
+    <p class="sub-text" style="margin-bottom:14px">
+        <strong>Rescue mode:</strong> the dashboard cannot edit API keys. They are managed only via the on-disk
+        <code>.env</code> file; see <code>.env.example</code> for the format.
+    </p>
     <div class="settings-grid">
         <div class="form-group">
-            <label>Binance API Anahtarı</label>
-            <input type="text" name="binance_api_key" value="{{ mask_key(env.get('BINANCE_API_KEY', '')) }}" class="form-input form-mono" autocomplete="off">
+            <label>Binance API Key</label>
+            <input type="text" value="{{ mask_key(env.get('BINANCE_API_KEY', '')) }}" class="form-input form-mono" autocomplete="off" disabled readonly>
         </div>
         <div class="form-group">
-            <label>Binance API Gizli Anahtar</label>
-            <input type="text" name="binance_api_secret" value="{{ mask_key(env.get('BINANCE_API_SECRET', '')) }}" class="form-input form-mono" autocomplete="off">
+            <label>Binance API Secret</label>
+            <input type="text" value="{{ mask_key(env.get('BINANCE_API_SECRET', '')) }}" class="form-input form-mono" autocomplete="off" disabled readonly>
         </div>
         <div class="form-group">
-            <label>Testnet API Anahtarı</label>
-            <input type="text" name="binance_testnet_api_key" value="{{ mask_key(env.get('BINANCE_TESTNET_API_KEY', '')) }}" class="form-input form-mono" autocomplete="off">
+            <label>Testnet API Key</label>
+            <input type="text" value="{{ mask_key(env.get('BINANCE_TESTNET_API_KEY', '')) }}" class="form-input form-mono" autocomplete="off" disabled readonly>
         </div>
         <div class="form-group">
-            <label>Testnet API Gizli Anahtar</label>
-            <input type="text" name="binance_testnet_api_secret" value="{{ mask_key(env.get('BINANCE_TESTNET_API_SECRET', '')) }}" class="form-input form-mono" autocomplete="off">
+            <label>Testnet API Secret</label>
+            <input type="text" value="{{ mask_key(env.get('BINANCE_TESTNET_API_SECRET', '')) }}" class="form-input form-mono" autocomplete="off" disabled readonly>
         </div>
         <div class="form-group">
-            <label>Testnet Kullan</label>
-            <select name="use_testnet" class="form-input">
-                <option value="false" {% if env.get('USE_TESTNET', 'false') != 'true' %}selected{% endif %}>false</option>
-                <option value="true" {% if env.get('USE_TESTNET', 'false') == 'true' %}selected{% endif %}>true</option>
-            </select>
+            <label>Use Testnet</label>
+            <input type="text" value="{{ env.get('USE_TESTNET', 'false') }}" class="form-input" autocomplete="off" disabled readonly>
         </div>
     </div>
     <div class="settings-actions" style="margin-top:16px">
-        <button type="submit" class="btn btn-primary">API Anahtarlarını Kaydet</button>
+        <button type="button" class="btn btn-primary" disabled aria-disabled="true" title="Rescue build: dashboard cannot write secrets">
+            Save API Keys (disabled)
+        </button>
     </div>
 </div>
-</form>
 
 {% endblock %}

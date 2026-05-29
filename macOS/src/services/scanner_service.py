@@ -3,7 +3,7 @@
 import time
 import threading
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from src.api.binance_client import BinanceClient
 from src.data.market_data import MarketDataProvider
@@ -28,7 +28,8 @@ class ScannerService:
     def __init__(self, config: dict[str, Any], symbol_file: Path | None = None,
                  timeframe: str | None = None,
                  shared_client: BinanceClient | None = None,
-                 shared_symbols: list[str] | None = None) -> None:
+                 shared_symbols: list[str] | None = None,
+                 sleeper: Callable[[float], None] | None = None) -> None:
         self.config = config
         # Reuse shared client to avoid rate limits on multi-TF scans
         if shared_client:
@@ -49,6 +50,10 @@ class ScannerService:
         self.timeframe = cfg.get("timeframe", "1h")
         self._shared_symbols = shared_symbols
         self._request_delay = 0.1  # default; increased for multi-TF mode
+        # S6: injectable rate-limit seam so scan loops can be tested
+        # without sleeping or threading races. Defaults to `time.sleep`
+        # so production behavior is unchanged.
+        self._sleeper: Callable[[float], None] = sleeper or time.sleep
 
         # Scan state
         self._scanning = False
@@ -147,7 +152,7 @@ class ScannerService:
                         hot_count += 1
                         self._scan_progress["hot_count"] = hot_count
 
-                time.sleep(self._request_delay)
+                self._sleeper(self._request_delay)
 
             # Sort results by confidence descending
             with self._lock:

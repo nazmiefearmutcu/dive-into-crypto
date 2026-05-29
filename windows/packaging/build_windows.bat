@@ -2,12 +2,12 @@
 REM ============================================================
 REM Trading Bot v1 - Windows Build Script
 REM ============================================================
-REM Bu dosyayi Windows'ta cift-tiklayin. Yapilan isler:
-REM   1) Python kontrolu (>= 3.10)
-REM   2) Sanal ortam (venv) olusturma
-REM   3) Bagimliliklarin kurulumu (pip install -r ...)
-REM   4) PyInstaller ile .exe build
-REM   5) dist\TradingBotV1\ klasoru ile sonuc
+REM Double-click this file on Windows. It performs:
+REM   1) Python check (>= 3.10)
+REM   2) Virtual environment (venv) creation
+REM   3) Dependency installation (pip install -r ...)
+REM   4) .exe build with PyInstaller
+REM   5) Result in the dist\TradingBotV1\ folder
 REM ============================================================
 
 setlocal enabledelayedexpansion
@@ -19,25 +19,25 @@ echo   Trading Bot v1 - Windows .exe Build
 echo  ============================================================
 echo.
 
-REM ---- 1) Python sorgusu ----
+REM ---- 1) Python check ----
 where python >nul 2>&1
 if errorlevel 1 (
-    echo [HATA E001] Python bulunamadi.
-    echo Lutfen https://www.python.org/downloads/ adresinden Python 3.11+ kurun
-    echo ve "Add Python to PATH" secenegini isaretleyin.
+    echo [ERROR E001] Python not found.
+    echo Please install Python 3.11+ from https://www.python.org/downloads/
+    echo and check the "Add Python to PATH" option.
     pause
     exit /b 1
 )
 
 for /f "tokens=2 delims= " %%v in ('python --version') do set PYVER=%%v
-echo [+] Python surumu: %PYVER%
+echo [+] Python version: %PYVER%
 
-REM ---- 2) venv olustur ----
+REM ---- 2) create venv ----
 if not exist ".venv\" (
-    echo [+] Sanal ortam olusturuluyor (.venv\)...
+    echo [+] Creating virtual environment (.venv\)...
     python -m venv .venv
     if errorlevel 1 (
-        echo [HATA] Sanal ortam olusturulamadi.
+        echo [ERROR] Could not create virtual environment.
         pause
         exit /b 1
     )
@@ -45,68 +45,68 @@ if not exist ".venv\" (
 
 call .venv\Scripts\activate.bat
 if errorlevel 1 (
-    echo [HATA] Sanal ortam aktif edilemedi.
+    echo [ERROR] Could not activate virtual environment.
     pause
     exit /b 1
 )
 
-REM ---- 3) bagimliliklar ----
-echo [+] pip guncelleniyor...
+REM ---- 3) dependencies ----
+echo [+] Updating pip...
 python -m pip install --upgrade pip --quiet
 
-echo [+] Trading bot bagimliliklari kuruluyor (1-2 dakika surebilir)...
+echo [+] Installing trading bot dependencies (may take 1-2 minutes)...
 python -m pip install -r app\requirements.txt --quiet
 if errorlevel 1 (
-    echo [HATA E002] Bagimliliklar kurulamadi. Internet baglantisini kontrol edin.
+    echo [ERROR E002] Dependencies could not be installed. Check your internet connection.
     pause
     exit /b 1
 )
 
-echo [+] PyInstaller kuruluyor...
+echo [+] Installing PyInstaller...
 python -m pip install pyinstaller --quiet
 if errorlevel 1 (
-    echo [HATA] PyInstaller kurulamadi.
+    echo [ERROR] PyInstaller could not be installed.
     pause
     exit /b 1
 )
 
 REM ---- 4) build ----
 echo.
-echo [+] Eski build temizleniyor (build\, dist\)...
+echo [+] Cleaning old build (build\, dist\)...
 if exist build rmdir /s /q build
 if exist dist rmdir /s /q dist
 
-echo [+] PyInstaller calistiriliyor (5-10 dakika surebilir)...
+echo [+] Running PyInstaller (may take 5-10 minutes)...
 pyinstaller packaging\TradingBotV1.spec --clean --noconfirm
 if errorlevel 1 (
     echo.
-    echo [HATA] PyInstaller basarisiz oldu. Detay yukarida.
+    echo [ERROR] PyInstaller failed. See details above.
     pause
     exit /b 1
 )
 
-REM ---- 5) sonuc ----
+REM ---- 5) result ----
 if exist "dist\TradingBotV1\TradingBotV1.exe" (
     echo.
     echo  ============================================================
-    echo   BASARILI! Build tamamlandi.
+    echo   SUCCESS! Build complete.
     echo  ============================================================
     echo.
-    echo   Calistirilabilir dosya:
+    echo   Executable file:
     echo     dist\TradingBotV1\TradingBotV1.exe
     echo.
-    echo   KULLANIM:
-    echo     1. dist\TradingBotV1\ klasorunun TAMAMINI kopyalayin
-    echo        (ornek: Masaustune Trading Bot v1 olarak^)
-    echo     2. Icindeki TradingBotV1.exe dosyasini cift-tiklayin
-    echo     3. Otomatik tarayicida acilacaktir
+    echo   USAGE:
+    echo     1. Copy the ENTIRE dist\TradingBotV1\ folder
+    echo        (example: to the Desktop as Trading Bot v1^)
+    echo     2. Double-click the TradingBotV1.exe inside it
+    echo     3. It will open automatically in the browser
     echo.
-    echo   Masaustu kisayolu olusturmak icin:
-    echo     packaging\create_shortcut.vbs dosyasina cift-tiklayin
+    echo   To create a desktop shortcut:
+    echo     Double-click the packaging\create_shortcut.vbs file
     echo.
 ) else (
-    echo [HATA] Build tamamlandi ama TradingBotV1.exe bulunamadi.
-    echo Spec dosyasini ve loglari kontrol edin.
+    echo [ERROR] Build completed but TradingBotV1.exe was not found.
+    echo Check the spec file and the logs.
     pause
     exit /b 1
 )

@@ -1,20 +1,48 @@
 {% extends "base.html" %}
-{% block title_extra %} - Tarama{% endblock %}
+{% block title_extra %} - Scanner{% endblock %}
 
 {% block content %}
 {% set s = status or {} %}
+{% set stale = data_stale if data_stale is defined else is_stale(s) %}
+{% set bot_off = not (bot_running if bot_running is defined else true) %}
 
 <div class="page-header">
-    <h1>Tarama</h1>
+    <h1>Scanner</h1>
+    {% set _state = scan_state | default('idle') %}
+    {% set _labels = {
+        'disabled': 'Disabled',
+        'scanning': 'Scanning',
+        'complete': 'Completed',
+        'error': 'Error',
+        'stale': 'Stale Data',
+        'idle': 'Idle',
+    } %}
+    <span class="scan-state-badge scan-state-{{ _state }}"
+          data-testid="auto-scan-state"
+          data-scan-state="{{ _state }}"
+          {% if scan_reason %}title="{{ scan_reason }}"{% endif %}>
+        Auto-Scan: {{ _labels.get(_state, _state) }}
+    </span>
 </div>
+
+{% if bot_off %}
+<div class="snapshot-banner snapshot-banner-stopped">
+    <span class="snapshot-banner-icon" aria-hidden="true">⚠</span>
+    <span class="snapshot-banner-text">
+        <strong>Snapshot — Bot stopped.</strong>
+        The auto-scan cycle is not running; the latest results below are frozen.
+        Click "Start Scan" for new data.
+    </span>
+</div>
+{% endif %}
 
 <!-- Manual Multi-Timeframe Scanner -->
 <div class="card scanner-card" id="scanner-card">
     <div class="scanner-header">
-        <h3>Manuel Tarama</h3>
+        <h3>Manual Scan</h3>
         <div class="scanner-controls">
-            <button id="scan-btn" class="btn btn-primary" onclick="startMultiScan()">Taramaya Basla</button>
-            <button id="scan-stop-btn" class="btn btn-danger" onclick="stopMultiScan()" style="display:none">Durdur</button>
+            <button id="scan-btn" class="btn btn-primary" onclick="startMultiScan()">Start Scan</button>
+            <button id="scan-stop-btn" class="btn btn-danger" onclick="stopMultiScan()" style="display:none">Stop</button>
         </div>
     </div>
 
@@ -32,7 +60,7 @@
 
     <!-- Cross-timeframe ranking -->
     <div id="cross-ranking" style="display:none">
-        <h4 class="cross-title">Capraz Zaman Dilimi Siralamasi (Ilk 5)</h4>
+        <h4 class="cross-title">Cross-Timeframe Ranking (Top 5)</h4>
         <div id="cross-ranking-body"></div>
     </div>
 
@@ -44,10 +72,10 @@
 <!-- Auto-scan results (Multi-TF cross-ranking) -->
 <div id="auto-scan-card" class="card" style="{{ '' if s.get('last_auto_scan') else 'display:none' }}">
     <div class="scanner-header">
-        <h3>Otomatik Tarama Sonuclari</h3>
+        <h3>Auto-Scan Results</h3>
         <span id="auto-scan-meta" class="muted">
             Son: {{ format_dt(s.get("last_auto_scan", "")) }} |
-            {{ s.get("last_scan_total", 0) }} coin | Her 10dk | 12 zaman dilimi
+            {{ s.get("last_scan_total", 0) }} coins | Every 10 min | 12 timeframes
         </span>
     </div>
     <div id="auto-scan-table-wrap" style="overflow-x:auto;">
@@ -56,9 +84,9 @@
     {% if scan_results %}
     <table class="cross-table" style="margin-top: 8px;">
         <thead><tr>
-            <th>#</th><th>Coin</th><th>Yon</th><th>Net NSS</th><th>TF</th>
+            <th>#</th><th>Coin</th><th>Direction</th><th>Net NSS</th><th>TF</th>
             {% for tf in all_tfs %}<th>{{ tf }}</th>{% endfor %}
-            <th>Fiyat</th><th></th>
+            <th>Price</th><th></th>
         </tr></thead>
         <tbody>
         {% for r in scan_results %}
@@ -82,7 +110,7 @@
                     {% if sig %}
                         {% set is_top15 = sig.get("in_top15", false) or tf in signals %}
                         {% set dir = sig.get("signal","NEUTRAL").upper().replace("STRONG_","") %}
-                        {% set nss = sig.get("nihai_skor", 0) %}
+                        {% set nss = sig.get("final_score", 0) %}
                         <td class="{{ 'cross-td-hit' if is_top15 else 'cross-td-dim' }}">
                             <span class="cross-val cross-val-{{ dir | lower }}">{{ nss | round(0) | int if nss > 0 else (sig.get("confidence", 0) | string + '%') }}</span>
                         </td>
@@ -92,14 +120,14 @@
                 {% endfor %}
                 <td>${{ r.get("price", 0) }}</td>
                 <td>
-                    <button class="btn btn-success btn-sm" onclick="selectScannedSymbol('{{ r.get('symbol', '') }}')">Sec</button>
+                    <button class="btn btn-success btn-sm" onclick="selectScannedSymbol('{{ r.get('symbol', '') }}')">Select</button>
                 </td>
             </tr>
         {% endfor %}
         </tbody>
     </table>
     {% else %}
-    <div class="empty-state" style="padding: 8px;">Henuz tarama sonucu yok</div>
+    <div class="empty-state" style="padding: 8px;">No scan results yet</div>
     {% endif %}
     </div>
 </div>
@@ -134,18 +162,18 @@ function _buildDynamicUI() {
 function startMultiScan() {
     var btn = document.getElementById("scan-btn");
     btn.disabled = true;
-    btn.textContent = "Kontrol ediliyor...";
+    btn.textContent = "Checking...";
 
     fetch("/api/scan-lock-status")
         .then(function(r) { return r.json(); })
         .then(function(lock) {
             if (lock.auto_scan_active) {
                 btn.disabled = false;
-                btn.textContent = "Taramaya Basla";
-                showScanToast("Otomatik tarama devam ediyor, bitmesini bekleyin.", "error");
+                btn.textContent = "Start Scan";
+                showScanToast("Auto-scan in progress, please wait for it to finish.", "error");
                 return;
             }
-            btn.textContent = "Baslatiliyor...";
+            btn.textContent = "Starting...";
             fetch("/api/scanner/multi-start", { method: "POST" })
                 .then(function(r) { return r.json(); })
                 .then(function(data) {
@@ -159,18 +187,18 @@ function startMultiScan() {
                         multiPollTimer = setInterval(pollMultiProgress, 1500);
                     } else {
                         btn.disabled = false;
-                        btn.textContent = "Taramaya Basla";
-                        showScanToast(data.error || "Baslatilamadi", "error");
+                        btn.textContent = "Start Scan";
+                        showScanToast(data.error || "Could not start", "error");
                     }
                 })
                 .catch(function() {
                     btn.disabled = false;
-                    btn.textContent = "Taramaya Basla";
+                    btn.textContent = "Start Scan";
                 });
         })
         .catch(function() {
             btn.disabled = false;
-            btn.textContent = "Taramaya Basla";
+            btn.textContent = "Start Scan";
         });
 }
 
@@ -185,7 +213,7 @@ function resetMultiUI() {
     var btn = document.getElementById("scan-btn");
     btn.style.display = "inline-block";
     btn.disabled = false;
-    btn.textContent = "Taramaya Basla";
+    btn.textContent = "Start Scan";
     document.getElementById("scan-stop-btn").style.display = "none";
 }
 
@@ -244,10 +272,10 @@ function showMultiResults(data) {
     if (common.length > 0) {
         infoEl.style.display = "block";
         infoEl.innerHTML = '<span class="common-icon">*</span> <strong>' + common.length +
-            ' coin</strong> ' + TFS.length + ' zaman diliminde de ilk 15\'te: <strong>' + common.join(", ") + '</strong>';
+            ' coins</strong> in the top 15 across all ' + TFS.length + ' timeframes: <strong>' + common.join(", ") + '</strong>';
     } else {
         infoEl.style.display = "block";
-        infoEl.innerHTML = '<span class="common-none">' + TFS.length + ' zaman diliminde ortak ilk 15\'e giren coin bulunamadi</span>';
+        infoEl.innerHTML = '<span class="common-none">No coin made the common top 15 across ' + TFS.length + ' timeframes</span>';
     }
 
     var crossRanking = data.cross_ranking || [];
@@ -258,7 +286,7 @@ function showMultiResults(data) {
         var thTfs = '';
         TFS.forEach(function(tf) { thTfs += '<th>' + tf + '</th>'; });
         var html = '<table class="cross-table"><thead><tr>' +
-            '<th>#</th><th>Coin</th><th>Yon</th><th>Net NSS</th><th>TF</th>' + thTfs + '<th>Fiyat</th><th></th>' +
+            '<th>#</th><th>Coin</th><th>Direction</th><th>Net NSS</th><th>TF</th>' + thTfs + '<th>Price</th><th></th>' +
             '</tr></thead><tbody>';
         crossRanking.forEach(function(c, idx) {
             var isAll = c.count === TFS.length;
@@ -278,7 +306,7 @@ function showMultiResults(data) {
                     var isTop15 = allSig.in_top15 === true || (c.signals && c.signals[tf]);
                     var tdCls = isTop15 ? 'cross-td-hit' : 'cross-td-dim';
                     var dir = allSig.signal.toUpperCase().replace("STRONG_","").toLowerCase();
-                    var nss = allSig.nihai_skor || 0;
+                    var nss = allSig.final_score || 0;
                     var label = Math.round(nss) > 0 ? Math.round(nss).toLocaleString() : allSig.confidence + '%';
                     html += '<td class="' + tdCls + '"><span class="cross-val cross-val-' + dir + '">' + label + '</span></td>';
                 } else {
@@ -286,7 +314,7 @@ function showMultiResults(data) {
                 }
             });
             html += '<td>$' + c.price + '</td>';
-            html += '<td><button class="btn btn-success btn-sm" onclick="selectScannedSymbol(\'' + c.symbol + '\')">Sec</button></td>';
+            html += '<td><button class="btn btn-success btn-sm" onclick="selectScannedSymbol(\'' + c.symbol + '\')">Select</button></td>';
             html += '</tr>';
         });
         html += '</tbody></table>';
@@ -302,7 +330,7 @@ function showMultiResults(data) {
         var hh = String(dt.getHours()).padStart(2,'0');
         var mi = String(dt.getMinutes()).padStart(2,'0');
         var ss = String(dt.getSeconds()).padStart(2,'0');
-        timeEl.textContent = "Son tarama: " + dd + "." + mm + "." + yy + " " + hh + ":" + mi + ":" + ss;
+        timeEl.textContent = "Last scan: " + dd + "." + mm + "." + yy + " " + hh + ":" + mi + ":" + ss;
         timeEl.style.display = "block";
     }
 
@@ -310,9 +338,9 @@ function showMultiResults(data) {
 }
 
 function buildTfList(top15, commonSet, totalScanned) {
-    var html = '<div class="scanner-hot-title">' + totalScanned + ' coin tarandi - ilk 15:</div>';
+    var html = '<div class="scanner-hot-title">' + totalScanned + ' coins scanned - top 15:</div>';
     if (top15.length === 0) {
-        return html + '<div class="empty-state">Sonuc yok</div>';
+        return html + '<div class="empty-state">No results</div>';
     }
     html += '<div class="scanner-hot-list">';
     top15.forEach(function(r, idx) {
@@ -328,7 +356,7 @@ function buildTfList(top15, commonSet, totalScanned) {
             '<span class="scanner-conf">' + r.confidence + '%</span>' +
             '<span class="scanner-found-price">$' + r.price + '</span>' +
             '<span class="risk-badge risk-' + r.risk_level.toLowerCase() + '">' + r.risk_level + '</span>' +
-            '<span class="btn ' + btnCls + ' btn-sm">Sec</span>' +
+            '<span class="btn ' + btnCls + ' btn-sm">Select</span>' +
             '</div>';
     });
     html += '</div>';
@@ -356,7 +384,7 @@ function selectScannedSymbol(symbol) {
         .then(function(r) { return r.json(); })
         .then(function(data) {
             if (data.status === "ok") {
-                showScanToast(symbol + " aktif coin olarak ayarlandi!", "success");
+                showScanToast(symbol + " set as the active coin!", "success");
                 setTimeout(function() { window.location.reload(); }, 1500);
             }
         });
@@ -432,13 +460,13 @@ function _renderAutoScanTable(data) {
 
     if (results.length === 0) {
         document.getElementById("auto-scan-table-wrap").innerHTML =
-            '<div class="empty-state" style="padding:8px">Henuz tarama sonucu yok</div>';
+            '<div class="empty-state" style="padding:8px">No scan results yet</div>';
         return;
     }
     var thTfs = "";
     _ALL_TFS.forEach(function(tf) { thTfs += "<th>" + tf + "</th>"; });
     var html = '<table class="cross-table" style="margin-top:8px"><thead><tr>' +
-        '<th>#</th><th>Coin</th><th>Yon</th><th>Net NSS</th><th>TF</th>' + thTfs + '<th>Fiyat</th><th></th>' +
+        '<th>#</th><th>Coin</th><th>Direction</th><th>Net NSS</th><th>TF</th>' + thTfs + '<th>Price</th><th></th>' +
         '</tr></thead><tbody>';
     results.forEach(function(c, idx) {
         var isAll = c.count === totalTfs;
@@ -460,7 +488,7 @@ function _renderAutoScanTable(data) {
                 var isTop15 = s.in_top15 === true || !!signals[tf];
                 var cls = isTop15 ? "cross-td-hit" : "cross-td-dim";
                 var dir = s.signal.toUpperCase().replace("STRONG_","").toLowerCase();
-                var nss = s.nihai_skor || 0;
+                var nss = s.final_score || 0;
                 var label = Math.round(nss) > 0 ? Math.round(nss).toLocaleString() : s.confidence + '%';
                 html += '<td class="' + cls + '"><span class="cross-val cross-val-' + dir + '">' + label + '</span></td>';
             } else {
@@ -468,7 +496,7 @@ function _renderAutoScanTable(data) {
             }
         });
         html += '<td>$' + c.price + '</td>';
-        html += '<td><button class="btn btn-success btn-sm" onclick="selectScannedSymbol(\'' + c.symbol + '\')">Sec</button></td>';
+        html += '<td><button class="btn btn-success btn-sm" onclick="selectScannedSymbol(\'' + c.symbol + '\')">Select</button></td>';
         html += '</tr>';
     });
     html += '</tbody></table>';
@@ -492,12 +520,12 @@ function pollAutoScanProgress() {
                 _autoScanWasScanning = true;
                 if (scanBtn && scanBtn.style.display !== "none") {
                     scanBtn.disabled = true;
-                    scanBtn.textContent = "Oto-tarama devam ediyor...";
+                    scanBtn.textContent = "Auto-scan in progress...";
                 }
             } else {
                 if (scanBtn && scanBtn.style.display !== "none" && !multiPollTimer) {
                     scanBtn.disabled = false;
-                    scanBtn.textContent = "Taramaya Basla";
+                    scanBtn.textContent = "Start Scan";
                 }
                 if (_autoScanWasScanning && d.last_scan_results) {
                     _autoScanWasScanning = false;

@@ -1,0 +1,7 @@
+# This directory holds live runtime state written by the bot process
+# (PID file, scan progress, dashboard status, paper-mode balance, flag files).
+#
+# Everything in this directory except this .gitkeep is gitignored on purpose.
+# Do NOT add JSON or flag whitelists back to .gitignore — those files are
+# output, not source. If you need to capture a known incident, copy the
+# affected files into macOS/tests/fixtures/runtime_snapshots/incident_YYYY_MM_DD/.

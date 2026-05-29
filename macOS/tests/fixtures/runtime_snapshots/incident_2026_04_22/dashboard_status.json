@@ -548,7 +548,7 @@
       "fee": 543.8168,
       "entry_time": "2026-04-08T02:34:10.926043+00:00",
       "exit_time": "2026-04-09T23:41:20.237036+00:00",
-      "reason": "Sinyal tersine d\u00f6nd\u00fc: LONG \u2192 SELL"
+      "reason": "Signal reversed: LONG \u2192 SELL"
     },
     {
       "symbol": "TAOUSDT",
@@ -561,7 +561,7 @@
       "fee": 93.8336,
       "entry_time": "2026-04-09T20:14:34.381563+00:00",
       "exit_time": "2026-04-10T00:00:19.220538+00:00",
-      "reason": "Sinyal tersine d\u00f6nd\u00fc: LONG \u2192 SELL"
+      "reason": "Signal reversed: LONG \u2192 SELL"
     },
     {
       "symbol": "CLOUSDT",
@@ -574,7 +574,7 @@
       "fee": 2978.4233,
       "entry_time": "2026-04-08T22:45:38.614763+00:00",
       "exit_time": "2026-04-10T04:02:24.001313+00:00",
-      "reason": "Sinyal tersine d\u00f6nd\u00fc: LONG \u2192 SELL"
+      "reason": "Signal reversed: LONG \u2192 SELL"
     },
     {
       "symbol": "CROSSUSDT",
@@ -626,7 +626,7 @@
       "fee": 5952.0929,
       "entry_time": "2026-04-08T16:44:24.096974+00:00",
       "exit_time": "2026-04-10T21:14:43.037244+00:00",
-      "reason": "take_profit tetiklendi \u2014 otomatik kapat\u0131ld\u0131"
+      "reason": "take_profit triggered \u2014 auto-closed"
     },
     {
       "symbol": "DAMUSDT",
@@ -639,7 +639,7 @@
       "fee": 6569.786,
       "entry_time": "2026-04-09T00:26:58.704574+00:00",
       "exit_time": "2026-04-10T21:14:43.488972+00:00",
-      "reason": "trailing_stop tetiklendi \u2014 otomatik kapat\u0131ld\u0131"
+      "reason": "trailing_stop triggered \u2014 auto-closed"
     },
     {
       "symbol": "TAKEUSDT",
@@ -652,7 +652,7 @@
       "fee": 4603.9359,
       "entry_time": "2026-04-09T00:41:23.473174+00:00",
       "exit_time": "2026-04-10T21:14:44.432270+00:00",
-      "reason": "trailing_stop tetiklendi \u2014 otomatik kapat\u0131ld\u0131"
+      "reason": "trailing_stop triggered \u2014 auto-closed"
     },
     {
       "symbol": "EULUSDT",
@@ -665,7 +665,7 @@
       "fee": 1183.4055,
       "entry_time": "2026-04-09T04:16:05.322029+00:00",
       "exit_time": "2026-04-10T21:14:44.940237+00:00",
-      "reason": "trailing_stop tetiklendi \u2014 otomatik kapat\u0131ld\u0131"
+      "reason": "trailing_stop triggered \u2014 auto-closed"
     },
     {
       "symbol": "ARCUSDT",
@@ -678,7 +678,7 @@
       "fee": 861.0113,
       "entry_time": "2026-04-09T08:22:48.011055+00:00",
       "exit_time": "2026-04-10T21:14:45.582454+00:00",
-      "reason": "trailing_stop tetiklendi \u2014 otomatik kapat\u0131ld\u0131"
+      "reason": "trailing_stop triggered \u2014 auto-closed"
     },
     {
       "symbol": "RENDERUSDT",
@@ -691,7 +691,7 @@
       "fee": 403.0709,
       "entry_time": "2026-04-09T10:03:07.231920+00:00",
       "exit_time": "2026-04-10T21:14:45.980155+00:00",
-      "reason": "trailing_stop tetiklendi \u2014 otomatik kapat\u0131ld\u0131"
+      "reason": "trailing_stop triggered \u2014 auto-closed"
     },
     {
       "symbol": "UBUSDT",
@@ -704,7 +704,7 @@
       "fee": 422.3554,
       "entry_time": "2026-04-09T12:26:46.142166+00:00",
       "exit_time": "2026-04-10T21:14:47.503125+00:00",
-      "reason": "trailing_stop tetiklendi \u2014 otomatik kapat\u0131ld\u0131"
+      "reason": "trailing_stop triggered \u2014 auto-closed"
     },
     {
       "symbol": "ARBUSDT",
@@ -717,7 +717,7 @@
       "fee": 888.1922,
       "entry_time": "2026-04-09T12:35:57.876961+00:00",
       "exit_time": "2026-04-10T21:14:48.050723+00:00",
-      "reason": "take_profit tetiklendi \u2014 otomatik kapat\u0131ld\u0131"
+      "reason": "take_profit triggered \u2014 auto-closed"
     },
     {
       "symbol": "ZBTUSDT",
@@ -730,7 +730,7 @@
       "fee": 232.4011,
       "entry_time": "2026-04-09T16:44:16.772889+00:00",
       "exit_time": "2026-04-10T21:14:48.455435+00:00",
-      "reason": "trailing_stop tetiklendi \u2014 otomatik kapat\u0131ld\u0131"
+      "reason": "trailing_stop triggered \u2014 auto-closed"
     },
     {
       "symbol": "LYNUSDT",
@@ -743,7 +743,7 @@
       "fee": 3330.9836,
       "entry_time": "2026-04-10T18:14:44.855937+00:00",
       "exit_time": "2026-04-11T15:38:34.194835+00:00",
-      "reason": "Sinyal tersine d\u00f6nd\u00fc: SHORT \u2192 BUY"
+      "reason": "Signal reversed: SHORT \u2192 BUY"
     },
     {
       "symbol": "LAUSDT",
@@ -834,7 +834,7 @@
       "fee": 790.2263,
       "entry_time": "2026-04-12T22:45:26.392338+00:00",
       "exit_time": "2026-04-14T20:22:21.968251+00:00",
-      "reason": "Sinyal tersine d\u00f6nd\u00fc: SHORT \u2192 BUY"
+      "reason": "Signal reversed: SHORT \u2192 BUY"
     },
     {
       "symbol": "MELANIAUSDT",
@@ -847,7 +847,7 @@
       "fee": 2049.9416,
       "entry_time": "2026-04-12T14:21:43.242801+00:00",
       "exit_time": "2026-04-22T22:33:12.464540+00:00",
-      "reason": "Sinyal tersine d\u00f6nd\u00fc: SHORT \u2192 BUY"
+      "reason": "Signal reversed: SHORT \u2192 BUY"
     },
     {
       "symbol": "BLESSUSDT",
@@ -860,7 +860,7 @@
       "fee": 4180.3536,
       "entry_time": "2026-04-11T06:18:43.646512+00:00",
       "exit_time": "2026-04-22T23:03:11.127819+00:00",
-      "reason": "Sinyal tersine d\u00f6nd\u00fc: LONG \u2192 SELL"
+      "reason": "Signal reversed: LONG \u2192 SELL"
     }
   ],
   "performance": {

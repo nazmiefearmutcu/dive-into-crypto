@@ -1,0 +1,11 @@
+==============================
+  TRADING BOT V1 (TBV1)
+  BACKUP COPY - DO NOT TOUCH
+==============================
+
+This folder is a backup copy of the final state of Trading Bot V1 and must not be modified.
+Backup date: 2026-04-12
+Source: /Users/nazmi/Desktop/Projeler/proje/trading_bot
+
+NO file in this folder should be modified.
+All new development happens in the trading_bot/ folder (TBV2).

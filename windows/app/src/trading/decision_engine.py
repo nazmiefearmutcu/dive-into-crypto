@@ -84,8 +84,8 @@ class DecisionEngine:
                     else TradeAction.CLOSE_SHORT
                 )
                 reason = (
-                    f"⚡ Sinyal tersine döndü! {position.side.value} pozisyon → "
-                    f"sinyal={final_signal.value} güven={confidence}% — otomatik kapatılıyor"
+                    f"⚡ Signal reversed! {position.side.value} position → "
+                    f"signal={final_signal.value} confidence={confidence}% — auto-closing"
                 )
                 logger.info(reason)
                 return self._make_decision(

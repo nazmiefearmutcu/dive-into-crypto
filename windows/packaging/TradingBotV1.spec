@@ -3,46 +3,46 @@
 
 Build:
     Windows: pyinstaller packaging/TradingBotV1.spec --clean --noconfirm
-    Cikti  : dist/TradingBotV1/TradingBotV1.exe (+ baglim klasoru)
+    Output : dist/TradingBotV1/TradingBotV1.exe (+ dependency folder)
 
-NOT: --onedir kullaniyoruz (--onefile degil); start-up suresi cok daha hizli ve
-antivirus yanlis pozitif vermesi azalir. Kullanici dist/TradingBotV1/ klasorunun
-TAMAMINI kopyalar.
+NOTE: we use --onedir (not --onefile); start-up time is much faster and
+antivirus false positives are reduced. The user copies the ENTIRE
+dist/TradingBotV1/ folder.
 
-Yapilandirma:
+Configuration:
 - Launcher: launcher/tbv1_launcher.py
-- App kodu: app/ (src/, dashboard/, config/)
-- Ikon: packaging/tbv1.ico
-- Calistirilabilir adi: TradingBotV1
+- App code: app/ (src/, dashboard/, config/)
+- Icon: packaging/tbv1.ico
+- Executable name: TradingBotV1
 """
 from pathlib import Path
 
-# ── Yol cozumleyici ─────────────────────────────────────────────────────────
+# ── Path resolver ───────────────────────────────────────────────────────────
 SPEC_DIR = Path(SPECPATH).resolve()
 PROJECT_ROOT = SPEC_DIR.parent
 APP_DIR = PROJECT_ROOT / "app"
 LAUNCHER_DIR = PROJECT_ROOT / "launcher"
 ICON = SPEC_DIR / "tbv1.ico"
 
-# ── Datas: dasbhoard sablonlari + static + config ──────────────────────────
-# Format: (kaynak, hedef-klasor-bundle-icinde)
+# ── Datas: dashboard templates + static + config ───────────────────────────
+# Format: (source, target-folder-inside-bundle)
 datas = [
     # Dashboard HTML/CSS/JS
     (str(APP_DIR / "dashboard" / "templates"), "app/dashboard/templates"),
     (str(APP_DIR / "dashboard" / "static"), "app/dashboard/static"),
-    # Konfigurasyon
+    # Configuration
     (str(APP_DIR / "config"), "app/config"),
-    # Runtime klasoru (bos placeholder ile)
-    # PyInstaller bos klasoru kopyalayamaz, .placeholder dosyasi ekleyecegiz
+    # Runtime folder (with an empty placeholder)
+    # PyInstaller can't copy an empty folder, so we add a .placeholder file
 ]
 
-# Runtime icin .placeholder dosyasi olustur (PyInstaller bos klasoru atlar)
+# Create a .placeholder file for runtime (PyInstaller skips empty folders)
 runtime_placeholder = APP_DIR / "runtime" / ".placeholder"
 runtime_placeholder.parent.mkdir(parents=True, exist_ok=True)
 if not runtime_placeholder.exists():
     runtime_placeholder.write_text(
-        "Bu dosya runtime/ klasorunun PyInstaller bundle'a dahil edilmesini saglar.\n"
-        "Silmeyin. Trading Bot v1 buraya log/state yazar.\n",
+        "This file ensures the runtime/ folder is included in the PyInstaller bundle.\n"
+        "Do not delete. Trading Bot v1 writes log/state here.\n",
         encoding="utf-8",
     )
 datas.append((str(APP_DIR / "runtime"), "app/runtime"))
@@ -53,14 +53,14 @@ png_icon = SPEC_DIR / "tbv1_256.png"
 if png_icon.exists():
     datas.append((str(png_icon), "."))
 
-# Trading bot kaynak kodu - data olarak degil hiddenimport olarak alacagiz
-# ama dosyalar PyInstaller analysis'i icin pathex'te olmali
+# Trading bot source code - taken as hiddenimport, not as data,
+# but the files must be on pathex for PyInstaller's analysis
 pathex = [
     str(APP_DIR),
     str(LAUNCHER_DIR),
 ]
 
-# ── Hidden imports: dinamik yuklenenler ────────────────────────────────────
+# ── Hidden imports: dynamically loaded modules ─────────────────────────────
 hiddenimports = [
     # FastAPI / Starlette
     "fastapi",
@@ -71,7 +71,7 @@ hiddenimports = [
     "starlette.middleware",
     "starlette.staticfiles",
     "starlette.templating",
-    # Uvicorn (modul olarak invoke edilir)
+    # Uvicorn (invoked as a module)
     "uvicorn",
     "uvicorn.main",
     "uvicorn.loops.auto",
@@ -91,7 +91,7 @@ hiddenimports = [
     "pydantic.deprecated.decorator",
     "pydantic_core",
     "pydantic.json_schema",
-    # Pandas + numpy (botun consensus engine'i icin)
+    # Pandas + numpy (for the bot's consensus engine)
     "pandas",
     "pandas._libs",
     "pandas._libs.tslibs",
@@ -115,7 +115,7 @@ hiddenimports = [
     # Multipart
     "multipart",
     "python_multipart",
-    # Application kodumuz
+    # Our application code
     "dashboard.app",
     "src.main",
     "src.services.bot_service",
@@ -131,7 +131,7 @@ hiddenimports = [
     "src.control.config_watcher",
 ]
 
-# Otomatik src alt-modul tespiti
+# Automatic detection of src submodules
 import os
 for root, dirs, files in os.walk(str(APP_DIR / "src")):
     rel = os.path.relpath(root, str(APP_DIR))
@@ -143,7 +143,7 @@ for root, dirs, files in os.walk(str(APP_DIR / "src")):
             if mod not in hiddenimports:
                 hiddenimports.append(mod)
 
-# Dashboard alt-modulleri
+# Dashboard submodules
 for root, dirs, files in os.walk(str(APP_DIR / "dashboard")):
     rel = os.path.relpath(root, str(APP_DIR))
     if "__pycache__" in rel:
@@ -154,7 +154,7 @@ for root, dirs, files in os.walk(str(APP_DIR / "dashboard")):
             if mod not in hiddenimports:
                 hiddenimports.append(mod)
 
-# ── Excludes: gerek olmayan agir paketler ──────────────────────────────────
+# ── Excludes: heavy packages we don't need ─────────────────────────────────
 excludes = [
     "matplotlib",
     "scipy",
@@ -202,8 +202,8 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=False,                  # UPX bazi antivirusleri tetikler; off
-    console=False,              # GUI app, console penceresi acmasin
+    upx=False,                  # UPX triggers some antivirus tools; off
+    console=False,              # GUI app, don't open a console window
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

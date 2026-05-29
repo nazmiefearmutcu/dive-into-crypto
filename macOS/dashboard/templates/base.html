@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="tr">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -10,13 +10,13 @@
     <nav class="navbar">
         <div class="nav-brand">Trading Bot V1</div>
         <div class="nav-links">
-            <a href="/" class="{% if page == 'dashboard' %}active{% endif %}">Panel</a>
-            <a href="/tarama" class="{% if page == 'tarama' %}active{% endif %}">Tarama</a>
-            <a href="/positions" class="{% if page == 'positions' %}active{% endif %}">Pozisyonlar</a>
-            <a href="/signals" class="{% if page == 'signals' %}active{% endif %}">Sinyaller</a>
-            <a href="/performance" class="{% if page == 'performance' %}active{% endif %}">Performans</a>
-            <a href="/logs" class="{% if page == 'logs' %}active{% endif %}">Loglar</a>
-            <a href="/settings" class="{% if page == 'settings' %}active{% endif %}">Ayarlar</a>
+            <a href="/" class="{% if page == 'dashboard' %}active{% endif %}">Dashboard</a>
+            <a href="/scan" class="{% if page == 'scan' %}active{% endif %}">Scanner</a>
+            <a href="/positions" class="{% if page == 'positions' %}active{% endif %}">Positions</a>
+            <a href="/signals" class="{% if page == 'signals' %}active{% endif %}">Signals</a>
+            <a href="/performance" class="{% if page == 'performance' %}active{% endif %}">Performance</a>
+            <a href="/logs" class="{% if page == 'logs' %}active{% endif %}">Logs</a>
+            <a href="/settings" class="{% if page == 'settings' %}active{% endif %}">Settings</a>
         </div>
         <div class="nav-status">
             <span id="auto-scan-banner" class="auto-scan-banner" style="display:none">
@@ -26,7 +26,7 @@
                     <span id="auto-scan-bar" class="auto-scan-bar" style="width:0%"></span>
                 </span>
             </span>
-            <span id="auto-refresh-label">Yenileme: <strong id="refresh-countdown">5</strong>sn</span>
+            <span id="auto-refresh-label">Refresh: <strong id="refresh-countdown">5</strong>s</span>
         </div>
     </nav>
 
@@ -36,11 +36,11 @@
 
     <footer class="footer">
         <span>Trading Bot V1</span>
-        <span>Ayarlar: <a href="/settings" style="color:var(--accent)">Ayarlar</a></span>
+        <span>Settings: <a href="/settings" style="color:var(--accent)">Settings</a></span>
     </footer>
 
     {% if page != 'settings' %}
-    <script src="/static/app.js?v=6"></script>
+    <script src="/static/app.js?v=7"></script>
     {% endif %}
 </body>
 </html>

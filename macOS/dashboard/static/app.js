@@ -14,8 +14,8 @@
     // Pages that use AJAX updates — no full reload
     var path = window.location.pathname;
     var isDashboard = path === "/" || path === "";
-    var isTarama = path === "/tarama";
-    var isAjaxPage = isDashboard || isTarama;
+    var isScan = path === "/scan";
+    var isAjaxPage = isDashboard || isScan;
 
     function tick() {
         // Pause auto-refresh while scanner is running
@@ -32,8 +32,8 @@
             countdown = REFRESH_INTERVAL;
             if (isDashboard) {
                 refreshDashboard();
-            } else if (isTarama) {
-                // Tarama page: no reload, JS polling handles updates
+            } else if (isScan) {
+                // Scan page: no reload, JS polling handles updates
             } else {
                 window.location.reload();
             }
@@ -44,21 +44,61 @@
         fetch("/api/status")
             .then(function (r) { return r.json(); })
             .then(function (s) {
-                // Update last-update time
+                // Update last-update time (honor stale state visually).
+                // Mirror server-side _time_ago: show d/h/m/s instead of
+                // pretending a 28-day-old snapshot is "41001m ago".
                 var luEl = document.getElementById("last-update");
                 if (luEl) {
                     var lu = s.last_update;
                     if (lu) {
                         var ago = Math.round((Date.now() - new Date(lu).getTime()) / 1000);
-                        var agoText = ago < 60 ? ago + "s ago" : Math.floor(ago/60) + "m ago";
-                        luEl.textContent = "Son güncelleme: " + agoText;
+                        var agoText;
+                        if (ago < 60) agoText = ago + "s ago";
+                        else if (ago < 3600) agoText = Math.floor(ago / 60) + "m " + (ago % 60) + "s ago";
+                        else if (ago < 86400) agoText = Math.floor(ago / 3600) + "h " + Math.floor((ago % 3600) / 60) + "m ago";
+                        else agoText = Math.floor(ago / 86400) + "d ago";
+                        luEl.textContent = "Last update: " + agoText;
+                    }
+                    if (s._stale) {
+                        luEl.classList.add("stale");
+                    } else {
+                        luEl.classList.remove("stale");
                     }
                 }
 
-                // Price
+                // Price — canonical contract: from current_price ONLY via _price_display.
+                // We MUST NOT read latest_decision.price here; that is the price captured
+                // at decision time and is stale by definition between cycles.
                 var priceEl = document.getElementById("live-price");
-                if (priceEl && s.latest_decision) {
-                    priceEl.textContent = "$" + Number(s.latest_decision.price || 0).toFixed(4);
+                var priceTagEl = document.getElementById("live-price-tag");
+                if (priceEl) {
+                    var pd = s._price_display || {};
+                    var state = pd.state || "unavailable";
+                    var text = pd.text || "No Data";
+                    priceEl.textContent = text;
+                    priceEl.dataset.state = state;
+                    priceEl.className = "value price-value price-" + state;
+                    if (priceTagEl) {
+                        if (state === "live") {
+                            priceTagEl.textContent = "LIVE";
+                            priceTagEl.className = "price-tag price-tag-live";
+                        } else if (state === "snapshot") {
+                            priceTagEl.textContent = "SNAPSHOT";
+                            priceTagEl.className = "price-tag price-tag-snapshot";
+                        } else {
+                            priceTagEl.textContent = "OFFLINE";
+                            priceTagEl.className = "price-tag price-tag-unavailable";
+                        }
+                    }
+                }
+
+                // Snapshot banner — keep in sync if state changes after page load.
+                var banner = document.getElementById("snapshot-banner");
+                if (banner) {
+                    var stillSnapshot = (s._stale === true)
+                        || (s._bot_running === false)
+                        || (s._price_display && s._price_display.state === "unavailable");
+                    banner.style.display = stillSnapshot ? "" : "none";
                 }
 
                 // Symbol
@@ -97,9 +137,13 @@
                 var posEl = document.getElementById("live-positions");
                 if (posEl) posEl.textContent = s.open_positions_count || 0;
 
-                // Cycle count
+                // Cycle count — show "—" when no cycle has completed yet so we
+                // do not pretend "#0" is a real completed cycle.
                 var cycleEl = document.getElementById("live-cycle");
-                if (cycleEl) cycleEl.textContent = "#" + (s.cycle_count || 0);
+                if (cycleEl) {
+                    var cyc = s.cycle_count || 0;
+                    cycleEl.textContent = cyc > 0 ? "#" + cyc : "—";
+                }
 
                 // Leverage
                 var levEl = document.getElementById("live-leverage");

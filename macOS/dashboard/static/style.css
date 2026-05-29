@@ -139,6 +139,84 @@ body {
 .status-running { color: var(--green); }
 .status-stopped { color: var(--red); }
 
+/* ===== Live Price Truth Indicator ===== */
+.price-value.price-live { color: var(--text); }
+.price-value.price-snapshot { color: var(--orange); }
+.price-value.price-unavailable {
+    color: var(--text-dim);
+    font-style: italic;
+    font-weight: 500;
+}
+.price-tag {
+    display: inline-block;
+    margin-top: 3px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.6px;
+    width: max-content;
+}
+.price-tag-live { background: rgba(34,197,94,0.18); color: var(--green); }
+.price-tag-snapshot { background: rgba(249,115,22,0.18); color: var(--orange); }
+.price-tag-unavailable { background: rgba(139,143,163,0.18); color: var(--text-dim); }
+
+/* ===== Snapshot Banner (Bot Stopped / Stale / No Price) ===== */
+.snapshot-banner {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin-bottom: 16px;
+    padding: 10px 14px;
+    border-radius: var(--radius);
+    border: 1px solid;
+    font-size: 13px;
+    line-height: 1.45;
+}
+.snapshot-banner strong { font-weight: 700; }
+.snapshot-banner-icon {
+    flex: 0 0 auto;
+    font-size: 14px;
+    line-height: 1.45;
+}
+.snapshot-banner-text { flex: 1 1 auto; }
+.snapshot-banner-stopped {
+    background: rgba(239,68,68,0.08);
+    border-color: rgba(239,68,68,0.35);
+    color: #fca5a5;
+}
+.snapshot-banner-stopped strong { color: var(--red); }
+.snapshot-banner-stale,
+.snapshot-banner-nodata {
+    background: rgba(249,115,22,0.08);
+    border-color: rgba(249,115,22,0.35);
+    color: #fdba74;
+}
+.snapshot-banner-stale strong,
+.snapshot-banner-nodata strong { color: var(--orange); }
+@media (max-width: 600px) {
+    .snapshot-banner { font-size: 12px; padding: 8px 10px; }
+    .status-item { min-width: 72px; }
+    .bot-control-bar { padding: 12px; gap: 8px; }
+    .bot-control-left { flex-wrap: wrap; gap: 10px; }
+}
+
+/* ===== Position Stale Tag (PnL bar) ===== */
+.pos-pnl-stale-tag {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.6px;
+    background: rgba(249,115,22,0.18);
+    color: var(--orange);
+    vertical-align: middle;
+}
+.pos-info-value.muted,
+.pos-pnl-pct.muted { color: var(--text-dim); font-style: italic; }
+
 /* ===== Typography ===== */
 .label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.4px; display: block; }
 .value { font-size: 14px; font-weight: 600; }
@@ -197,6 +275,49 @@ body {
     font-weight: 700;
 }
 .badge-red { background: rgba(239,68,68,0.2); color: var(--red); }
+
+/* ===== Scan-state badge (S8) ===== */
+.scan-state-badge {
+    display: inline-block;
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    border: 1px solid transparent;
+    margin-left: 12px;
+    vertical-align: middle;
+}
+.scan-state-idle {
+    background: rgba(139,143,163,0.12);
+    color: var(--text-muted);
+    border-color: rgba(139,143,163,0.2);
+}
+.scan-state-disabled {
+    background: rgba(239,68,68,0.12);
+    color: var(--red);
+    border-color: rgba(239,68,68,0.25);
+}
+.scan-state-scanning {
+    background: rgba(59,130,246,0.12);
+    color: var(--blue);
+    border-color: rgba(59,130,246,0.3);
+}
+.scan-state-complete {
+    background: rgba(34,197,94,0.12);
+    color: var(--green);
+    border-color: rgba(34,197,94,0.3);
+}
+.scan-state-error {
+    background: rgba(239,68,68,0.2);
+    color: var(--red);
+    border-color: rgba(239,68,68,0.4);
+}
+.scan-state-stale {
+    background: rgba(249,115,22,0.12);
+    color: var(--orange);
+    border-color: rgba(249,115,22,0.3);
+}
 
 /* ===== Progress Bar ===== */
 .progress-bar {

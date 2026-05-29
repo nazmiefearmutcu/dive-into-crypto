@@ -1,23 +1,23 @@
 ' ============================================================
-' Trading Bot v1 - Masaustu Kisayolu Olusturucu
+' Trading Bot v1 - Desktop Shortcut Creator
 ' ============================================================
-' Bu .vbs dosyasini cift-tiklayin. Masaustunde "Trading Bot v1"
-' adli bir kisayol olusur. Tik = uygulama acilir.
+' Double-click this .vbs file. A shortcut named "Trading Bot v1"
+' is created on the desktop. Click = the application opens.
 ' ============================================================
 
 Set oWS = WScript.CreateObject("WScript.Shell")
 Set oFS = WScript.CreateObject("Scripting.FileSystemObject")
 
-' Bu .vbs dosyasinin bulundugu klasor (packaging/)
+' The folder this .vbs file is in (packaging/)
 sScriptDir = oFS.GetParentFolderName(WScript.ScriptFullName)
 sProjectRoot = oFS.GetParentFolderName(sScriptDir)
 sExe = sProjectRoot & "\dist\TradingBotV1\TradingBotV1.exe"
 sIcon = sScriptDir & "\tbv1.ico"
 
 If Not oFS.FileExists(sExe) Then
-    MsgBox "TradingBotV1.exe bulunamadi:" & vbCrLf & sExe & vbCrLf & vbCrLf & _
-           "Once packaging\build_windows.bat dosyasini calistirmaniz gerek.", _
-           vbCritical, "Trading Bot v1 - Kisayol olusturulamadi"
+    MsgBox "TradingBotV1.exe not found:" & vbCrLf & sExe & vbCrLf & vbCrLf & _
+           "You need to run packaging\build_windows.bat first.", _
+           vbCritical, "Trading Bot v1 - Shortcut could not be created"
     WScript.Quit 1
 End If
 
@@ -32,7 +32,7 @@ oLnk.Description = "Trading Bot v1 - Indicator Consensus Trading System"
 oLnk.WindowStyle = 1
 oLnk.Save
 
-MsgBox "Masaustu kisayolu olusturuldu!" & vbCrLf & vbCrLf & _
-       "Kisayol: " & sLnk & vbCrLf & _
-       "Hedef:   " & sExe, _
+MsgBox "Desktop shortcut created!" & vbCrLf & vbCrLf & _
+       "Shortcut: " & sLnk & vbCrLf & _
+       "Target:   " & sExe, _
        vbInformation, "Trading Bot v1"

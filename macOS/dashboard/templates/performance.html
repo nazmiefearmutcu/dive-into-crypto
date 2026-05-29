@@ -1,32 +1,48 @@
 {% extends "base.html" %}
-{% block title_extra %} - Performans{% endblock %}
+{% block title_extra %} - Performance{% endblock %}
 
 {% block content %}
 {% set s = status or {} %}
 {% set perf = s.get("performance") or {} %}
 {% set history = s.get("trade_history", []) %}
+{% set stale = data_stale if data_stale is defined else is_stale(s) %}
+{% set bot_off = not (bot_running if bot_running is defined else true) %}
 
 <div class="page-header">
-    <h1>Performans Özeti</h1>
-    <span class="update-time" id="last-update">Son güncelleme: {{ time_ago(s.get("last_update", "")) }}</span>
+    <h1>Performance Summary</h1>
+    <span class="update-time {% if stale %}stale{% endif %}" id="last-update">
+        Last update: {{ time_ago(s.get("last_update", "")) }}
+        {% if stale %}<span class="badge badge-red">STALE</span>{% endif %}
+    </span>
 </div>
+
+{% if bot_off %}
+<div class="snapshot-banner snapshot-banner-stopped">
+    <span class="snapshot-banner-icon" aria-hidden="true">⚠</span>
+    <span class="snapshot-banner-text">
+        <strong>Snapshot — Bot stopped.</strong>
+        Performance figures are frozen at the last trade history.
+        Unrealized PnL is not live.
+    </span>
+</div>
+{% endif %}
 
 <!-- Key Metrics -->
 <div class="grid grid-4">
     <div class="card metric-box">
-        <span class="label">Toplam İşlem</span>
+        <span class="label">Total Trades</span>
         <div class="big-number">{{ perf.get("total_trades", 0) }}</div>
     </div>
     <div class="card metric-box">
-        <span class="label">Kazanç / Kayıp</span>
+        <span class="label">Wins / Losses</span>
         <div class="big-number">{{ perf.get("wins", 0) }} / {{ perf.get("losses", 0) }}</div>
     </div>
     <div class="card metric-box">
-        <span class="label">Kazanma Oranı</span>
+        <span class="label">Win Rate</span>
         <div class="big-number">{{ perf.get("win_rate", 0) }}%</div>
     </div>
     <div class="card metric-box">
-        <span class="label">Toplam PnL</span>
+        <span class="label">Total PnL</span>
         <div class="big-number {{ 'positive' if perf.get('total_pnl', 0) >= 0 else 'negative' }}">
             ${{ perf.get("total_pnl", 0) | price }}
         </div>
@@ -37,55 +53,55 @@
 {% if perf.get("total_trades", 0) > 0 %}
 <div class="grid grid-3">
     <div class="card">
-        <h3>PnL Detayları</h3>
+        <h3>PnL Details</h3>
         <div class="metric-row">
-            <span>Ortalama PnL:</span>
+            <span>Average PnL:</span>
             <span class="{{ 'positive' if perf.get('avg_pnl', 0) >= 0 else 'negative' }}">
                 ${{ perf.get("avg_pnl", 0) | price }}
             </span>
         </div>
         <div class="metric-row">
-            <span>En İyi İşlem:</span>
+            <span>Best Trade:</span>
             <span class="positive">${{ perf.get("best_trade", 0) | price }}</span>
         </div>
         <div class="metric-row">
-            <span>En Kötü İşlem:</span>
+            <span>Worst Trade:</span>
             <span class="negative">${{ perf.get("worst_trade", 0) | price }}</span>
         </div>
         <div class="metric-row">
-            <span>Maks. Düşüş:</span>
+            <span>Max Drawdown:</span>
             <span class="negative">${{ perf.get("max_drawdown", 0) | price }}</span>
         </div>
     </div>
     <div class="card">
-        <h3>Ortalamalar</h3>
+        <h3>Averages</h3>
         <div class="metric-row">
-            <span>Ort. Kazanç:</span>
+            <span>Avg. Win:</span>
             <span class="positive">${{ perf.get("avg_win", 0) | price }}</span>
         </div>
         <div class="metric-row">
-            <span>Ort. Kayıp:</span>
+            <span>Avg. Loss:</span>
             <span class="negative">${{ perf.get("avg_loss", 0) | price }}</span>
         </div>
         <div class="metric-row">
-            <span>Kâr Faktörü:</span>
+            <span>Profit Factor:</span>
             <span>{{ "%.2f" | format(perf.get("profit_factor", 0)) }}</span>
         </div>
     </div>
     <div class="card">
-        <h3>Hesap</h3>
+        <h3>Account</h3>
         <div class="metric-row">
-            <span>Bakiye:</span>
+            <span>Balance:</span>
             <span>${{ s.get("balance", 0) | price }}</span>
         </div>
         <div class="metric-row">
-            <span>Günlük PnL:</span>
+            <span>Daily PnL:</span>
             <span class="{{ 'positive' if s.get('daily_pnl', 0) >= 0 else 'negative' }}">
                 ${{ s.get("daily_pnl", 0) | price }}
             </span>
         </div>
         <div class="metric-row">
-            <span>Gerçekleşmemiş:</span>
+            <span>Unrealized:</span>
             <span class="{{ 'positive' if s.get('unrealized_pnl', 0) >= 0 else 'negative' }}">
                 ${{ s.get("unrealized_pnl", 0) | price }}
             </span>
@@ -96,17 +112,17 @@
 
 <!-- Daily Summary Table -->
 <div class="card">
-    <h3>Günlük Özet</h3>
+    <h3>Daily Summary</h3>
     {% if daily_summaries %}
     <div class="table-wrap">
         <table>
             <thead>
                 <tr>
-                    <th>Tarih</th>
-                    <th>İşlemler</th>
-                    <th>Kazanç</th>
-                    <th>Kayıp</th>
-                    <th>Kazanma Oranı</th>
+                    <th>Date</th>
+                    <th>Trades</th>
+                    <th>Wins</th>
+                    <th>Losses</th>
+                    <th>Win Rate</th>
                     <th>PnL</th>
                 </tr>
             </thead>
@@ -127,24 +143,24 @@
         </table>
     </div>
     {% else %}
-    <div class="empty-state">Henüz günlük veri yok</div>
+    <div class="empty-state">No daily data yet</div>
     {% endif %}
 </div>
 
 <!-- Equity Curve (text-based) -->
 {% if history %}
 <div class="card">
-    <h3>İşlem Bazlı PnL</h3>
+    <h3>Per-Trade PnL</h3>
     <div class="table-wrap">
         <table>
             <thead>
                 <tr>
                     <th>#</th>
-                    <th>Sembol</th>
-                    <th>Yön</th>
+                    <th>Symbol</th>
+                    <th>Side</th>
                     <th>PnL</th>
-                    <th>Kümülatif</th>
-                    <th>Grafik</th>
+                    <th>Cumulative</th>
+                    <th>Chart</th>
                 </tr>
             </thead>
             <tbody>

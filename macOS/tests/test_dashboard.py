@@ -206,6 +206,7 @@ class TestSettingsPage:
     def test_settings_page_renders(self, client):
         r = client.get("/settings")
         assert r.status_code == 200
+        # Settings page heading is "Settings".
         assert "Settings" in r.text
         assert "paper" in r.text
 
@@ -253,18 +254,24 @@ class TestSettingsPage:
         assert data["indicator_weights"]["rsi"] == 2.0
         assert data["indicator_weights"]["macd"] == 3.0
 
-    def test_update_env(self, client):
+    def test_update_env_disabled_in_rescue_build(self, client):
+        """S7 contract: POST /settings/env must return 403 without mutating .env.
+
+        Replaces the legacy ``test_update_env`` which exercised the now-removed
+        write path. Comprehensive secret-leak / on-disk coverage lives in
+        ``test_s7_secret_guardrails.py``.
+        """
         r = client.post("/settings/env", data={
             "binance_api_key": "newkey12345678901234",
-            "binance_api_secret": "",  # empty = keep current
+            "binance_api_secret": "",
             "binance_testnet_api_key": "",
             "binance_testnet_api_secret": "",
             "use_testnet": "true",
         }, follow_redirects=False)
-        assert r.status_code == 303
+        assert r.status_code == 403
+        # USE_TESTNET must still be the original "false" from the fixture
         r2 = client.get("/api/env")
-        data = r2.json()
-        assert data["USE_TESTNET"] == "true"
+        assert r2.json()["USE_TESTNET"] == "false"
 
     def test_api_config_endpoint(self, client):
         r = client.get("/api/config")
@@ -294,11 +301,23 @@ class TestBotControl:
     def test_index_shows_start_button(self, client):
         r = client.get("/")
         assert r.status_code == 200
+        # Dashboard UI is in English — the stopped state shows "Start Bot",
+        # and "Bot stopped" in the uptime area.
         assert "Start Bot" in r.text
-        assert "Bot is stopped" in r.text
+        assert "Bot stopped" in r.text
 
     def test_bot_stop_when_not_running(self, client):
-        r = client.post("/api/bot/stop")
+        # `_stop_bot()` has two paths: (1) PID file says alive → SIGTERM it;
+        # (2) no PID file → pgrep fallback finds orphan `src.main` /
+        # `run_bot.py` processes and SIGTERMs them. The client fixture isolates
+        # PID_FILE to tmp_path, but pgrep still runs against the host. To prove
+        # the "nothing to stop → not_running" contract honestly, we have to
+        # make the pgrep fallback return empty so the test does not pick up
+        # whatever happens to be running on the developer's machine.
+        import subprocess as _subprocess
+        empty = _subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="")
+        with patch("dashboard.app.subprocess.run", return_value=empty):
+            r = client.post("/api/bot/stop")
         assert r.status_code == 200
         data = r.json()
         assert data["status"] == "not_running"

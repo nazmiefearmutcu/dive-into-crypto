@@ -6,15 +6,15 @@ have monetary consequences.
 
 ## Easiest contributions
 
-- **Issue triage** — if a `Tarama` scan misbehaves on a specific symbol,
+- **Issue triage** — if a `Scanner` scan misbehaves on a specific symbol,
   open an issue with the symbol, timeframe, and the relevant logs from
-  the `Loglar` tab.
-- **Indicator tuning** — the 15 indicator weights are in
-  `macOS/services/signal.py`. PRs that adjust weights with a quantified
+  the `Logs` tab.
+- **Indicator tuning** — the 15 indicator weights live in
+  `macOS/config/default.yaml` (`indicator_weights`). PRs that adjust weights with a quantified
   out-of-sample backtest on named data are welcome.
-- **Turkish error code reviews** — the `windows/` build ships 20 TR-NN
-  user-facing errors. PRs that clarify wording or add new error codes
-  are welcome.
+- **Error-code reviews** — the `windows/` build ships 20 user-facing
+  error codes (E001–E020). PRs that clarify wording or add new error
+  codes are welcome.
 
 ## Code contributions
 

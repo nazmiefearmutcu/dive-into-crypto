@@ -1,122 +1,122 @@
-# Trading Bot v1 - Windows Surumu
+# Trading Bot v1 - Windows Edition
 
-Tek tikla baslayan, ikonlu, native Windows uygulamasi olarak paketlenmis Trading Bot v1.
+Trading Bot v1 packaged as a one-click, iconed, native Windows application.
 
-> **Mevcut TBV1 kaynagi**: `/Users/nazmi/Desktop/Projeler/proje/yedek/TBV1_backup/` (degistirilmedi)
-> **Bu paket**: `~/Desktop/Projeler/proje/TBV1_Windows/` (Windows .exe icin yeni paketleme katmani)
+> **Existing TBV1 source**: copied unchanged from the local TBV1 backup folder.
+> **This package**: `~/Desktop/Projeler/proje/TBV1_Windows/` (new packaging layer for the Windows .exe)
 
-## Hizli Bakis
+## Quick Overview
 
 ```
 TBV1_Windows/
-├── app/                    Trading bot kaynak kodu (TBV1_backup'tan kopyalandi)
-│   ├── src/                15+ indikatorlu consensus engine
+├── app/                    Trading bot source code (copied from TBV1_backup)
+│   ├── src/                Consensus engine with 15+ indicators
 │   ├── dashboard/          FastAPI dashboard (HTML/CSS/JS)
 │   ├── config/             default.yaml
-│   ├── runtime/            (calistirildiginda log/state buraya)
+│   ├── runtime/            (log/state goes here when run)
 │   └── requirements.txt
 ├── launcher/
 │   ├── tbv1_launcher.py    Tkinter splash + preflight + uvicorn + browser
-│   └── error_codes.py      E001..E020 hata katalogu (Turkce)
+│   └── error_codes.py      E001..E020 error catalog (English)
 ├── packaging/
-│   ├── TradingBotV1.spec   PyInstaller spec (Windows .exe icin)
-│   ├── build_windows.bat   1-tik build script
-│   ├── run_dev.bat         Gelistirici modu (build'siz)
-│   ├── create_shortcut.vbs Masaustu kisayol olusturucu
-│   ├── tbv1.ico            Windows ikonu (7 resolutionlu)
+│   ├── TradingBotV1.spec   PyInstaller spec (for the Windows .exe)
+│   ├── build_windows.bat   1-click build script
+│   ├── run_dev.bat         Developer mode (no build)
+│   ├── create_shortcut.vbs Desktop shortcut creator
+│   ├── tbv1.ico            Windows icon (7 resolutions)
 │   ├── tbv1_256.png        256x256 PNG (Tkinter fallback)
-│   └── icon_source.png     Orijinal kaynak gorsel
+│   └── icon_source.png     Original source image
 └── docs/
-    ├── KURULUM.md          Adim-adim Windows kurulum kilavuzu
-    └── HATA_KODLARI.md     E001..E020 Turkce aciklamalar
+    ├── SETUP.md            Step-by-step Windows setup guide
+    └── ERROR_CODES.md      E001..E020 English descriptions
 ```
 
-## Calistirma
+## Running
 
-### Windows'ta hazir .exe varsa
-1. `dist\TradingBotV1\TradingBotV1.exe` cift-tikla
-2. `Botu Calistir` butonuna bas
-3. Tarayici otomatik acilir, dashboard hazir
+### If a ready-made .exe is available on Windows
+1. Double-click `dist\TradingBotV1\TradingBotV1.exe`
+2. Press the `Start Bot` button
+3. The browser opens automatically; the dashboard is ready
 
-### Windows'ta kaynaktan derlemek
-1. `packaging\build_windows.bat` cift-tikla (5-10 dakika)
-2. `dist\TradingBotV1\TradingBotV1.exe` cift-tikla
+### Building from source on Windows
+1. Double-click `packaging\build_windows.bat` (5-10 minutes)
+2. Double-click `dist\TradingBotV1\TradingBotV1.exe`
 
-### Gelistirici modu (build'siz)
-1. `packaging\run_dev.bat` cift-tikla
+### Developer mode (no build)
+1. Double-click `packaging\run_dev.bat`
 
-Detayli kurulum: **[docs/KURULUM.md](docs/KURULUM.md)**
+Detailed setup: **[docs/SETUP.md](docs/SETUP.md)**
 
-## Ozellikler
+## Features
 
-- ✓ **Tek-tik calistirma** - native Windows uygulamasi gibi davranir
-- ✓ **TB ikonu** - tum boyutlarda (16/24/32/48/64/128/256 px), task bar'da net
-- ✓ **Otomatik tarayici acma** - varsayilan tarayicinizda yeni sekme
-- ✓ **Tarayici uyari ekrani** - "Dashboard tarayicinizda acildi" bilgilendirme dialog
-- ✓ **Tkinter status penceresi** - Calisiyor / Durduruldu / Hata durumu canli
-- ✓ **20 farkli hata kodu** - her hata icin Turkce baslik + neden + cozum
-- ✓ **Tek-instance kilidi** - ayni anda iki kopya acilirsa `E015` ile uyarir
-- ✓ **Stale-lock kurtarma** - 3 dakikadan eski kilitler otomatik temizlenir
-- ✓ **Crash supervisor** - dashboard cokerse otomatik restart
-- ✓ **Yazilabilir runtime** - log/state .exe'nin yaninda kullanici-yazilabilir klasorde
-- ✓ **launcher.log** - tum olaylar timestamp + level ile loglanir
+- ✓ **One-click run** - behaves like a native Windows application
+- ✓ **TB icon** - at every size (16/24/32/48/64/128/256 px), crisp in the task bar
+- ✓ **Automatic browser launch** - a new tab in your default browser
+- ✓ **Browser notice screen** - a "Dashboard opened in your browser" info dialog
+- ✓ **Tkinter status window** - live Running / Stopped / Error state
+- ✓ **20 distinct error codes** - an English title + cause + remedy for each error
+- ✓ **Single-instance lock** - if two copies are opened at once, it warns with `E015`
+- ✓ **Stale-lock recovery** - locks older than 3 minutes are cleared automatically
+- ✓ **Crash supervisor** - if the dashboard crashes, it auto-restarts
+- ✓ **Writable runtime** - log/state in a user-writable folder next to the .exe
+- ✓ **launcher.log** - all events are logged with timestamp + level
 
-## Hata Yonetimi
+## Error Handling
 
-Hata olustugunda kullaniciya gosterilen ekran:
+The screen shown to the user when an error occurs:
 
 ```
 ┌─────────────────────────────────────────────┐
-│ ▓▓▓ E003 ▓▓▓                                 │  ← kirmizi (fatal) / sari (warning)
+│ ▓▓▓ E003 ▓▓▓                                 │  ← red (fatal) / yellow (warning)
 ├─────────────────────────────────────────────┤
-│ Port 8080 baskasi tarafindan kullaniliyor   │
+│ Port 8080 is in use by another process      │
 │                                              │
-│ Olasi neden:                                 │
-│ Bilgisayarda baska bir program 8080 numarali │
-│ portu acmis. (Onceki TBV1 hala calisiyor.)   │
+│ Possible cause:                              │
+│ Another program on the computer has opened   │
+│ port 8080. (A previous TBV1 is still up.)    │
 │                                              │
-│ Cozum:                                       │
-│ Gorev Yoneticisi > Ayrintilar sekmesinden    │
-│ 'python.exe' veya 'TradingBotV1.exe'        │
-│ surecini bitirin. Sonra tekrar deneyin.     │
+│ Remedy:                                      │
+│ In Task Manager > Details tab, end the       │
+│ 'python.exe' or 'TradingBotV1.exe'           │
+│ process. Then try again.                     │
 │                                              │
-│ Detay:                                       │
+│ Detail:                                      │
 │ 127.0.0.1:8080                              │
 │                                              │
-│              [Logu Ac]      [Tamam]         │
+│              [Open Log]     [OK]            │
 └─────────────────────────────────────────────┘
 ```
 
-Tum hata kodlari listesi: **[docs/HATA_KODLARI.md](docs/HATA_KODLARI.md)**
+Full list of error codes: **[docs/ERROR_CODES.md](docs/ERROR_CODES.md)**
 
-## Sistem Mimarisi
+## System Architecture
 
 ```
-Cift-tik (.exe)
+Double-click (.exe)
     │
     ▼
 TradingBotV1.exe         (PyInstaller --onedir bundle)
     │
-    ├── tbv1_launcher.py (Tkinter ana surec, GUI)
+    ├── tbv1_launcher.py (Tkinter main process, GUI)
     │       │
-    │       ├── Preflight checks (Python, port, config, izin, RAM, lock)
-    │       │       ↓ herhangi biri basarisiz → LauncherError(E0xx)
+    │       ├── Preflight checks (Python, port, config, permissions, RAM, lock)
+    │       │       ↓ if any fails → LauncherError(E0xx)
     │       │
-    │       ├── uvicorn (worker thread, ayni surecte)
+    │       ├── uvicorn (worker thread, same process)
     │       │       └── dashboard.app:app (FastAPI)
     │       │
     │       └── webbrowser.open("http://127.0.0.1:8080")
     │
     ▼
-Varsayilan tarayici → Dashboard UI
+Default browser → Dashboard UI
 ```
 
-## Sinirlamalar
+## Limitations
 
-- macOS'tan Windows .exe **build edilemez** (PyInstaller cross-compile desteklemiyor). Build islemi Windows'ta yapilmalidir.
-- `--onedir` modunda toplam boyut ~250-350 MB (pandas/numpy dahil). Bu PyInstaller ile pratik minimum.
-- Imzalanmamis .exe ilk acilista SmartScreen uyarisi alir; kullanici "Yine de calistir" tiklamalidir. (Kod imzalama sertifikasi ile bu uyari kaldirilabilir.)
+- A Windows .exe **cannot be built** from macOS (PyInstaller does not support cross-compilation). The build must be done on Windows.
+- In `--onedir` mode the total size is ~250-350 MB (including pandas/numpy). This is the practical minimum with PyInstaller.
+- An unsigned .exe triggers a SmartScreen warning on first launch; the user must click "Run anyway". (This warning can be removed with a code-signing certificate.)
 
-## Lisans ve Sorumluluk
+## License and Liability
 
-Bu paket Trading Bot v1'in Windows .exe formatina paketlenmis halidir. Trading kararlarinin sorumluluk kullanicidadir. Paper-trading modunda gelistirici tarafindan test edilmistir, canli trading kullanicinin riski altinda yapilir.
+This package is Trading Bot v1 packaged into a Windows .exe format. The user is responsible for trading decisions. It has been tested by the developer in paper-trading mode; live trading is done at the user's own risk.
