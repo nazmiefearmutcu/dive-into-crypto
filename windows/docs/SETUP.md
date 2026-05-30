@@ -18,7 +18,7 @@ If you were given a ready-made `TradingBotV1` folder:
 3. **Double-click TradingBotV1.exe**.
 
 4. On the first launch, a **Windows SmartScreen** warning may appear:
-   - It says "protected your PC".
+   - It reads "Windows protected your PC".
    - Click `More info` -> `Run anyway`.
    - This is the normal warning that every user sees for unsigned executables.
 

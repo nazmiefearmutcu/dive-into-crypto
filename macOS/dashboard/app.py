@@ -1340,27 +1340,27 @@ TRADING_MODES = {
         "label": "Scalp",
         "stop_loss_pct": 0.005,                # 0.5% price move
         "take_profit_pct": 0.01,               # 1% price move
-        "trailing_stop_pct": 0.003,            # %0.3
-        "trailing_stop_activation_pct": 0.005, # %0.5
-        "break_even_trigger_pct": 0.004,       # %0.4
+        "trailing_stop_pct": 0.003,            # 0.3%
+        "trailing_stop_activation_pct": 0.005, # 0.5%
+        "break_even_trigger_pct": 0.004,       # 0.4%
         "desc": "Fast in-and-out, tight SL/TP",
     },
     "normal": {
         "label": "Normal",
         "stop_loss_pct": 0.015,                # 1.5% price move
         "take_profit_pct": 0.03,               # 3% price move
-        "trailing_stop_pct": 0.01,             # %1
-        "trailing_stop_activation_pct": 0.015, # %1.5
-        "break_even_trigger_pct": 0.01,        # %1
+        "trailing_stop_pct": 0.01,             # 1%
+        "trailing_stop_activation_pct": 0.015, # 1.5%
+        "break_even_trigger_pct": 0.01,        # 1%
         "desc": "Standard swing trading",
     },
     "long_term": {
         "label": "Long Term",
         "stop_loss_pct": 0.04,                 # 4% price move
         "take_profit_pct": 0.10,               # 10% price move
-        "trailing_stop_pct": 0.03,             # %3
-        "trailing_stop_activation_pct": 0.04,  # %4
-        "break_even_trigger_pct": 0.025,       # %2.5
+        "trailing_stop_pct": 0.03,             # 3%
+        "trailing_stop_activation_pct": 0.04,  # 4%
+        "break_even_trigger_pct": 0.025,       # 2.5%
         "desc": "Wide SL/TP, patient position",
     },
 }

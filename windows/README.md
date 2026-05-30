@@ -50,7 +50,7 @@ Detailed setup: **[docs/SETUP.md](docs/SETUP.md)**
 ## Features
 
 - ✓ **One-click run** - behaves like a native Windows application
-- ✓ **TB icon** - at every size (16/24/32/48/64/128/256 px), crisp in the task bar
+- ✓ **TB icon** - at every size (16/24/32/48/64/128/256 px), crisp in the taskbar
 - ✓ **Automatic browser launch** - a new tab in your default browser
 - ✓ **Browser notice screen** - a "Dashboard opened in your browser" info dialog
 - ✓ **Tkinter status window** - live Running / Stopped / Error state

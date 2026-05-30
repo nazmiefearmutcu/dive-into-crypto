@@ -74,7 +74,7 @@
     <div class="scanner-header">
         <h3>Auto-Scan Results</h3>
         <span id="auto-scan-meta" class="muted">
-            Son: {{ format_dt(s.get("last_auto_scan", "")) }} |
+            Last: {{ format_dt(s.get("last_auto_scan", "")) }} |
             {{ s.get("last_scan_total", 0) }} coins | Every 10 min | 12 timeframes
         </span>
     </div>
@@ -456,7 +456,7 @@ function _renderAutoScanTable(data) {
             String(dt.getMinutes()).padStart(2,'0') + ":" +
             String(dt.getSeconds()).padStart(2,'0');
     }
-    meta.textContent = "Son: " + tsStr + " | " + (data.last_scan_total || 0) + " coin | Her 10dk | 12 zaman dilimi";
+    meta.textContent = "Last: " + tsStr + " | " + (data.last_scan_total || 0) + " coins | Every 10 min | 12 timeframes";
 
     if (results.length === 0) {
         document.getElementById("auto-scan-table-wrap").innerHTML =

@@ -49,7 +49,7 @@ try:
     import tkinter as tk
     from tkinter import ttk, scrolledtext, messagebox
 except Exception:  # pragma: no cover - tkinter is a system package
-    sys.stderr.write("FATAL: Tkinter not found. This is impossible for this Windows .exe. Your Python installation is broken.\n")
+    sys.stderr.write("FATAL: Tkinter not found. This should never happen in this Windows .exe; your Python installation is broken.\n")
     sys.exit(2)
 
 # Error catalog - in the same folder
@@ -214,7 +214,7 @@ def check_env_file(root: Path, log: Logger) -> None:
     """If .env is missing, warn (not fatal — paper mode keeps running)."""
     env = root / ".env"
     if not env.exists():
-        log.warn(f"[E006] .env not found: {env} -- can continue in paper-trading mode.")
+        log.warn(f"[E006] .env not found: {env} -- the bot can keep running in paper-trading mode.")
 
 
 def check_writable(root: Path) -> None:
@@ -298,7 +298,7 @@ class DashboardProcess:
             self._start_subprocess()
 
     def _start_inproc(self) -> None:
-        """In single-exe mode, since the sub-Python is split off, run uvicorn in a thread in the same process.
+        """In single-exe mode there is no separate Python to spawn, so run uvicorn on a worker thread within this process.
 
         Tkinter mainloop on the main thread; uvicorn on a worker thread."""
         def runner():
@@ -522,7 +522,7 @@ class LauncherApp:
             self.log.info("[4/7] Acquiring single-instance lock...")
             self.lock_file = acquire_lock(root)
 
-            self.log.info("[5/7] Is port 8080 free?")
+            self.log.info("[5/7] Checking whether port 8080 is free...")
             check_port_free(DEFAULT_HOST, DEFAULT_PORT)
 
             self.log.info("[6/7] Reading configuration files...")
@@ -670,7 +670,7 @@ class LauncherApp:
             if not messagebox.askyesno(
                 "Exit Confirmation",
                 "The bot is running. Are you sure you want to exit?\n"
-                "All open operations will be saved and closed."
+                "Any open positions will be saved before shutdown."
             ):
                 return
             self.stop_bot()
