@@ -194,13 +194,15 @@ def _merge_auto_scan_snapshot(status: dict, auto_scan: object) -> dict:
                 continue
             if key == "last_scan_results" and not isinstance(value, list):
                 continue
-            if key in {"last_scan_total", "last_scan_hot_count"} and not isinstance(value, (int, float)):
+            if key in {"last_scan_total", "last_scan_hot_count"} and (
+                isinstance(value, bool) or not isinstance(value, (int, float))
+            ):
                 continue
             status[key] = value
         if isinstance(auto_results, list):
-            if not isinstance(auto.get("last_scan_total"), (int, float)):
+            if isinstance(auto.get("last_scan_total"), bool) or not isinstance(auto.get("last_scan_total"), (int, float)):
                 status["last_scan_total"] = len(auto_results)
-            if not isinstance(auto.get("last_scan_hot_count"), (int, float)):
+            if isinstance(auto.get("last_scan_hot_count"), bool) or not isinstance(auto.get("last_scan_hot_count"), (int, float)):
                 status["last_scan_hot_count"] = 0
         if isinstance(auto.get("last_auto_scan"), str):
             status["last_update"] = auto["last_auto_scan"]
@@ -211,7 +213,9 @@ def _merge_auto_scan_snapshot(status: dict, auto_scan: object) -> dict:
                 continue
             if key == "last_scan_results" and not isinstance(value, list):
                 continue
-            if key in {"last_scan_total", "last_scan_hot_count"} and not isinstance(value, (int, float)):
+            if key in {"last_scan_total", "last_scan_hot_count"} and (
+                isinstance(value, bool) or not isinstance(value, (int, float))
+            ):
                 continue
             status[key] = value
 
