@@ -81,6 +81,14 @@ def _coerce_number(value: Any) -> int | float:
     return 0
 
 
+def _coerce_optional_number(value: Any) -> int | float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)) and math.isfinite(value):
+        return value
+    return None
+
+
 class StatusExporter:
     """Exports a dashboard-consumable JSON snapshot after every bot cycle."""
 
@@ -138,6 +146,13 @@ class StatusExporter:
             signal_price = current_price
         if display_price is _UNSET:
             display_price = current_price
+        signal_price = _coerce_optional_number(signal_price)
+        display_price = _coerce_optional_number(display_price)
+        current_price = _coerce_optional_number(current_price)
+        mark_price = _coerce_optional_number(mark_price)
+        best_bid = _coerce_optional_number(best_bid)
+        best_ask = _coerce_optional_number(best_ask)
+        price_age_ms = _coerce_number(price_age_ms) if price_age_ms is not None else None
 
         config = config if isinstance(config, dict) else {}
         state = state if isinstance(state, dict) else {}
@@ -205,10 +220,7 @@ class StatusExporter:
                     continue
                 price = prices.get(sym)
                 if price is not None:
-                    try:
-                        price_val = float(price)
-                    except Exception:
-                        price_val = None
+                    price_val = _coerce_optional_number(price)
                     if price_val is not None:
                         p["current_price"] = price_val
                         if pos.get("side") == "LONG":
