@@ -749,7 +749,8 @@ def api_active_coin_signals():
         multi_results = []
     auto_dt = _parse_iso_datetime(auto_scan_time) if isinstance(auto_scan_time, str) else None
     multi_dt = _parse_iso_datetime(multi_scan_time) if isinstance(multi_scan_time, str) else None
-    if isinstance(multi_results, list) and (not scan_results or (multi_dt is not None and (auto_dt is None or multi_dt > auto_dt))):
+    multi_is_newer = multi_dt is not None and (auto_dt is None or multi_dt > auto_dt)
+    if isinstance(multi_results, list) and (multi_is_newer or (not scan_results and auto_dt is None)):
         scan_results = multi_results
 
     for coin in scan_results:
@@ -2207,6 +2208,10 @@ def _prefer_fresher_multi_scan_snapshot(saved: dict[str, Any], progress: dict[st
     if isinstance(progress_results, list):
         merged["cross_ranking"] = progress_results
         merged["last_scan_results"] = progress_results
+    progress_common_symbols = progress.get("common_symbols")
+    merged["common_symbols"] = progress_common_symbols if isinstance(progress_common_symbols, list) else []
+    progress_timeframes = progress.get("timeframes")
+    merged["timeframes"] = progress_timeframes if isinstance(progress_timeframes, dict) else {}
     for key in ("last_auto_scan", "scan_time"):
         value = progress.get("last_auto_scan") or progress.get("completed_at")
         if isinstance(value, str):
@@ -2219,8 +2224,12 @@ def _prefer_fresher_multi_scan_snapshot(saved: dict[str, Any], progress: dict[st
         merged["warnings"] = list(warnings)
     if isinstance(progress.get("last_scan_total"), (int, float)) and not isinstance(progress.get("last_scan_total"), bool):
         merged["last_scan_total"] = progress["last_scan_total"]
+    elif isinstance(progress_results, list):
+        merged["last_scan_total"] = len(progress_results)
     if isinstance(progress.get("last_scan_hot_count"), (int, float)) and not isinstance(progress.get("last_scan_hot_count"), bool):
         merged["last_scan_hot_count"] = progress["last_scan_hot_count"]
+    else:
+        merged["last_scan_hot_count"] = len(merged["common_symbols"])
     return merged
 
 

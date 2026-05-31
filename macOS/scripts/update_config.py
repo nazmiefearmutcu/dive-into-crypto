@@ -26,16 +26,17 @@ from src.utils.validators import validate_config
 DEFAULT_CONFIG_PATH = project_root / "config" / "default.yaml"
 
 
-def load_config(path: Path) -> dict:
+def load_config(path: Path, *, validate: bool = True) -> dict:
     with open(path, encoding="utf-8") as f:
         config = yaml.safe_load(f)
     if config is None:
         return {}
     if not isinstance(config, dict):
         raise ValueError(f"Config file {path} must contain a top-level mapping")
-    errors = validate_config(config)
-    if errors:
-        raise ValueError(f"Config validation failed: {'; '.join(errors)}")
+    if validate:
+        errors = validate_config(config)
+        if errors:
+            raise ValueError(f"Config validation failed: {'; '.join(errors)}")
     return config
 
 
@@ -104,7 +105,7 @@ def main():
         sys.exit(1)
 
     try:
-        config = load_config(config_path)
+        config = load_config(config_path, validate=not args.show)
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(1)

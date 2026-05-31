@@ -17,7 +17,6 @@ project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.persistence.schemas import DashboardStatusSchema, StateSchema
-from src.utils.validators import validate_state
 
 
 def load_json(path: Path) -> dict | None:
@@ -89,8 +88,6 @@ def _has_valid_status_snapshot(value: object) -> bool:
 def _has_valid_state_snapshot(value: object) -> bool:
     if not isinstance(value, dict):
         return False
-    if not validate_state(value):
-        return False
     try:
         StateSchema.from_legacy(value)
     except Exception:
@@ -156,6 +153,8 @@ def _merge_multi_scan_snapshot(status: dict, multi_scan: object) -> dict:
         status["status_warnings"] = warnings
 
     scan_time = multi.get("scan_time")
+    common_symbols = multi.get("common_symbols")
+    common_count = len(common_symbols) if isinstance(common_symbols, list) else 0
     if isinstance(scan_time, str) and scan_time and _is_newer_snapshot(scan_time, status.get("last_auto_scan") or status.get("last_update")):
         status["last_auto_scan"] = scan_time
         status["last_update"] = scan_time
@@ -165,7 +164,7 @@ def _merge_multi_scan_snapshot(status: dict, multi_scan: object) -> dict:
             timeframes = multi.get("timeframes") if isinstance(multi.get("timeframes"), dict) else {}
             totals = [int(t.get("total_scanned", 0)) for t in timeframes.values() if isinstance(t, dict) and isinstance(t.get("total_scanned"), (int, float))]
             status["last_scan_total"] = max(totals or [len(cross_ranking)])
-            status["last_scan_hot_count"] = len(multi.get("common_symbols", []))
+            status["last_scan_hot_count"] = common_count
     else:
         cross_ranking = multi.get("cross_ranking")
         if isinstance(cross_ranking, list) and not status.get("last_scan_results"):
@@ -173,7 +172,7 @@ def _merge_multi_scan_snapshot(status: dict, multi_scan: object) -> dict:
             timeframes = multi.get("timeframes") if isinstance(multi.get("timeframes"), dict) else {}
             totals = [int(t.get("total_scanned", 0)) for t in timeframes.values() if isinstance(t, dict) and isinstance(t.get("total_scanned"), (int, float))]
             status["last_scan_total"] = max(totals or [len(cross_ranking)])
-            status["last_scan_hot_count"] = len(multi.get("common_symbols", []))
+            status["last_scan_hot_count"] = common_count
     return status
 
 
@@ -188,6 +187,7 @@ def _merge_auto_scan_snapshot(status: dict, auto_scan: object) -> dict:
         status["status_warnings"] = warnings
 
     if _is_newer_snapshot(auto.get("last_auto_scan"), status.get("last_auto_scan") or status.get("last_update")):
+        auto_results = auto.get("last_scan_results")
         for key in ("last_auto_scan", "last_scan_results", "last_scan_total", "last_scan_hot_count"):
             value = auto.get(key)
             if value is None:
@@ -197,6 +197,11 @@ def _merge_auto_scan_snapshot(status: dict, auto_scan: object) -> dict:
             if key in {"last_scan_total", "last_scan_hot_count"} and not isinstance(value, (int, float)):
                 continue
             status[key] = value
+        if isinstance(auto_results, list):
+            if not isinstance(auto.get("last_scan_total"), (int, float)):
+                status["last_scan_total"] = len(auto_results)
+            if not isinstance(auto.get("last_scan_hot_count"), (int, float)):
+                status["last_scan_hot_count"] = 0
         if isinstance(auto.get("last_auto_scan"), str):
             status["last_update"] = auto["last_auto_scan"]
     else:
