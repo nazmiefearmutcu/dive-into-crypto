@@ -4,6 +4,7 @@ The bot writes runtime/dashboard_status.json atomically.
 The dashboard reads it. No shared memory, no IPC, no sockets.
 """
 
+import math
 from pathlib import Path
 from typing import Any
 
@@ -76,7 +77,7 @@ def _coerce_number(value: Any) -> int | float:
     if isinstance(value, bool):
         return 0
     if isinstance(value, (int, float)):
-        return value
+        return value if math.isfinite(value) else 0
     return 0
 
 
@@ -257,26 +258,26 @@ class StatusExporter:
             "best_ask": best_ask,
             "last_update": iso_now(),
             "cycle_count": cycle_count,
-            "balance": round(balance, 4),
-            "daily_pnl": round(state.get("daily_pnl", 0.0), 4),
-            "total_pnl": round(state.get("total_realized_pnl", 0.0), 4),
+            "balance": round(_coerce_number(balance), 4),
+            "daily_pnl": round(_coerce_number(state.get("daily_pnl", 0.0)), 4),
+            "total_pnl": round(_coerce_number(state.get("total_realized_pnl", 0.0)), 4),
             "unrealized_pnl": round(total_unrealized, 4),
-            "daily_start_balance": round(state.get("daily_start_balance", balance), 4),
+            "daily_start_balance": round(_coerce_number(state.get("daily_start_balance", balance)), 4),
             "open_positions_count": len(open_positions),
             "open_positions": open_positions,
             "latest_decision": {
                 "action": decision_data.get("action", "N/A"),
                 "signal": consensus_data.get("final_signal", "N/A"),
-                "confidence": consensus_data.get("confidence", 0),
+                "confidence": _coerce_number(consensus_data.get("confidence", 0)),
                 "risk_level": consensus_data.get("risk_level", "N/A"),
-                "weighted_score": round(consensus_data.get("weighted_score", 0), 4),
+                "weighted_score": round(_coerce_number(consensus_data.get("weighted_score", 0)), 4),
                 "reason": decision_data.get("reason", ""),
                 "should_trade": consensus_data.get("should_trade", False),
                 # `price` is decision metadata — pin it to signal_price
                 # (the candle close the decision engine acted on), NOT the
                 # freshest live tick. See test_status_exporter_canonical.
                 "price": signal_price,
-                "leverage": decision_data.get("leverage", 1),
+                "leverage": _coerce_number(decision_data.get("leverage", 1)),
                 "timestamp": decision_data.get("timestamp", ""),
             },
             "indicator_votes": indicator_votes,
