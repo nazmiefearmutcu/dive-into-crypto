@@ -1657,9 +1657,9 @@ class BotService:
                 "error": True,
                 "reason": "auto_scan_failed",
                 "last_auto_scan": scan_time,
-                "last_scan_results": self.state_store.get("last_scan_results"),
-                "last_scan_hot_count": self.state_store.get("last_scan_hot_count"),
-                "last_scan_total": self.state_store.get("last_scan_total"),
+                "last_scan_results": [],
+                "last_scan_hot_count": 0,
+                "last_scan_total": 0,
             })
             self._scanning_active = False
 
@@ -1968,9 +1968,9 @@ class BotService:
                 "error": True,
                 "reason": "multi_scan_processing_failed",
                 "last_auto_scan": scan_time,
-                "last_scan_results": self.state_store.get("last_scan_results"),
-                "last_scan_hot_count": self.state_store.get("last_scan_hot_count"),
-                "last_scan_total": self.state_store.get("last_scan_total"),
+                "last_scan_results": [],
+                "last_scan_hot_count": 0,
+                "last_scan_total": 0,
             })
         finally:
             self._last_auto_scan_time = time.time()
