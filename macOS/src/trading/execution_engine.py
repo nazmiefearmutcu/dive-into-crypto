@@ -33,7 +33,10 @@ class ExecutionEngine:
         self.config = config
         self.client = binance_client
         self.position_manager = position_manager
-        self.mode = config.get("mode", "paper")
+        mode = config.get("mode", "paper")
+        self.mode = mode.strip().lower() if isinstance(mode, str) else "paper"
+        if self.mode not in {"paper", "live"}:
+            raise ValueError(f"Invalid mode: {self.mode}")
         self.paper_config = config.get("paper", {})
         self.paper_balance: float = self.paper_config.get("starting_balance", 10000.0)
         self.paper_fee_pct: float = self.paper_config.get("fee_pct", 0.001)
@@ -55,8 +58,9 @@ class ExecutionEngine:
 
         if self.mode == "paper":
             return self._execute_paper(action, symbol, quantity, price, decision["reason"], leverage)
-        else:
+        if self.mode == "live":
             return self._execute_live(action, symbol, quantity, price, decision["reason"], leverage)
+        raise ValueError(f"Invalid execution mode: {self.mode}")
 
     def _execute_paper(
         self,
@@ -246,6 +250,11 @@ class ExecutionEngine:
                 logger.info(f"[LIVE] Leverage set to {leverage}x for {symbol}")
             except Exception as e:
                 logger.error(f"Failed to set leverage for {symbol}: {e}")
+                return {
+                    "executed": False,
+                    "action": action.value,
+                    "reason": f"Failed to set leverage for {symbol}: {e}",
+                }
 
         if action == TradeAction.OPEN_LONG:
             # Round quantity to symbol precision

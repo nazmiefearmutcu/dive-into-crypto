@@ -63,7 +63,10 @@ class DecisionEngine:
         #     CLOSED — surface a clear warning rather than pretend we closed.
         #   - signal reversal: AUTO-CLOSE in both modes (already routed
         #     through ExecutionEngine.execute, which guards live shorts).
-        mode = self.config.get("mode", "paper")
+        mode_value = self.config.get("mode", "paper")
+        mode = mode_value.strip().lower() if isinstance(mode_value, str) else "paper"
+        if mode not in {"paper", "live"}:
+            raise ValueError(f"Invalid mode: {mode}")
         if has_position and position:
             exit_reason = self.position_manager.update_position(symbol, current_price)
             if exit_reason:
@@ -142,7 +145,10 @@ class DecisionEngine:
 
         # Calculate dynamic leverage for futures
         leverage = 1
-        market_type = self.config.get("market_type", "spot")
+        market_type_value = self.config.get("market_type", "spot")
+        market_type = market_type_value.strip().lower() if isinstance(market_type_value, str) else "spot"
+        if market_type not in {"spot", "futures"}:
+            raise ValueError(f"Invalid market_type: {market_type}")
         if market_type == "futures" and self.leverage_manager:
             leverage = self.leverage_manager.calculate_leverage(symbol, confidence)
 

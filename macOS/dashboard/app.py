@@ -17,32 +17,152 @@ import re
 import signal
 import subprocess
 import sys
+import time
+import tempfile
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
 import yaml
 from fastapi import FastAPI, Request, Query, Form
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from src.monitoring.metrics import compute_daily_summary
+
+from src.utils.logger import get_logger  # noqa: E402
+from src.utils.validators import validate_config, validate_symbol
 
 # Resolve paths
 DASHBOARD_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = DASHBOARD_DIR.parent
-RUNTIME_DIR = PROJECT_ROOT / "runtime"
-STATUS_FILE = RUNTIME_DIR / "dashboard_status.json"
-STATE_FILE = RUNTIME_DIR / "state.json"
-LOG_FILE = RUNTIME_DIR / "bot.log"
+DEFAULT_RUNTIME_DIR = PROJECT_ROOT / "runtime"
+RUNTIME_DIR = DEFAULT_RUNTIME_DIR
+STATUS_FILE = DEFAULT_RUNTIME_DIR / "dashboard_status.json"
+STATE_FILE = DEFAULT_RUNTIME_DIR / "state.json"
+LOG_FILE = DEFAULT_RUNTIME_DIR / "bot.log"
 CONFIG_FILE = PROJECT_ROOT / "config" / "default.yaml"
 ENV_FILE = PROJECT_ROOT / ".env"
-SYMBOL_FILE = RUNTIME_DIR / "active_symbol.txt"
-COMMAND_QUEUE_FILE = RUNTIME_DIR / "command_queue.json"
+SYMBOL_FILE = DEFAULT_RUNTIME_DIR / "active_symbol.txt"
+COMMAND_QUEUE_FILE = DEFAULT_RUNTIME_DIR / "command_queue.json"
+PID_FILE = DEFAULT_RUNTIME_DIR / "bot.pid"
 
 # Lazy-imported command queue so dashboard tests can monkeypatch the path.
 sys.path.insert(0, str(PROJECT_ROOT))
 from src.persistence.command_queue import CommandQueue  # noqa: E402
 from src.persistence.schemas import CommandKind  # noqa: E402
+
+logger = get_logger("dashboard")
+
+
+def _as_project_path(value: str | Path | None, fallback: Path | None = None) -> Path:
+    """Resolve file paths relative to project root when not absolute."""
+    if fallback is None:
+        fallback = DEFAULT_RUNTIME_DIR
+    if value is None:
+        return fallback
+    try:
+        p = Path(value)
+    except Exception:
+        return fallback
+    if p.is_absolute():
+        return p
+    return PROJECT_ROOT / p
+
+
+def _as_runtime_file(value: str | Path | None, *, fallback: Path, default_filename: str) -> Path:
+    """Resolve a runtime artifact path, supporting file-or-directory config values."""
+    if value is None:
+        return fallback
+    try:
+        text = str(value).strip()
+    except Exception:
+        return fallback
+    if not text or text in {"."}:
+        return fallback
+    candidate = _as_project_path(value, fallback=fallback)
+    if candidate.suffix:
+        return candidate
+    return candidate / default_filename
+
+
+def _sync_runtime_paths_from_config() -> None:
+    """Synchronize runtime artifact paths from dashboard configuration."""
+    global RUNTIME_DIR, STATUS_FILE, STATE_FILE, LOG_FILE, SYMBOL_FILE, PID_FILE, COMMAND_QUEUE_FILE
+    global _MULTI_SCAN_FILE, _MANUAL_SCAN_LOCK
+
+    config = _read_config()
+    fallback_runtime_dir = RUNTIME_DIR
+    fallback_status_path = STATUS_FILE
+
+    def _as_runtime_dir(value: Any) -> Path:
+        if not isinstance(value, (str, Path)):
+            return fallback_runtime_dir
+        text = str(value).strip()
+        if not text or text in {"."}:
+            return fallback_runtime_dir
+        candidate = _as_project_path(value, fallback=fallback_runtime_dir / "dashboard_status.json")
+        if candidate.suffix:
+            return candidate.parent
+        return candidate
+
+    runtime_dir = _as_runtime_dir(config.get("dashboard_status_path"))
+    if runtime_dir == Path("."):
+        runtime_dir = fallback_runtime_dir
+
+    RUNTIME_DIR = runtime_dir
+    STATUS_FILE = _as_runtime_file(
+        config.get("dashboard_status_path"),
+        fallback=fallback_status_path,
+        default_filename="dashboard_status.json",
+    )
+    STATE_FILE = _as_runtime_file(
+        config.get("state_path"),
+        fallback=STATE_FILE,
+        default_filename="state.json",
+    )
+    LOG_FILE = _as_runtime_file(
+        config.get("log_path"),
+        fallback=LOG_FILE,
+        default_filename="bot.log",
+    )
+    SYMBOL_FILE = _as_runtime_file(
+        config.get("active_symbol_path"),
+        fallback=SYMBOL_FILE,
+        default_filename="active_symbol.txt",
+    )
+    PID_FILE = _as_runtime_file(
+        config.get("pid_path"),
+        fallback=PID_FILE,
+        default_filename="bot.pid",
+    )
+    COMMAND_QUEUE_FILE = _as_runtime_file(
+        config.get("command_queue_path"),
+        fallback=COMMAND_QUEUE_FILE,
+        default_filename="command_queue.json",
+    )
+    _MULTI_SCAN_FILE = runtime_dir / "multi_scan_results.json"
+    _MANUAL_SCAN_LOCK = runtime_dir / "manual_scan_active.json"
+
+
+_TRUE_BOOL_VALUES = {"true", "1", "on", "yes"}
+_FALSE_BOOL_VALUES = {"false", "0", "off", "no", "disabled"}
+_config_read_error: str | None = None
+
+
+def _parse_bool_form(value: str | None, field_name: str, *, default: bool | None = None) -> bool:
+    """Parse a form/API bool string with an explicit allow-list."""
+    if value is None:
+        if default is not None:
+            return default
+        raise ValueError(f"Missing value for {field_name}")
+    normalized = str(value).strip().lower()
+    if normalized in _TRUE_BOOL_VALUES:
+        return True
+    if normalized in _FALSE_BOOL_VALUES:
+        return False
+    raise ValueError(f"Invalid value for {field_name}: {value}")
 
 
 def _get_command_queue() -> CommandQueue:
@@ -51,14 +171,67 @@ def _get_command_queue() -> CommandQueue:
     A fresh instance per call is cheap and avoids stale state when tests
     rebind the path via monkeypatch.
     """
+    _sync_runtime_paths_from_config()
     return CommandQueue(COMMAND_QUEUE_FILE)
 
+
+def _resolve_favicon_path() -> Path | None:
+    """Return an existing favicon path from likely runtime locations."""
+    candidate_paths = [
+        DASHBOARD_DIR / "static" / "favicon.ico",
+        Path(__file__).resolve().parent / "static" / "favicon.ico",
+        PROJECT_ROOT / "dashboard" / "static" / "favicon.ico",
+        Path(sys.executable).resolve().parent / "tbv1.ico",
+        Path(sys.executable).resolve().parent / "tbv1_256.png",
+        Path(sys.executable).resolve().parent / "packaging" / "tbv1.ico",
+        Path(sys.executable).resolve().parent / "packaging" / "tbv1_256.png",
+        Path(__file__).resolve().parent.parent.parent / "packaging" / "tbv1.ico",
+        Path(__file__).resolve().parent.parent.parent / "packaging" / "tbv1_256.png",
+        Path(__file__).resolve().parent.parent / "app" / "dashboard" / "static" / "favicon.ico",
+        Path(__file__).resolve().parent.parent / "packaging" / "tbv1.ico",
+        Path(__file__).resolve().parent.parent / "packaging" / "tbv1_256.png",
+        Path(sys.executable).resolve().parent.parent / "app" / "dashboard" / "static" / "favicon.ico",
+    ]
+
+    for candidate in candidate_paths:
+        try:
+            if candidate.exists() and candidate.is_file():
+                return candidate
+        except Exception as exc:
+            logger.debug(f"Skipping favicon candidate {candidate}: {exc}")
+
+    windows_fallback = Path(__file__).resolve().parent.parent.parent / "windows" / "app" / "dashboard" / "static" / "favicon.ico"
+    candidates = [
+        windows_fallback,
+        Path(__file__).resolve().parent.parent.parent / "windows" / "app" / "dashboard" / "tbv1.ico",
+        Path(__file__).resolve().parent.parent.parent / "windows" / "packaging" / "tbv1.ico",
+    ]
+    for candidate in candidates:
+        try:
+            if candidate.exists() and candidate.is_file():
+                return candidate
+        except Exception as exc:
+            logger.debug(f"Skipping favicon candidate {candidate}: {exc}")
+
+    return None
+
 app = FastAPI(title="Trading Bot Dashboard", docs_url=None, redoc_url=None)
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    """Serve favicon from dashboard static assets."""
+    favicon_path = _resolve_favicon_path()
+    if favicon_path is not None:
+        media_type = "image/png" if favicon_path.suffix.lower() == ".png" else "image/x-icon"
+        return FileResponse(path=favicon_path, media_type=media_type)
+    return Response(status_code=404)
 
 
 @app.middleware("http")
 async def catch_all_errors(request: Request, call_next):
     """Global error handler — prevent any unhandled exception from crashing the server."""
+    _sync_runtime_paths_from_config()
     try:
         return await call_next(request)
     except Exception as e:
@@ -105,10 +278,31 @@ def _format_dt_early(iso_str: str) -> str:
     if not iso_str:
         return "—"
     try:
-        dt = datetime.fromisoformat(str(iso_str))
+        dt = _parse_iso_datetime(iso_str)
+        if dt is None:
+            return str(iso_str)
         return dt.strftime("%d.%m.%Y %H:%M:%S")
     except Exception:
         return str(iso_str)
+
+
+def _parse_iso_datetime(value: Any) -> datetime | None:
+    """Parse ISO timestamps and normalize them to UTC-aware datetime objects."""
+    if not value:
+        return None
+    try:
+        text = str(value)
+    except Exception:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(text)
+    except Exception:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 templates.env.filters["format_dt"] = _format_dt_early
@@ -122,19 +316,138 @@ def _read_json(path: Path) -> dict[str, Any]:
         return {}
     try:
         with open(path) as f:
-            return json.load(f)
-    except Exception:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            raise ValueError(f"expected JSON object, got {type(data).__name__}")
+        return data
+    except Exception as exc:
+        logger.warning(f"Failed to read JSON file {path}: {exc}")
+        try:
+            path.unlink()
+        except Exception as cleanup_exc:
+            logger.warning(f"Failed to remove stale JSON file {path}: {cleanup_exc}")
+        return {
+            "_json_error": str(exc),
+            "_json_error_path": str(path),
+        }
+
+
+def _status_warning_list(payload: dict[str, Any]) -> list[str]:
+    warnings = payload.get("status_warnings")
+    if isinstance(warnings, list):
+        return warnings
+    if warnings is None:
+        warnings_list: list[str] = []
+    else:
+        warnings_list = [str(warnings)]
+    payload["status_warnings"] = warnings_list
+    return warnings_list
+
+
+def _normalize_dashboard_status(payload: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, dict):
         return {}
+
+    warnings = _status_warning_list(payload)
+
+    def ensure_dict(key: str) -> None:
+        value = payload.get(key)
+        if value is None:
+            payload[key] = {}
+            return
+        if isinstance(value, dict):
+            return
+        warnings.append(f"{key} has invalid type {type(value).__name__}; using empty object")
+        payload[key] = {}
+
+    def ensure_list(key: str) -> None:
+        value = payload.get(key)
+        if value is None:
+            payload[key] = []
+            return
+        if isinstance(value, list):
+            return
+        warnings.append(f"{key} has invalid type {type(value).__name__}; using empty list")
+        payload[key] = []
+
+    ensure_dict("latest_decision")
+    ensure_dict("performance")
+    ensure_dict("signal_distribution")
+    ensure_list("open_positions")
+    ensure_list("indicator_votes")
+    ensure_list("trade_history")
+    ensure_list("last_scan_results")
+
+    active_symbol = payload.get("active_symbol")
+    if active_symbol is None:
+        payload["active_symbol"] = None
+    elif isinstance(active_symbol, str) and validate_symbol(active_symbol):
+        payload["active_symbol"] = active_symbol.strip().upper()
+    else:
+        warnings.append(
+            f"active_symbol has invalid type {type(active_symbol).__name__}; using empty value"
+        )
+        payload["active_symbol"] = None
+
+    last_auto_scan = payload.get("last_auto_scan")
+    if last_auto_scan is not None and not isinstance(last_auto_scan, str):
+        warnings.append(
+            f"last_auto_scan has invalid type {type(last_auto_scan).__name__}; using empty value"
+        )
+        payload["last_auto_scan"] = None
+
+    for key in ("last_scan_total", "last_scan_hot_count"):
+        value = payload.get(key)
+        if value is None:
+            payload[key] = 0
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            warnings.append(f"{key} has invalid type {type(value).__name__}; using 0")
+            payload[key] = 0
+
+    return payload
+
+
+def _normalize_active_coin_signals(payload: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+
+    warnings = _status_warning_list(payload)
+    timeframes = payload.get("timeframes")
+    if timeframes is None:
+        payload["timeframes"] = {}
+    elif not isinstance(timeframes, dict):
+        warnings.append(
+            f"timeframes has invalid type {type(timeframes).__name__}; using empty object"
+        )
+        payload["timeframes"] = {}
+
+    updated_at = payload.get("updated_at")
+    if updated_at is not None and not isinstance(updated_at, str):
+        warnings.append(
+            f"updated_at has invalid type {type(updated_at).__name__}; using empty value"
+        )
+        payload["updated_at"] = None
+
+    return payload
+
+
+_log_read_error: str | None = None
+_bot_probe_error: str | None = None
 
 
 def _read_log_tail(n: int = 200, level: Optional[str] = None, search: Optional[str] = None) -> list[dict[str, str]]:
     """Read last N lines, optionally filter by level / search."""
+    global _log_read_error
     if not LOG_FILE.exists():
+        _log_read_error = None
         return []
     try:
         with open(LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
             lines = f.readlines()
+        _log_read_error = None
     except Exception:
+        _log_read_error = f"Failed to read log file {LOG_FILE}"
         return []
 
     entries = []
@@ -164,7 +477,9 @@ def _is_stale(status: dict) -> bool:
     if not last:
         return True
     try:
-        dt = datetime.fromisoformat(last)
+        dt = _parse_iso_datetime(last)
+        if dt is None:
+            return True
         return (datetime.now(timezone.utc) - dt).total_seconds() > 300
     except Exception:
         return True
@@ -242,7 +557,9 @@ def _time_ago(iso_str: str) -> str:
     if not iso_str:
         return "N/A"
     try:
-        dt = datetime.fromisoformat(iso_str)
+        dt = _parse_iso_datetime(iso_str)
+        if dt is None:
+            return iso_str
         secs = int((datetime.now(timezone.utc) - dt).total_seconds())
         if secs < 0:
             return "just now"
@@ -262,7 +579,9 @@ def _format_dt(iso_str: str) -> str:
     if not iso_str:
         return "—"
     try:
-        dt = datetime.fromisoformat(iso_str)
+        dt = _parse_iso_datetime(iso_str)
+        if dt is None:
+            return iso_str
         return dt.strftime("%d.%m.%Y %H:%M:%S")
     except Exception:
         return iso_str
@@ -282,12 +601,36 @@ templates.env.filters["time_ago"] = _time_ago
 @app.get("/api/status", response_class=JSONResponse)
 def api_status():
     """Return full dashboard status JSON (read-only)."""
+    global _live_signal_error
     status = _read_json(STATUS_FILE)
-    if not status:
-        status = _read_json(STATE_FILE)
-        status["_source"] = "state.json (fallback)"
+    warnings: list[str] = []
+    read_error = status.pop("_json_error", None)
+    if read_error:
+        warnings.append(f"Failed to read dashboard_status.json: {read_error}")
+        fallback = _read_json(STATE_FILE)
+        fallback_error = fallback.pop("_json_error", None)
+        if fallback and not fallback_error:
+            status = _normalize_dashboard_status(fallback)
+            status["_source"] = "state.json (fallback)"
+        elif fallback_error:
+            warnings.append(f"Failed to read state.json: {fallback_error}")
+    elif not status:
+        fallback = _read_json(STATE_FILE)
+        fallback_error = fallback.pop("_json_error", None)
+        if fallback and not fallback_error:
+            status = _normalize_dashboard_status(fallback)
+            status["_source"] = "state.json (fallback)"
+        elif fallback_error:
+            warnings.append(f"Failed to read state.json: {fallback_error}")
+    status = _normalize_dashboard_status(status)
+    if warnings:
+        _status_warning_list(status).extend(warnings)
+    if _live_signal_error:
+        _status_warning_list(status).append(
+            f"Live signal refresh failed: {_live_signal_error}"
+        )
     status["_stale"] = _is_stale(status)
-    status["_bot_running"] = _is_bot_running()
+    status["_bot_running"] = _resolve_bot_running(status)
     status["_price_display"] = _price_display(status, bot_running=status["_bot_running"])
     return status
 
@@ -302,45 +645,128 @@ def api_active_coin_signals():
     # Trigger background calculation if needed (gated by
     # ``dashboard_fallback_enabled`` — see ``_ensure_live_signals``).
     _ensure_live_signals()
+    global _live_signal_error
+
+    active_symbol = None
+    if SYMBOL_FILE.exists():
+        try:
+            active_symbol = SYMBOL_FILE.read_text(encoding="utf-8").strip().upper()
+            if not validate_symbol(active_symbol):
+                logger.warning(f"Invalid active symbol file contents: {active_symbol!r}")
+                try:
+                    SYMBOL_FILE.unlink()
+                except Exception as cleanup_exc:
+                    logger.warning(
+                        f"Failed to remove invalid active symbol file after read error: {cleanup_exc}"
+                    )
+                active_symbol = None
+        except Exception as exc:
+            logger.warning(f"Failed to read active symbol file {SYMBOL_FILE}: {exc}")
+            try:
+                SYMBOL_FILE.unlink()
+            except Exception as cleanup_exc:
+                logger.warning(
+                    f"Failed to remove stale active symbol file after read error: {cleanup_exc}"
+                )
+    if not active_symbol:
+        status = _read_json(STATUS_FILE)
+        status_error = status.pop("_json_error", None)
+        if status_error or not status:
+            if status_error:
+                _live_signal_error = f"status file unreadable: {status_error}"
+            fallback = _read_json(STATE_FILE)
+            fallback_error = fallback.pop("_json_error", None)
+            if fallback and not fallback_error:
+                status = _normalize_dashboard_status(fallback)
+            elif fallback_error:
+                _live_signal_error = f"state file unreadable: {fallback_error}"
+        active_symbol = status.get("active_symbol") if isinstance(status, dict) else None
+        if active_symbol is not None and not isinstance(active_symbol, str):
+            active_symbol = str(active_symbol)
+        if active_symbol and not validate_symbol(active_symbol):
+            _live_signal_error = f"invalid active symbol from status/state: {active_symbol!r}"
+            active_symbol = None
 
     # Primary: bot-written file (or dashboard-calculated). S6: every
     # return path labels ``_source`` so the dashboard UI can tell apart
     # authoritative bot-owned data from fallbacks and render staleness
     # honestly.
-    data = _read_json(RUNTIME_DIR / "active_coin_signals.json")
-    if data and data.get("symbol") and len(data.get("timeframes", {})) >= 3:
+    data = _normalize_active_coin_signals(_read_json(RUNTIME_DIR / "active_coin_signals.json"))
+    signal_error = data.pop("_json_error", None)
+    if signal_error:
+        _live_signal_error = f"active_coin_signals.json unreadable: {signal_error}"
+    timeframes = data.get("timeframes") if isinstance(data, dict) else {}
+    if (
+        active_symbol
+        and data
+        and data.get("symbol") == active_symbol
+        and isinstance(timeframes, dict)
+        and len(timeframes) >= 3
+    ):
         data.setdefault("_source", "bot_owned")
+        if signal_error:
+            _live_signal_error = f"active_coin_signals.json unreadable: {signal_error}"
+        if _live_signal_error:
+            _status_warning_list(data).append(_live_signal_error)
+        elif not signal_error:
+            _live_signal_error = None
         return data
 
     # Fallback: extract from auto-scan or multi-scan results
-    active_symbol = None
-    if SYMBOL_FILE.exists():
-        try:
-            active_symbol = SYMBOL_FILE.read_text().strip().upper()
-        except Exception:
-            pass
     if not active_symbol:
-        status = _read_json(STATUS_FILE)
-        active_symbol = status.get("active_symbol")
-    if not active_symbol:
-        return {"symbol": None, "timeframes": {}, "updated_at": None,
-                "_source": "empty"}
+        payload = {"symbol": None, "timeframes": {}, "updated_at": None,
+                   "_source": "empty"}
+        if _live_signal_error:
+            payload["status_warnings"] = [_live_signal_error]
+        return payload
 
     # Try auto-scan progress (has all_signals for top coins)
     scan_data = _read_json(RUNTIME_DIR / "auto_scan_progress.json")
+    scan_error = scan_data.pop("_json_error", None)
+    scan_warnings: list[str] = []
+    if scan_error:
+        _live_signal_error = f"auto_scan_progress.json unreadable: {scan_error}"
+        scan_warnings.append(_live_signal_error)
+    auto_scan_time = scan_data.get("last_auto_scan") if isinstance(scan_data, dict) else None
     scan_results = scan_data.get("last_scan_results", [])
-    if not scan_results:
-        # Try multi_scan_results.json
-        multi = _read_json(RUNTIME_DIR / "multi_scan_results.json")
-        scan_results = multi.get("cross_ranking", [])
+    if not isinstance(scan_results, list):
+        _live_signal_error = (
+            f"auto_scan_progress.json last_scan_results has invalid type {type(scan_results).__name__}"
+        )
+        scan_warnings.append(_live_signal_error)
+        scan_results = []
+    multi = _read_json(RUNTIME_DIR / "multi_scan_results.json")
+    multi_error = multi.pop("_json_error", None)
+    if multi_error:
+        scan_warnings.append(f"multi_scan_results.json unreadable: {multi_error}")
+    multi_scan_time = multi.get("scan_time") if isinstance(multi, dict) else None
+    multi_results = multi.get("cross_ranking", [])
+    if not isinstance(multi_results, list):
+        _live_signal_error = (
+            f"multi_scan_results.json cross_ranking has invalid type {type(multi_results).__name__}"
+        )
+        scan_warnings.append(_live_signal_error)
+        multi_results = []
+    auto_dt = _parse_iso_datetime(auto_scan_time) if isinstance(auto_scan_time, str) else None
+    multi_dt = _parse_iso_datetime(multi_scan_time) if isinstance(multi_scan_time, str) else None
+    if isinstance(multi_results, list) and (not scan_results or (multi_dt is not None and (auto_dt is None or multi_dt > auto_dt))):
+        scan_results = multi_results
 
     for coin in scan_results:
+        if not isinstance(coin, dict):
+            continue
         if coin.get("symbol") == active_symbol:
             all_sigs = coin.get("all_signals", {})
+            if not isinstance(all_sigs, dict):
+                all_sigs = {}
             sigs_dict = coin.get("signals", {})
+            if not isinstance(sigs_dict, dict):
+                sigs_dict = {}
             tfs = {}
             for tf in ["1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d"]:
                 info = all_sigs.get(tf) or sigs_dict.get(tf)
+                if not isinstance(info, dict):
+                    continue
                 if info:
                     tfs[tf] = {
                         "signal": info.get("signal", "N/A"),
@@ -348,19 +774,29 @@ def api_active_coin_signals():
                         "risk_level": info.get("risk_level", "N/A"),
                     }
             if tfs:
-                return {
+                payload = {
                     "symbol": active_symbol,
                     "timeframes": tfs,
-                    "updated_at": scan_data.get("last_auto_scan") or scan_data.get("completed_at"),
+                    "updated_at": (multi_scan_time if scan_results is multi_results else auto_scan_time) or scan_data.get("completed_at"),
                     "_source": "auto_scan_fallback",
                 }
+                if scan_warnings:
+                    _status_warning_list(payload).extend(scan_warnings)
+                if _live_signal_error:
+                    _status_warning_list(payload).append(_live_signal_error)
+                return _normalize_active_coin_signals(payload)
 
     # Last resort: return current TF signal from dashboard status
     status = _read_json(STATUS_FILE)
+    status_error = status.pop("_json_error", None)
+    if status_error:
+        _live_signal_error = f"dashboard_status.json unreadable: {status_error}"
     decision = status.get("latest_decision", {})
+    if not isinstance(decision, dict):
+        decision = {}
     current_tf = status.get("timeframe", "4h")
     if decision.get("signal"):
-        return {
+        payload = {
             "symbol": active_symbol,
             "timeframes": {
                 current_tf: {
@@ -371,10 +807,16 @@ def api_active_coin_signals():
             },
             "updated_at": status.get("last_update"),
             "_source": "dashboard_status_fallback",
-        }
+            }
+        if _live_signal_error:
+            _status_warning_list(payload).append(_live_signal_error)
+        return _normalize_active_coin_signals(payload)
 
-    return {"symbol": active_symbol, "timeframes": {}, "updated_at": None,
-            "_source": "no_data"}
+    payload = {"symbol": active_symbol, "timeframes": {}, "updated_at": None,
+               "_source": "no_data"}
+    if _live_signal_error:
+        payload["status_warnings"] = [_live_signal_error]
+    return _normalize_active_coin_signals(payload)
 
 
 # Background live signal calculator for dashboard
@@ -382,11 +824,12 @@ import threading as _sig_threading
 
 _live_signal_lock = _sig_threading.Lock()
 _live_signal_thread: _sig_threading.Thread | None = None
+_live_signal_error: str | None = None
 
 
 def _calc_live_signals_bg():
     """Background thread: calculate active coin signals across all 12 TFs."""
-    global _live_signal_thread
+    global _live_signal_thread, _live_signal_error
     try:
         import sys as _sys
         _sys.path.insert(0, str(PROJECT_ROOT))
@@ -398,8 +841,36 @@ def _calc_live_signals_bg():
         config = _read_config()
         symbol = None
         if SYMBOL_FILE.exists():
-            symbol = SYMBOL_FILE.read_text().strip().upper()
+            symbol = SYMBOL_FILE.read_text(encoding="utf-8").strip().upper()
+            if not validate_symbol(symbol):
+                _live_signal_error = f"invalid active symbol file contents: {symbol!r}"
+                logger.warning(_live_signal_error)
+                try:
+                    SYMBOL_FILE.unlink()
+                except Exception as cleanup_exc:
+                    logger.warning(
+                        f"Failed to remove invalid active symbol file after read error: {cleanup_exc}"
+                    )
+                symbol = None
         if not symbol:
+            status = _read_json(STATUS_FILE)
+            status_error = status.pop("_json_error", None)
+            if status_error or not status:
+                fallback = _read_json(STATE_FILE)
+                fallback_error = fallback.pop("_json_error", None)
+                if fallback and not fallback_error:
+                    status = _normalize_dashboard_status(fallback)
+                elif fallback_error:
+                    _live_signal_error = f"state file unreadable: {fallback_error}"
+            symbol = status.get("active_symbol") if isinstance(status, dict) else None
+            if symbol is not None and not isinstance(symbol, str):
+                symbol = str(symbol)
+            if symbol and not validate_symbol(symbol):
+                _live_signal_error = f"invalid active symbol from status/state: {symbol!r}"
+                symbol = None
+        if not symbol:
+            _live_signal_error = "no active symbol available for live signal refresh"
+            logger.warning(_live_signal_error)
             return
 
         client = BinanceClient(config)
@@ -407,6 +878,7 @@ def _calc_live_signals_bg():
 
         tfs = ["1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d"]
         results = {}
+        failure_count = 0
         for tf in tfs:
             try:
                 tf_config = {**config, "timeframe": tf}
@@ -414,10 +886,11 @@ def _calc_live_signals_bg():
                 df = md.get_ohlcv(symbol)
                 if df is None or df.empty:
                     results[tf] = {"signal": "N/A", "confidence": 0, "risk_level": "N/A"}
+                    failure_count += 1
                     continue
                 svc = SignalService(tf_config)
                 indicators = svc.calculate_all(df)
-                consensus = ConsensusEngine(config).evaluate(indicators)
+                consensus = ConsensusEngine(tf_config).evaluate(indicators)
                 conf = consensus["confidence"]
                 zak_val = ZAK.get(tf, 50)
                 results[tf] = {
@@ -429,6 +902,26 @@ def _calc_live_signals_bg():
                 }
             except Exception:
                 results[tf] = {"signal": "N/A", "confidence": 0, "risk_level": "N/A"}
+                failure_count += 1
+
+        if failure_count >= len(tfs):
+            _live_signal_error = "all live signal timeframe calculations failed"
+            logger.warning(_live_signal_error)
+            from src.persistence.atomic_io import atomic_write_json
+            out = RUNTIME_DIR / "active_coin_signals.json"
+            atomic_write_json(
+                out,
+                {
+                    "symbol": None,
+                    "timeframes": {},
+                    "updated_at": iso_now(),
+                    "_source": "error",
+                    "error": True,
+                    "status_warnings": [_live_signal_error],
+                },
+                indent=2,
+            )
+            return
 
         data = {
             "symbol": symbol,
@@ -436,27 +929,38 @@ def _calc_live_signals_bg():
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         out = RUNTIME_DIR / "active_coin_signals.json"
-        tmp = out.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, default=str))
-        tmp.replace(out)
-    except Exception:
-        pass
+        from src.persistence.atomic_io import atomic_write_json
+        atomic_write_json(out, data, indent=2)
+        _live_signal_error = (
+            None if failure_count == 0 else f"{failure_count}/{len(tfs)} live signal timeframe calculations failed"
+        )
+    except Exception as exc:
+        _live_signal_error = str(exc)
+        logger.warning(f"Live signal refresh failed: {exc}", exc_info=True)
+        try:
+            out = RUNTIME_DIR / "active_coin_signals.json"
+            if out.exists():
+                out.unlink()
+        except Exception as cleanup_exc:
+            logger.warning(
+                f"Failed to remove stale active coin signals after write error: {cleanup_exc}"
+            )
 
 
 def _ensure_live_signals():
     """Trigger background calculation if file is missing or stale (>2 min).
 
-    S6: gated by ``dashboard_fallback_enabled`` (default ``True`` for
-    backward compatibility). When the bot is the trusted writer of
-    ``active_coin_signals.json``, set the knob to ``False`` so the
-    dashboard does not race the bot with a duplicate Binance pass.
+    S6: gated by ``dashboard_fallback_enabled``. When the bot is the
+    trusted writer of ``active_coin_signals.json``, keep this ``False``
+    so the dashboard does not race the bot with a duplicate Binance pass.
     """
-    global _live_signal_thread
+    global _live_signal_thread, _live_signal_error
     try:
-        if not _read_config().get("dashboard_fallback_enabled", True):
+        if not _read_config().get("dashboard_fallback_enabled", False):
             return
-    except Exception:
-        pass
+    except Exception as exc:
+        _live_signal_error = f"dashboard fallback gate failed: {exc}"
+        return
     if _live_signal_thread and _live_signal_thread.is_alive():
         return  # already running
     sig_file = RUNTIME_DIR / "active_coin_signals.json"
@@ -465,32 +969,46 @@ def _ensure_live_signals():
         need_calc = True
     else:
         try:
-            d = json.loads(sig_file.read_text())
+            d = _read_json(sig_file)
             ts = d.get("updated_at", "")
             if ts:
-                lu = datetime.fromisoformat(ts)
-                age = (datetime.now(timezone.utc) - lu).total_seconds()
-                if age > 120:  # older than 2 minutes
+                lu = _parse_iso_datetime(ts)
+                if lu is None:
                     need_calc = True
+                else:
+                    age = (datetime.now(timezone.utc) - lu).total_seconds()
+                    if age > 120:  # older than 2 minutes
+                        need_calc = True
             else:
                 need_calc = True
             # Recalc if fewer than 12 TFs (old data or fallback)
-            if len(d.get("timeframes", {})) < 12:
+            timeframes = d.get("timeframes", {})
+            if not isinstance(timeframes, dict) or len(timeframes) < 12:
                 need_calc = True
             # Recalc if active symbol changed
             current_symbol = None
             if SYMBOL_FILE.exists():
                 try:
-                    current_symbol = SYMBOL_FILE.read_text().strip().upper()
-                except Exception:
-                    pass
+                    current_symbol = SYMBOL_FILE.read_text(encoding="utf-8").strip().upper()
+                except Exception as exc:
+                    logger.warning(f"Failed to read active symbol file {SYMBOL_FILE}: {exc}")
+                    try:
+                        SYMBOL_FILE.unlink()
+                    except Exception as cleanup_exc:
+                        logger.warning(
+                            f"Failed to remove stale active symbol file after read error: {cleanup_exc}"
+                        )
             if current_symbol and d.get("symbol") != current_symbol:
                 need_calc = True
         except Exception:
             need_calc = True
     if need_calc:
-        _live_signal_thread = _sig_threading.Thread(target=_calc_live_signals_bg, daemon=True)
-        _live_signal_thread.start()
+        try:
+            _live_signal_thread = _sig_threading.Thread(target=_calc_live_signals_bg, daemon=True)
+            _live_signal_thread.start()
+        except Exception as exc:
+            _live_signal_error = f"failed to start live signal refresh thread: {exc}"
+            logger.warning(_live_signal_error)
 
 
 @app.get("/api/logs", response_class=JSONResponse)
@@ -520,19 +1038,89 @@ def _calc_nss(confidence: float, tf: str) -> float:
 
 def _read_config() -> dict[str, Any]:
     """Read the YAML config file."""
+    global _config_read_error
     if not CONFIG_FILE.exists():
+        _config_read_error = None
         return {}
     try:
-        return yaml.safe_load(CONFIG_FILE.read_text()) or {}
-    except Exception:
+        raw = yaml.safe_load(CONFIG_FILE.read_text(encoding="utf-8"))
+        if isinstance(raw, dict):
+            config = raw
+            invalid_sections: list[str] = []
+            for section in ("risk", "leverage", "paper", "consensus", "no_trade", "indicator_weights"):
+                value = config.get(section)
+                if value is None or isinstance(value, dict):
+                    continue
+                invalid_sections.append(f"{section} must be a mapping, got {type(value).__name__}")
+                config[section] = {}
+            if invalid_sections:
+                _config_read_error = "; ".join(invalid_sections)
+                logger.error(f"{_config_read_error} at {CONFIG_FILE}")
+            else:
+                _config_read_error = None
+            return config
+        _config_read_error = f"Config root must be a mapping, got {type(raw).__name__}"
+        logger.error(f"{_config_read_error} at {CONFIG_FILE}")
         return {}
+    except Exception as exc:
+        _config_read_error = str(exc)
+        logger.error(f"Failed to read config {CONFIG_FILE}: {exc}")
+        return {}
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    """Write text with an atomic replacement."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=path.name + ".",
+        suffix=".tmp",
+        dir=str(path.parent),
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_name, path)
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except OSError as cleanup_exc:
+            sys.stderr.write(f"Warning: failed to remove temp file {tmp_name}: {cleanup_exc}\n")
+        raise
 
 
 def _write_config(config: dict[str, Any]) -> None:
     """Write config back to YAML atomically."""
-    tmp = CONFIG_FILE.with_suffix(".tmp")
-    tmp.write_text(yaml.dump(config, default_flow_style=False, sort_keys=False, allow_unicode=True))
-    tmp.replace(CONFIG_FILE)
+    _atomic_write_text(
+        CONFIG_FILE,
+        yaml.dump(config, default_flow_style=False, sort_keys=False, allow_unicode=True),
+    )
+
+
+def _merge_config_updates(base_config: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
+    """Merge partial updates into an existing config."""
+    merged = deepcopy(base_config)
+    for key, value in updates.items():
+        if "." in key:
+            section, nested_key = key.split(".", 1)
+            if isinstance(merged.get(section), dict):
+                merged[section][nested_key] = value
+            continue
+
+        if key not in merged:
+            continue
+        if isinstance(merged[key], dict) and isinstance(value, dict):
+            merged[key].update(value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _validate_config_for_write(config: dict[str, Any]) -> tuple[bool, list[str]]:
+    """Validate config before writing and return (is_valid, errors)."""
+    errors = validate_config(config)
+    return len(errors) == 0, errors
 
 
 def _read_env() -> dict[str, str]:
@@ -540,7 +1128,7 @@ def _read_env() -> dict[str, str]:
     result: dict[str, str] = {}
     if not ENV_FILE.exists():
         return result
-    for line in ENV_FILE.read_text().splitlines():
+    for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
@@ -563,7 +1151,7 @@ def _read_symbol() -> str:
     """Read active symbol from file."""
     if not SYMBOL_FILE.exists():
         return "BTCUSDT"
-    text = SYMBOL_FILE.read_text().strip()
+    text = SYMBOL_FILE.read_text(encoding="utf-8").strip()
     return text.split("\n")[0].strip() if text else "BTCUSDT"
 
 
@@ -576,23 +1164,140 @@ def _mask_key(key: str) -> str:
 
 # ─── Bot Process Management ──────────────────────────────────────
 
-PID_FILE = RUNTIME_DIR / "bot.pid"
+
+def _get_process_commandline(pid: int) -> str:
+    """Return command line for a pid on POSIX/macOS for process identity checks."""
+    global _bot_probe_error
+    try:
+        result = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception as exc:
+        _bot_probe_error = f"failed to read process command line for pid {pid}: {exc}"
+    return ""
+
+
+def _get_process_name(pid: int) -> str:
+    """Return the executable name for a pid on POSIX/macOS."""
+    global _bot_probe_error
+    try:
+        result = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "comm="],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception as exc:
+        _bot_probe_error = f"failed to read process name for pid {pid}: {exc}"
+    return ""
+
+
+def _is_likely_bot_commandline(cmd: str) -> bool:
+    """Heuristic matcher for trading-bot worker command lines."""
+    if not cmd:
+        return False
+    lowered = cmd.lower()
+    return "src.main" in lowered or "run_bot.py" in lowered or "--run-bot" in lowered
+
+
+def _is_likely_bot_process_name(name: str) -> bool:
+    """Heuristic matcher for bot worker process names."""
+    if not name:
+        return False
+    lowered = name.lower()
+    return lowered.startswith("python") or lowered in {"py", "pyw", "tradingbotv1"}
 
 
 def _read_pid() -> Optional[int]:
     """Read bot PID from pid file and verify process is alive."""
+    global _bot_probe_error
     if not PID_FILE.exists():
         return None
-    try:
-        pid = int(PID_FILE.read_text().strip())
-        os.kill(pid, 0)  # check if alive (sends no signal)
-        return pid
-    except (ValueError, ProcessLookupError, PermissionError):
+
+    def _remove_stale_pid_file() -> None:
         try:
             PID_FILE.unlink(missing_ok=True)
-        except Exception:
-            pass
+        except Exception as cleanup_exc:
+            logger.warning(f"Failed to remove stale PID file {PID_FILE}: {cleanup_exc}")
+
+    try:
+        pid = int(PID_FILE.read_text(encoding="utf-8").strip())
+        command_line = _get_process_commandline(pid)
+        process_name = _get_process_name(pid)
+        if command_line and not _is_likely_bot_commandline(command_line):
+            _remove_stale_pid_file()
+            return None
+        if process_name and not _is_likely_bot_process_name(process_name):
+            _remove_stale_pid_file()
+            return None
+        if not command_line and not process_name:
+            logger.warning(
+                "Bot PID could not be positively identified; "
+                "deferring to os.kill(pid, 0) instead of dropping the PID file"
+            )
+        os.kill(pid, 0)  # check if alive (sends no signal)
+        _bot_probe_error = None
+        return pid
+    except ProcessLookupError:
+        _remove_stale_pid_file()
         return None
+    except PermissionError:
+        # Permission errors can occur for processes we can still identify but
+        # cannot signal from the dashboard process context. Preserve the PID to
+        # avoid false "not running" states in restricted contexts.
+        return pid
+    except ValueError:
+        _remove_stale_pid_file()
+        return None
+
+
+def _find_bot_pids() -> list[int]:
+    """Find likely bot processes by command line on macOS."""
+    global _bot_probe_error
+    _bot_probe_error = None
+    pids: list[int] = []
+    seen: set[int] = set()
+    for pattern in ["src\\.main", "run_bot\\.py"]:
+        try:
+            result = subprocess.run(
+                ["pgrep", "-f", pattern],
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+            for line in result.stdout.strip().splitlines():
+                try:
+                    pid = int(line.strip())
+                except ValueError:
+                    continue
+                if pid in seen:
+                    continue
+                command_line = _get_process_commandline(pid)
+                process_name = _get_process_name(pid)
+                if command_line:
+                    if not _is_likely_bot_commandline(command_line):
+                        continue
+                elif process_name:
+                    if not _is_likely_bot_process_name(process_name):
+                        continue
+                else:
+                    continue
+                seen.add(pid)
+                pids.append(pid)
+        except Exception as exc:
+            _bot_probe_error = f"pgrep failed for {pattern}: {exc}"
+    if pids:
+        _bot_probe_error = None
+    return pids
 
 
 def _is_bot_running() -> bool:
@@ -600,14 +1305,66 @@ def _is_bot_running() -> bool:
     if _read_pid() is not None:
         return True
     # Fallback: check for orphan bot processes not tracked by PID file
-    try:
-        result = subprocess.run(
-            ["pgrep", "-f", "src\\.main"],
-            capture_output=True, text=True, timeout=3,
-        )
-        return bool(result.stdout.strip())
-    except Exception:
+    pids = _find_bot_pids()
+    if pids:
+        return True
+    if _bot_probe_error:
+        logger.warning(f"Bot process probe failed; treating as running: {_bot_probe_error}")
+        return True
+    return False
+
+
+def _resolve_bot_running(status: dict[str, Any]) -> bool:
+    """Resolve bot running state from PID checks with a recent-status fallback."""
+    bot_running = _is_bot_running()
+    if bot_running:
+        return True
+    if status.get("bot_status") != "running":
         return False
+    last_update = status.get("last_update", "")
+    dt = _parse_iso_datetime(last_update)
+    if dt is None:
+        return False
+    age = (datetime.now(timezone.utc) - dt).total_seconds()
+    return age < 120
+
+
+def _current_bot_pids() -> list[int]:
+    """Return known live bot process ids, preferring PID file then pgrep fallback."""
+    pids: list[int] = []
+    pid_file_pid = _read_pid()
+    if pid_file_pid is not None:
+        pids.append(pid_file_pid)
+    else:
+        pids.extend(_find_bot_pids())
+    return pids
+
+
+def _terminate_process_with_reap(proc: subprocess.Popen[Any], timeout: float = 2.0) -> bool:
+    """Terminate a best-effort started process and reap resources."""
+    try:
+        proc.terminate()
+    except Exception:
+        logger.warning("Failed to terminate process during cleanup", exc_info=True)
+        return False
+
+    try:
+        proc.wait(timeout=timeout)
+        return True
+    except Exception:
+        logger.debug("Process did not exit after terminate; escalating to kill")
+
+    try:
+        proc.kill()
+    except Exception:
+        logger.warning("Failed to kill process during cleanup", exc_info=True)
+        return False
+    try:
+        proc.wait(timeout=timeout)
+    except Exception:
+        logger.warning("Failed to reap process after kill", exc_info=True)
+        return False
+    return True
 
 
 def _start_bot() -> dict[str, Any]:
@@ -619,27 +1376,50 @@ def _start_bot() -> dict[str, Any]:
     - PID tracked via runtime/bot.pid (written by bot itself)
     """
     global _bot_process
-    if _is_bot_running():
-        return {"status": "already_running", "pid": _read_pid()}
+    running_pids = _current_bot_pids()
+    if _is_bot_running() or running_pids:
+        return {"status": "already_running", "pid": running_pids[0] if running_pids else None, "all_running": running_pids}
 
+    _bot_process = None
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
-    stderr_f = open(RUNTIME_DIR / "bot_stderr.log", "a")
-    _bot_process = subprocess.Popen(
-        [sys.executable, "-m", "src.main"],
-        cwd=str(PROJECT_ROOT),
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=stderr_f,
-        start_new_session=True,
-        close_fds=True,
-    )
+    stderr_f = (RUNTIME_DIR / "bot_stderr.log").open("a")
+    startup_ok = False
+    try:
+        _bot_process = subprocess.Popen(
+            [sys.executable, "-m", "src.main"],
+            cwd=str(PROJECT_ROOT),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=stderr_f,
+            start_new_session=True,
+            close_fds=True,
+        )
+        if _bot_process is None:
+            raise RuntimeError("Failed to spawn bot process.")
+
+        startup_check_deadline = time.time() + 10.0
+        while time.time() < startup_check_deadline:
+            if _bot_process.poll() is not None:
+                raise RuntimeError(f"Bot exited during startup (code {_bot_process.returncode}).")
+            if _read_pid() == _bot_process.pid:
+                break
+            time.sleep(0.1)
+        else:
+            raise RuntimeError("Bot started without writing PID file.")
+        startup_ok = True
+    finally:
+        if _bot_process is not None and not startup_ok and _bot_process.poll() is None:
+            if not _terminate_process_with_reap(_bot_process):
+                logger.warning("Failed to clean up bot process after startup failure")
+        stderr_f.close()
+
     # Don't hold a reference — let the bot live on its own via PID file
     pid = _bot_process.pid
     _bot_process = None
     return {"status": "started", "pid": pid}
 
 
-def _kill_pid(pid: int) -> None:
+def _kill_pid(pid: int) -> bool:
     """Send SIGTERM then SIGKILL to a PID.
 
     Gives 8 seconds for graceful shutdown (bot needs time for _shutdown() + state save).
@@ -648,18 +1428,25 @@ def _kill_pid(pid: int) -> None:
     try:
         os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
-        return
+        return True
+    except Exception:
+        return False
     import time
     for _ in range(16):  # 8 seconds for graceful shutdown
         time.sleep(0.5)
         try:
             os.kill(pid, 0)
         except ProcessLookupError:
-            return
+            return True
+        except Exception:
+            return False
     try:
         os.kill(pid, signal.SIGKILL)
     except ProcessLookupError:
-        pass
+        return True
+    except Exception:
+        return False
+    return True
 
 
 def _stop_bot() -> dict[str, Any]:
@@ -675,9 +1462,10 @@ def _stop_bot() -> dict[str, Any]:
     def _safe_kill(pid: int) -> bool:
         if pid in safe_pids:
             return False
-        _kill_pid(pid)
-        killed_pids.append(pid)
-        return True
+        if _kill_pid(pid):
+            killed_pids.append(pid)
+            return True
+        return False
 
     # 1) Try PID file first
     pid = _read_pid()
@@ -685,47 +1473,125 @@ def _stop_bot() -> dict[str, Any]:
         _safe_kill(pid)
 
     # 2) Fallback: find orphan bot processes via pgrep
-    for pattern in ["src\\.main", "run_bot\\.py"]:
-        try:
-            result = subprocess.run(
-                ["pgrep", "-f", pattern],
-                capture_output=True, text=True, timeout=3,
-            )
-            for line in result.stdout.strip().splitlines():
-                orphan_pid = int(line.strip())
-                if orphan_pid not in killed_pids:
-                    _safe_kill(orphan_pid)
-        except Exception:
-            pass
+    for orphan_pid in _find_bot_pids():
+        if orphan_pid in killed_pids:
+            continue
+        _safe_kill(orphan_pid)
 
+    # Final check: remove stale marker only if no surviving bot process remains.
     try:
-        PID_FILE.unlink(missing_ok=True)
+        try:
+            pid_file_pid = int(PID_FILE.read_text(encoding="utf-8").strip()) if PID_FILE.exists() else None
+        except Exception:
+            pid_file_pid = None
+        still_running = False
+        if pid_file_pid is not None:
+            try:
+                os.kill(pid_file_pid, 0)
+                cmd = _get_process_commandline(pid_file_pid)
+                if cmd and _is_likely_bot_commandline(cmd):
+                    still_running = True
+            except ProcessLookupError:
+                still_running = False
+            except Exception as exc:
+                logger.warning(
+                    f"Bot stop probe failed for pid {pid_file_pid}; treating as still running: {exc}"
+                )
+                still_running = True
+        if not still_running:
+            try:
+                PID_FILE.unlink(missing_ok=True)
+            except Exception as cleanup_exc:
+                logger.warning(f"Failed to remove stale PID file {PID_FILE}: {cleanup_exc}")
     except Exception:
-        pass
+        logger.warning("Unexpected error while finalizing bot stop; attempting stale PID cleanup")
+        try:
+            PID_FILE.unlink(missing_ok=True)
+        except Exception as cleanup_exc:
+            logger.warning(f"Failed to remove PID file after stop error: {cleanup_exc}")
+
+    still_running = _find_bot_pids()
+    still_running = [pid for pid in still_running if pid not in {my_pid, my_ppid}]
+    if not still_running and _bot_probe_error:
+        logger.warning(
+            f"Bot process probe failed during stop; treating bot as still running: {_bot_probe_error}"
+        )
+        return {
+            "status": "still_running",
+            "pid": None,
+            "all_running": [],
+            "warning": _bot_probe_error,
+        }
+    if still_running:
+        return {
+            "status": "still_running",
+            "pid": still_running[0],
+            "all_running": still_running,
+        }
 
     if not killed_pids:
         return {"status": "not_running"}
+
     return {"status": "stopped", "pid": killed_pids[0], "all_killed": killed_pids}
 
 
 @app.get("/api/bot/status", response_class=JSONResponse)
 def api_bot_status():
     """Return bot process status."""
-    pid = _read_pid()
-    running = pid is not None
+    running_pids = _current_bot_pids()
+    pid = running_pids[0] if running_pids else None
     status = _read_json(STATUS_FILE)
+    status_error = status.pop("_json_error", None)
+    state_snapshot = _read_json(STATE_FILE)
+    state_error = state_snapshot.pop("_json_error", None)
+    warning_parts: list[str] = []
+    if status_error:
+        warning_parts.append(f"Status file unreadable: {status_error}")
+        if state_snapshot and not state_error:
+            status = _normalize_dashboard_status(state_snapshot)
+            status["_source"] = "state.json (fallback)"
+        elif state_snapshot and not state_error and not status.get("bot_start_time"):
+            status["bot_start_time"] = state_snapshot.get("bot_start_time")
+    elif not status:
+        if state_snapshot and not state_error:
+            status = _normalize_dashboard_status(state_snapshot)
+            status["_source"] = "state.json (fallback)"
+    if state_error:
+        warning_parts.append(f"State file unreadable: {state_error}")
+    status = _normalize_dashboard_status(status)
+    running = _resolve_bot_running(status)
     start_time = status.get("bot_start_time") if running else None
-    return {
+    status_warnings = list(_status_warning_list(status))
+    if warning_parts:
+        status_warnings.extend(warning_parts)
+    if _bot_probe_error:
+        status_warnings.append(f"Bot probe warning: {_bot_probe_error}")
+    payload = {
         "running": running,
-        "pid": pid,
+        "pid": pid if running else None,
         "start_time": start_time,
     }
+    if warning_parts:
+        payload["warning"] = "; ".join(warning_parts)
+    if status_warnings:
+        payload["status_warnings"] = status_warnings
+    return payload
 
 
 @app.post("/api/bot/start", response_class=JSONResponse)
 def api_bot_start():
     """Start the trading bot."""
-    return _start_bot()
+    try:
+        return _start_bot()
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse(
+            {
+                "status": "error",
+                "error": "bot_start_failed",
+                "message": str(exc),
+            },
+            status_code=500,
+        )
 
 
 @app.post("/api/bot/stop", response_class=JSONResponse)
@@ -751,8 +1617,8 @@ def api_close_position(
     from src.persistence.schemas import SchemaValidationError
 
     symbol = (symbol or "").strip().upper()
-    if not symbol:
-        return JSONResponse({"error": "symbol is required"}, status_code=400)
+    if not re.fullmatch(r"[A-Z0-9]{2,20}", symbol):
+        return JSONResponse({"error": "Invalid symbol"}, status_code=400)
 
     # Default key collapses double-submits while a command is still pending.
     key = idempotency_key or f"close::{symbol}::pending"
@@ -788,13 +1654,60 @@ _alert_sound_lock = __import__("threading").Lock()
 ALERT_SOUND_FILE = DASHBOARD_DIR / "static" / "alert.mp3"
 
 
+def _alert_sound_processes_alive() -> bool:
+    """Return True when the alert shell or any matching afplay is still alive."""
+    if _alert_sound_proc and _alert_sound_proc.poll() is None:
+        return True
+    try:
+        result = subprocess.run(
+            ["pgrep", "-f", r"afplay.*alert\.mp3"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+    except Exception:
+        return True
+    current_pid = os.getpid()
+    for line in result.stdout.splitlines():
+        text = line.strip()
+        if not text.isdigit():
+            continue
+        if int(text) == current_pid:
+            continue
+        return True
+    return False
+
+
+def _alert_sound_afplay_running() -> bool:
+    """Return True only when an afplay process for alert.mp3 is present."""
+    try:
+        result = subprocess.run(
+            ["pgrep", "-f", r"afplay.*alert\.mp3"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+    except Exception as exc:
+        logger.warning(f"Alert sound liveness check failed; treating as running: {exc}")
+        return True
+    current_pid = os.getpid()
+    for line in result.stdout.splitlines():
+        text = line.strip()
+        if not text.isdigit():
+            continue
+        if int(text) == current_pid:
+            continue
+        return True
+    return False
+
+
 @app.post("/api/alert/play", response_class=JSONResponse)
 def api_alert_play():
     """Play alert sound via macOS afplay (server-side, no browser restriction)."""
     global _alert_sound_proc
     with _alert_sound_lock:
         # Already playing? Don't stack
-        if _alert_sound_proc and _alert_sound_proc.poll() is None:
+        if (_alert_sound_proc and _alert_sound_proc.poll() is None) or _alert_sound_afplay_running():
             return {"status": "already_playing"}
         if not ALERT_SOUND_FILE.exists():
             return JSONResponse({"error": "alert.mp3 not found"}, status_code=404)
@@ -807,6 +1720,21 @@ def api_alert_play():
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
+        deadline = time.time() + 1.0
+        while _alert_sound_proc.poll() is None and time.time() < deadline:
+            if _alert_sound_afplay_running():
+                return {"status": "playing", "pid": _alert_sound_proc.pid}
+            time.sleep(0.05)
+        if _alert_sound_proc.poll() is not None or not _alert_sound_afplay_running():
+            try:
+                _alert_sound_proc.kill()
+            except Exception as exc:
+                logger.warning(f"Failed to kill alert shell during start failure: {exc}")
+            _alert_sound_proc = None
+            return JSONResponse(
+                {"error": "alert_sound_play_failed", "message": "Alert sound exited immediately"},
+                status_code=500,
+            )
         return {"status": "playing", "pid": _alert_sound_proc.pid}
 
 
@@ -822,18 +1750,44 @@ def api_alert_stop():
                 pgid = _os.getpgid(_alert_sound_proc.pid)
                 _os.killpg(pgid, 9)
             except Exception:
-                _alert_sound_proc.kill()
-            _alert_sound_proc = None
-            return {"status": "stopped"}
+                try:
+                    _alert_sound_proc.kill()
+                except Exception as exc:
+                    logger.warning(f"Failed to kill alert shell during stop: {exc}")
+            deadline = time.time() + 1.0
+            while _alert_sound_proc.poll() is None and time.time() < deadline:
+                time.sleep(0.1)
+            if _alert_sound_proc.poll() is not None:
+                _alert_sound_proc = None
+                return {"status": "stopped"}
+            try:
+                subprocess.run(
+                    ["pkill", "-f", r"afplay.*alert\.mp3"],
+                    capture_output=True, timeout=3,
+                )
+            except Exception as exc:
+                logger.warning(f"Failed to pkill orphan alert audio during stop: {exc}")
+            if not _alert_sound_processes_alive():
+                _alert_sound_proc = None
+                return {"status": "stopped"}
+            return JSONResponse(
+                {"error": "alert_sound_stop_failed", "message": "Alert sound is still running"},
+                status_code=500,
+            )
         _alert_sound_proc = None
         # Also kill any orphan afplay processes playing our file
         try:
             subprocess.run(
-                ["pkill", "-f", f"afplay.*alert\\.mp3"],
+                ["pkill", "-f", r"afplay.*alert\.mp3"],
                 capture_output=True, timeout=3,
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(f"Failed to pkill orphan alert audio during idle stop: {exc}")
+        if _alert_sound_processes_alive():
+            return JSONResponse(
+                {"error": "alert_sound_stop_failed", "message": "Alert sound is still running"},
+                status_code=500,
+            )
         return {"status": "not_playing"}
 
 
@@ -894,6 +1848,12 @@ def _get_scanner(fresh=False):
         sys.path.insert(0, str(PROJECT_ROOT))
         from src.services.scanner_service import ScannerService
         config = _read_config()
+        if _config_read_error or not config:
+            logger.warning(
+                "Cannot create scanner because config could not be loaded: %s",
+                _config_read_error or "missing config",
+            )
+            return None
         _scanner = ScannerService(config, symbol_file=SYMBOL_FILE)
     return _scanner
 
@@ -903,14 +1863,35 @@ def api_scanner_start(min_confidence: int = Form(55)):
     # Block if auto-scan is running
     if _is_auto_scan_active():
         return JSONResponse(
-            {"error": "Auto-scan in progress, please wait for it to finish."},
+            {"error": "A scan is in progress, please wait for it to finish."},
+            status_code=409,
+        )
+    if _is_manual_scan_active():
+        return JSONResponse(
+            {"error": "A scan is in progress, please wait for it to finish."},
             status_code=409,
         )
     scanner = _get_scanner()
+    if scanner is None:
+        return JSONResponse(
+            {
+                "error": "Config file could not be loaded",
+                "warning": f"Config read failed: {_config_read_error or 'missing config'}",
+            },
+            status_code=503,
+        )
     if scanner.is_scanning:
         scanner.force_reset()
     # Re-create scanner with latest config (picks up timeframe changes)
     scanner = _get_scanner(fresh=True)
+    if scanner is None:
+        return JSONResponse(
+            {
+                "error": "Config file could not be loaded",
+                "warning": f"Config read failed: {_config_read_error or 'missing config'}",
+            },
+            status_code=503,
+        )
     ok = scanner.scan_async(min_confidence=min_confidence)
     if not ok:
         return JSONResponse({"error": "Failed to start scan"}, status_code=500)
@@ -920,18 +1901,37 @@ def api_scanner_start(min_confidence: int = Form(55)):
 @app.post("/api/scanner/stop", response_class=JSONResponse)
 def api_scanner_stop():
     scanner = _get_scanner()
-    scanner.stop()
-    scanner.force_reset()
+    if scanner is not None:
+        scanner.stop()
+        scanner.force_reset()
     # Also stop multi-TF scanners
     for s in _multi_scanners.values():
         s.stop()
         s.force_reset()
-    return {"status": "stopped"}
+    _multi_scanners.clear()
+    _set_manual_scan_lock(False)
+    payload = {"status": "stopped"}
+    if scanner is None:
+        payload["warning"] = f"Config read failed: {_config_read_error or 'missing config'}"
+    return payload
 
 
 @app.get("/api/scanner/progress", response_class=JSONResponse)
 def api_scanner_progress():
     scanner = _get_scanner()
+    if scanner is None:
+        return JSONResponse(
+            {
+                "scanning": False,
+                "progress": {"current": 0, "total": 0, "symbol": "", "status": "error", "hot_count": 0},
+                "recent": [],
+                "hot": [],
+                "top15": [],
+                "total_scanned": 0,
+                "warning": f"Config read failed: {_config_read_error or 'missing config'}",
+            },
+            status_code=503,
+        )
     progress = scanner.progress
     results = scanner.results
     # Last 5 scanned for live feed during scan; top 15 after completion
@@ -961,11 +1961,21 @@ def api_scanner_progress():
 def api_scanner_select(symbol: str = Form(...)):
     """Set the found symbol as the active trading symbol."""
     symbol = symbol.strip().upper()
+    if not symbol:
+        return JSONResponse({"error": "symbol is required"}, status_code=400)
+    if not re.fullmatch(r"[A-Z0-9]{2,20}", symbol):
+        return JSONResponse({"error": "Invalid symbol"}, status_code=400)
     try:
-        SYMBOL_FILE.parent.mkdir(parents=True, exist_ok=True)
-        SYMBOL_FILE.write_text(f"{symbol}\n")
+        _atomic_write_text(SYMBOL_FILE, f"{symbol}\n")
         return {"status": "ok", "symbol": symbol}
     except Exception as e:
+        try:
+            if SYMBOL_FILE.exists():
+                SYMBOL_FILE.unlink()
+        except Exception as cleanup_exc:
+            logger.warning(
+                f"Failed to remove stale symbol file after dashboard write error: {cleanup_exc}"
+            )
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
@@ -991,22 +2001,56 @@ def _is_auto_scan_active() -> bool:
     try:
         p = RUNTIME_DIR / "auto_scan_progress.json"
         if p.exists():
-            d = json.loads(p.read_text())
-            return d.get("scanning", False)
-    except Exception:
-        pass
+            d = json.loads(p.read_text(encoding="utf-8"))
+            if not isinstance(d, dict):
+                raise ValueError(f"auto-scan state must be a mapping, got {type(d).__name__}")
+            if "scanning" not in d:
+                raise ValueError("auto-scan state missing scanning flag")
+            return bool(d.get("scanning", False))
+    except Exception as exc:
+        if p.exists():
+            try:
+                age_minutes = (datetime.now(timezone.utc).timestamp() - p.stat().st_mtime) / 60
+            except Exception:
+                age_minutes = None
+            if age_minutes is not None and age_minutes > 30:
+                logger.warning(f"Stale auto-scan state file ({age_minutes:.0f} min old) — auto-clearing")
+                try:
+                    p.unlink()
+                except Exception as cleanup_exc:
+                    logger.warning(
+                        f"Failed to remove stale auto-scan state file after read error: {cleanup_exc}"
+                    )
+                return False
+            logger.warning(f"Auto-scan state read failed; treating as inactive: {exc}")
+            try:
+                p.unlink(missing_ok=True)
+            except Exception as cleanup_exc:
+                logger.warning(
+                    f"Failed to remove unreadable auto-scan state file after read error: {cleanup_exc}"
+                )
+            return False
     return False
 
 
-def _set_manual_scan_lock(active: bool) -> None:
+def _set_manual_scan_lock(active: bool) -> bool:
     """Write/clear the manual scan lock file."""
     try:
         data = {"active": active, "ts": datetime.now(timezone.utc).isoformat()}
-        tmp = _MANUAL_SCAN_LOCK.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data))
-        tmp.replace(_MANUAL_SCAN_LOCK)
-    except Exception:
-        pass
+        from src.persistence.atomic_io import atomic_write_json
+        atomic_write_json(_MANUAL_SCAN_LOCK, data, indent=2)
+        return True
+    except Exception as exc:
+        logger.warning(f"Failed to write manual scan lock {_MANUAL_SCAN_LOCK}: {exc}")
+        if not active:
+            try:
+                if _MANUAL_SCAN_LOCK.exists():
+                    _MANUAL_SCAN_LOCK.unlink()
+            except Exception as cleanup_exc:
+                logger.warning(
+                    f"Failed to remove stale manual scan lock after clear error: {cleanup_exc}"
+                )
+        return False
 
 
 def _is_manual_scan_active() -> bool:
@@ -1014,38 +2058,215 @@ def _is_manual_scan_active() -> bool:
     # First check lock file
     try:
         if _MANUAL_SCAN_LOCK.exists():
-            d = json.loads(_MANUAL_SCAN_LOCK.read_text())
+            d = json.loads(_MANUAL_SCAN_LOCK.read_text(encoding="utf-8"))
+            if not isinstance(d, dict):
+                raise ValueError(
+                    f"manual scan lock must be a mapping, got {type(d).__name__}"
+                )
+            if "active" not in d:
+                raise ValueError("manual scan lock missing active state")
+            if not d.get("active", False):
+                _MANUAL_SCAN_LOCK.unlink(missing_ok=True)
+                return False
             if d.get("active"):
+                # Lock records start time to avoid stale hangs after dashboard crash/restart.
+                ts = d.get("ts", "")
+                if not ts:
+                    logger.warning("Manual scan lock missing ts — auto-clearing")
+                    _set_manual_scan_lock(False)
+                    return False
+                lock_time = _parse_iso_datetime(ts)
+                if lock_time is None:
+                    logger.warning(f"Malformed manual scan lock ts: {ts} — auto-clearing")
+                    _set_manual_scan_lock(False)
+                    return False
+                age_minutes = (datetime.now(timezone.utc) - lock_time).total_seconds() / 60
+                if age_minutes > 30:
+                    logger.warning(f"Stale manual scan lock ({age_minutes:.0f} min old) — auto-clearing")
+                    _set_manual_scan_lock(False)
+                    return False
                 # Verify at least one scanner is actually alive
                 for s in _multi_scanners.values():
                     if s.is_scanning:
                         return True
                 # Lock says active but no scanners running → stale lock, clear it
                 _set_manual_scan_lock(False)
-    except Exception:
-        pass
+    except Exception as exc:
+        if _MANUAL_SCAN_LOCK.exists():
+            try:
+                age_minutes = (
+                    datetime.now(timezone.utc).timestamp() - _MANUAL_SCAN_LOCK.stat().st_mtime
+                ) / 60
+            except Exception:
+                age_minutes = None
+            if age_minutes is not None and age_minutes > 30:
+                logger.warning(
+                    f"Stale manual scan lock ({age_minutes:.0f} min old) after read error — auto-clearing"
+                )
+                try:
+                    _MANUAL_SCAN_LOCK.unlink()
+                except Exception as cleanup_exc:
+                    logger.warning(
+                        f"Failed to remove stale manual scan lock after read error: {cleanup_exc}"
+                    )
+                return False
+            logger.warning(f"Manual scan state read failed; treating as inactive: {exc}")
+            try:
+                _MANUAL_SCAN_LOCK.unlink(missing_ok=True)
+            except Exception as cleanup_exc:
+                logger.warning(
+                    f"Failed to remove unreadable manual scan lock after read error: {cleanup_exc}"
+                )
+            return False
     return False
 
 
 def _save_multi_results(payload: dict) -> None:
     """Persist multi-scan results to disk."""
     try:
+        from src.persistence.atomic_io import atomic_write_json
         RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
-        tmp = _MULTI_SCAN_FILE.with_suffix(".tmp")
-        tmp.write_text(json.dumps(payload, default=str))
-        tmp.replace(_MULTI_SCAN_FILE)
-    except Exception:
-        pass
+        atomic_write_json(_MULTI_SCAN_FILE, payload, indent=2)
+    except Exception as exc:
+        logger.warning(f"Failed to save multi-scan results to {_MULTI_SCAN_FILE}: {exc}")
+        try:
+            if _MULTI_SCAN_FILE.exists():
+                _MULTI_SCAN_FILE.unlink()
+        except Exception as cleanup_exc:
+            logger.warning(
+                f"Failed to remove stale multi-scan results after write error: {cleanup_exc}"
+            )
 
 
 def _load_multi_results() -> dict | None:
     """Load persisted multi-scan results from disk."""
     try:
         if _MULTI_SCAN_FILE.exists():
-            return json.loads(_MULTI_SCAN_FILE.read_text())
-    except Exception:
-        pass
+            data = json.loads(_MULTI_SCAN_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                if not isinstance(data.get("timeframes"), dict):
+                    raise ValueError("expected timeframes mapping")
+                if not isinstance(data.get("cross_ranking"), list):
+                    raise ValueError("expected cross_ranking list")
+                if not isinstance(data.get("common_symbols"), list):
+                    raise ValueError("expected common_symbols list")
+                if not data.get("scan_time"):
+                    raise ValueError("expected completed scan_time")
+                if data.get("any_scanning") not in {False, 0, None}:
+                    raise ValueError("expected any_scanning to be false")
+                return data
+            raise ValueError(f"expected JSON object, got {type(data).__name__}")
+    except Exception as exc:
+        if _MULTI_SCAN_FILE.exists():
+            logger.warning(f"Failed to load multi-scan results from {_MULTI_SCAN_FILE}: {exc}")
+            try:
+                _MULTI_SCAN_FILE.unlink()
+            except Exception as cleanup_exc:
+                logger.warning(
+                    f"Failed to remove stale multi-scan results after load error: {cleanup_exc}"
+                )
     return None
+
+
+def _prefer_fresher_multi_scan_snapshot(saved: dict[str, Any], progress: dict[str, Any] | None) -> dict[str, Any]:
+    saved = saved if isinstance(saved, dict) else {}
+    progress = progress if isinstance(progress, dict) else {}
+    if not saved or not progress:
+        return saved
+
+    saved_time = saved.get("scan_time")
+    progress_time = progress.get("last_auto_scan") or progress.get("completed_at")
+    saved_dt = _parse_iso_datetime(saved_time) if isinstance(saved_time, str) else None
+    progress_dt = _parse_iso_datetime(progress_time) if isinstance(progress_time, str) else None
+    if progress_dt is None or (saved_dt is not None and saved_dt >= progress_dt):
+        return saved
+
+    merged = dict(saved)
+    warnings = []
+    for key in ("status_warnings", "warnings"):
+        value = merged.get(key)
+        if isinstance(value, list):
+            for item in value:
+                if item is None:
+                    continue
+                text = item if isinstance(item, str) else str(item)
+                if text not in warnings:
+                    warnings.append(text)
+    for key in ("status_warnings", "warnings"):
+        value = progress.get(key)
+        if isinstance(value, list):
+            for item in value:
+                if item is None:
+                    continue
+                text = item if isinstance(item, str) else str(item)
+                if text not in warnings:
+                    warnings.append(text)
+    progress_results = progress.get("last_scan_results")
+    if not isinstance(progress_results, list):
+        progress_results = progress.get("cross_ranking")
+    if isinstance(progress_results, list):
+        merged["cross_ranking"] = progress_results
+        merged["last_scan_results"] = progress_results
+    for key in ("last_auto_scan", "scan_time"):
+        value = progress.get("last_auto_scan") or progress.get("completed_at")
+        if isinstance(value, str):
+            merged["scan_time"] = value
+            merged["last_auto_scan"] = value
+            merged["last_update"] = value
+            break
+    if warnings:
+        merged["status_warnings"] = warnings
+        merged["warnings"] = list(warnings)
+    if isinstance(progress.get("last_scan_total"), (int, float)) and not isinstance(progress.get("last_scan_total"), bool):
+        merged["last_scan_total"] = progress["last_scan_total"]
+    if isinstance(progress.get("last_scan_hot_count"), (int, float)) and not isinstance(progress.get("last_scan_hot_count"), bool):
+        merged["last_scan_hot_count"] = progress["last_scan_hot_count"]
+    return merged
+
+
+def _merge_multi_scan_into_status(status: dict[str, Any], multi_scan: dict[str, Any] | None) -> dict[str, Any]:
+    status = _normalize_dashboard_status(status if isinstance(status, dict) else {})
+    multi = multi_scan if isinstance(multi_scan, dict) else {}
+    if not multi:
+        return status
+
+    warnings = _status_warning_list(status)
+    seen_warnings = set(warnings)
+    for key in ("status_warnings", "warnings"):
+        value = multi.get(key)
+        if isinstance(value, list):
+            for item in value:
+                if item is None:
+                    continue
+                text = item if isinstance(item, str) else str(item)
+                if text not in seen_warnings:
+                    seen_warnings.add(text)
+                    warnings.append(text)
+
+    scan_time = multi.get("scan_time")
+    current_ts = status.get("last_auto_scan") or status.get("last_update")
+    candidate_dt = _parse_iso_datetime(scan_time) if isinstance(scan_time, str) else None
+    current_dt = _parse_iso_datetime(current_ts) if isinstance(current_ts, str) else None
+    should_replace = candidate_dt is not None and (current_dt is None or candidate_dt > current_dt)
+
+    cross_ranking = multi.get("cross_ranking")
+    if should_replace or not status.get("last_scan_results"):
+        if isinstance(cross_ranking, list):
+            status["last_scan_results"] = cross_ranking
+        timeframes = multi.get("timeframes") if isinstance(multi.get("timeframes"), dict) else {}
+        totals = [int(t.get("total_scanned", 0)) for t in timeframes.values() if isinstance(t, dict) and isinstance(t.get("total_scanned"), (int, float))]
+        if totals or isinstance(cross_ranking, list):
+            status["last_scan_total"] = max(totals or [len(cross_ranking or [])])
+        common = multi.get("common_symbols")
+        if isinstance(common, list):
+            status["last_scan_hot_count"] = len(common)
+    if isinstance(scan_time, str) and (should_replace or not status.get("last_auto_scan")):
+        status["last_auto_scan"] = scan_time
+    if isinstance(scan_time, str) and should_replace:
+        status["last_update"] = scan_time
+    if warnings:
+        status["status_warnings"] = warnings
+    return status
 
 
 def _build_cross_ranking(tf_data: dict, full_tf_data: dict | None = None) -> list[dict]:
@@ -1122,10 +2343,10 @@ def _build_cross_ranking(tf_data: dict, full_tf_data: dict | None = None) -> lis
 @app.post("/api/scanner/multi-start", response_class=JSONResponse)
 def api_scanner_multi_start():
     """Start parallel scans for all 12 timeframes."""
-    # Block if bot's auto-scan is running
-    if _is_auto_scan_active():
+    # Block if any scan is already running
+    if _is_auto_scan_active() or _is_manual_scan_active():
         return JSONResponse(
-            {"error": "Auto-scan in progress, please wait for it to finish."},
+            {"error": "A scan is in progress, please wait for it to finish."},
             status_code=409,
         )
 
@@ -1134,6 +2355,14 @@ def api_scanner_multi_start():
     from src.services.scanner_service import ScannerService
     from src.api.binance_client import BinanceClient
     config = _read_config()
+    if _config_read_error or not config:
+        return JSONResponse(
+            {
+                "error": "Config file could not be loaded",
+                "warning": f"Config read failed: {_config_read_error or 'missing config'}",
+            },
+            status_code=503,
+        )
 
     # Stop any running multi-scanners
     for s in _multi_scanners.values():
@@ -1146,6 +2375,11 @@ def api_scanner_multi_start():
     prefetch_client.initialize()
     temp_scanner = ScannerService(config, shared_client=prefetch_client)
     shared_symbols = temp_scanner._get_top_symbols_by_volume()
+    if not shared_symbols:
+        return JSONResponse(
+            {"error": "failed to fetch symbols for multi-scan"},
+            status_code=503,
+        )
 
     # Calculate request delay based on parallel count to stay under rate limits
     # Binance: ~1200 weight/min → ~20 req/s max. With N parallel scanners: delay = N * 0.08s
@@ -1154,21 +2388,39 @@ def api_scanner_multi_start():
 
     # Create ALL scanners with shared symbols + rate-limited delay
     import time as _time
-    for tf in _MULTI_TFS:
-        scanner = ScannerService(
-            config, symbol_file=SYMBOL_FILE, timeframe=tf,
-            shared_symbols=shared_symbols,
+    created_scanners: list[Any] = []
+    try:
+        for tf in _MULTI_TFS:
+            scanner = ScannerService(
+                config, symbol_file=SYMBOL_FILE, timeframe=tf,
+                shared_symbols=shared_symbols,
+            )
+            scanner._request_delay = req_delay
+            _multi_scanners[tf] = scanner
+            created_scanners.append(scanner)
+            _time.sleep(0.5)  # Stagger client init
+
+        # Start all scans
+        for tf in _MULTI_TFS:
+            if not _multi_scanners[tf].scan_async(min_confidence=0):
+                raise RuntimeError(f"failed to start scan thread for {tf}")
+
+        if not _set_manual_scan_lock(True):
+            raise RuntimeError("failed to set manual scan lock")
+        return {"status": "started", "timeframes": _MULTI_TFS}
+    except Exception as exc:
+        for scanner in created_scanners:
+            try:
+                scanner.stop()
+                scanner.force_reset()
+            except Exception as cleanup_exc:
+                logger.warning(f"Failed to clean up scanner during multi-scan startup failure: {cleanup_exc}")
+        _multi_scanners.clear()
+        _set_manual_scan_lock(False)
+        return JSONResponse(
+            {"error": f"failed to start multi-scan: {exc}"},
+            status_code=500,
         )
-        scanner._request_delay = req_delay
-        _multi_scanners[tf] = scanner
-        _time.sleep(0.5)  # Stagger client init
-
-    # Start all scans
-    for tf in _MULTI_TFS:
-        _multi_scanners[tf].scan_async(min_confidence=0)
-
-    _set_manual_scan_lock(True)
-    return {"status": "started", "timeframes": _MULTI_TFS}
 
 
 @app.post("/api/scanner/multi-stop", response_class=JSONResponse)
@@ -1176,7 +2428,15 @@ def api_scanner_multi_stop():
     for s in _multi_scanners.values():
         s.stop()
         s.force_reset()
+    _multi_scanners.clear()
     _set_manual_scan_lock(False)
+    try:
+        _MULTI_SCAN_FILE.unlink(missing_ok=True)
+    except Exception as exc:
+        return JSONResponse(
+            {"error": f"failed to clear saved multi-scan results: {exc}"},
+            status_code=500,
+        )
     return {"status": "stopped"}
 
 
@@ -1231,9 +2491,110 @@ def api_auto_scan_progress():
     complete / error / stale) instead of silently implying ``idle`` when
     the bot has not written a progress file yet.
     """
+    def _build_multi_scan_progress_snapshot(multi_scan: dict[str, Any], extra_warning: str | None = None) -> dict[str, Any]:
+        multi = multi_scan if isinstance(multi_scan, dict) else {}
+        warnings: list[str] = []
+        if extra_warning:
+            warnings.append(extra_warning)
+        for key in ("status_warnings", "warnings"):
+            value = multi.get(key)
+            if isinstance(value, list):
+                for item in value:
+                    if item is None:
+                        continue
+                    text = item if isinstance(item, str) else str(item)
+                    if text not in warnings:
+                        warnings.append(text)
+        timeframes = multi.get("timeframes") if isinstance(multi.get("timeframes"), dict) else {}
+        cross_ranking = multi.get("cross_ranking") if isinstance(multi.get("cross_ranking"), list) else []
+        totals = [int(t.get("total_scanned", 0)) for t in timeframes.values() if isinstance(t, dict) and isinstance(t.get("total_scanned"), (int, float))]
+        common_symbols = multi.get("common_symbols") if isinstance(multi.get("common_symbols"), list) else []
+        scan_time = multi.get("scan_time") if isinstance(multi.get("scan_time"), str) else None
+        payload = {
+            "scanning": False,
+            "pct": 100 if timeframes else 0,
+            "done": len(timeframes) if timeframes else 0,
+            "total": len(timeframes) if timeframes else 0,
+            "state": "complete",
+            "completed_at": scan_time,
+            "last_auto_scan": scan_time,
+            "last_scan_results": cross_ranking[:10] if cross_ranking else [],
+            "last_scan_total": max(totals or [len(cross_ranking)]),
+            "last_scan_hot_count": len(common_symbols),
+        }
+        if warnings:
+            payload["warnings"] = list(dict.fromkeys(warnings))
+            payload["status_warnings"] = list(payload["warnings"])
+        return payload
+
     data = _read_json(RUNTIME_DIR / "auto_scan_progress.json")
+    progress_error = data.pop("_json_error", None)
+    multi_scan = _load_multi_results()
+    multi_scan_useful = isinstance(multi_scan, dict) and bool(multi_scan.get("scan_time") or multi_scan.get("cross_ranking") or multi_scan.get("timeframes"))
+    if progress_error:
+        if multi_scan_useful:
+            return _build_multi_scan_progress_snapshot(
+                multi_scan,
+                extra_warning=f"auto_scan_progress.json unreadable: {progress_error}",
+            )
+        return {
+            "scanning": False,
+            "pct": 0,
+            "done": 0,
+            "total": 0,
+            "state": "error",
+            "error": f"auto_scan_progress.json unreadable: {progress_error}",
+            "status_warnings": [f"auto_scan_progress.json unreadable: {progress_error}"],
+        }
     if data:
-        data.setdefault("state", _derive_scan_state(data))
+        if not isinstance(data.get("scanning"), bool):
+            _status_warning_list(data).append(
+                f"auto_scan_progress.json scanning has invalid type {type(data.get('scanning')).__name__}"
+            )
+            data["scanning"] = False
+        for key in ("pct", "done", "total"):
+            value = data.get(key)
+            if value is not None and (not isinstance(value, (int, float)) or isinstance(value, bool)):
+                _status_warning_list(data).append(
+                    f"auto_scan_progress.json {key} has invalid type {type(value).__name__}"
+                )
+                data[key] = 0
+        scan_results = data.get("last_scan_results")
+        if scan_results is not None and not isinstance(scan_results, list):
+            _status_warning_list(data).append(
+                f"auto_scan_progress.json last_scan_results has invalid type {type(scan_results).__name__}"
+            )
+            data["last_scan_results"] = []
+        last_auto_scan = data.get("last_auto_scan")
+        if last_auto_scan is not None and not isinstance(last_auto_scan, str):
+            _status_warning_list(data).append(
+                f"auto_scan_progress.json last_auto_scan has invalid type {type(last_auto_scan).__name__}"
+            )
+            data["last_auto_scan"] = None
+        scan_total = data.get("last_scan_total")
+        if scan_total is not None and (not isinstance(scan_total, (int, float)) or isinstance(scan_total, bool)):
+            _status_warning_list(data).append(
+                f"auto_scan_progress.json last_scan_total has invalid type {type(scan_total).__name__}"
+            )
+            data["last_scan_total"] = 0
+        scan_hot_count = data.get("last_scan_hot_count")
+        if scan_hot_count is not None and (not isinstance(scan_hot_count, (int, float)) or isinstance(scan_hot_count, bool)):
+            _status_warning_list(data).append(
+                f"auto_scan_progress.json last_scan_hot_count has invalid type {type(scan_hot_count).__name__}"
+            )
+            data["last_scan_hot_count"] = 0
+        if multi_scan_useful and not data.get("scanning"):
+            data_ts = data.get("last_auto_scan") or data.get("completed_at")
+            multi_ts = multi_scan.get("scan_time")
+            data_dt = _parse_iso_datetime(data_ts) if isinstance(data_ts, str) else None
+            multi_dt = _parse_iso_datetime(multi_ts) if isinstance(multi_ts, str) else None
+            if multi_dt is not None and (data_dt is None or multi_dt > data_dt):
+                return _build_multi_scan_progress_snapshot(multi_scan)
+        state = data.get("state")
+        if not isinstance(state, str) or state not in {
+            "disabled", "scanning", "error", "stale", "complete", "idle",
+        }:
+            data["state"] = _derive_scan_state(data)
         return data
     return {"scanning": False, "pct": 0, "done": 0, "total": 0, "state": "idle"}
 
@@ -1244,6 +2605,7 @@ def api_scanner_multi_progress():
     any_scanning = False
     all_idle = True
     tf_data = {}
+    warnings: list[str] = []
 
     for tf in _MULTI_TFS:
         scanner = _multi_scanners.get(tf)
@@ -1252,30 +2614,77 @@ def api_scanner_multi_progress():
             continue
 
         all_idle = False
-        progress = scanner.progress
-        results = scanner.results
+        progress = scanner.progress if isinstance(scanner.progress, dict) else {"current": 0, "total": 0, "status": "error"}
+        if not isinstance(scanner.progress, dict):
+            warnings.append(f"{tf} progress has invalid type {type(scanner.progress).__name__}")
+        else:
+            for key in ("current", "total"):
+                value = progress.get(key)
+                if value is None or isinstance(value, bool) or not isinstance(value, (int, float)):
+                    warnings.append(f"{tf} progress {key} has invalid type {type(value).__name__}")
+                    progress[key] = 0
+            status_value = progress.get("status")
+            if not isinstance(status_value, str):
+                warnings.append(f"{tf} progress status has invalid type {type(status_value).__name__}")
+                progress["status"] = "error"
+            progress_warnings = progress.get("warnings")
+            if isinstance(progress_warnings, list):
+                for warning in progress_warnings:
+                    if warning is None:
+                        continue
+                    warnings.append(f"{tf} progress warning: {warning if isinstance(warning, str) else str(warning)}")
+        results = scanner.results if isinstance(scanner.results, list) else []
+        if not isinstance(scanner.results, list):
+            warnings.append(f"{tf} results has invalid type {type(scanner.results).__name__}")
 
         if scanner.is_scanning:
             any_scanning = True
 
         # ZAK-weighted sorting: final_score = (conf²) × (ZAK/100)
-        for r in results:
-            r["final_score"] = _calc_nss(r["confidence"], tf)
+        safe_results = [r for r in results if isinstance(r, dict)]
+        normalized_results: list[dict[str, Any]] = []
+        for r in safe_results:
+            symbol = r.get("symbol")
+            if not symbol:
+                warnings.append(f"{tf} result missing symbol")
+                continue
+            confidence_raw = r.get("confidence", 0)
+            if isinstance(confidence_raw, bool) or not isinstance(confidence_raw, (int, float)):
+                confidence = 0.0
+                warnings.append(f"{tf} result {symbol} has invalid confidence {confidence_raw!r}")
+            else:
+                confidence = float(confidence_raw)
+            indicator_warnings = r.get("indicator_warnings")
+            if isinstance(indicator_warnings, list):
+                for warning in indicator_warnings:
+                    if warning is None:
+                        continue
+                    warnings.append(
+                        f"{tf} {symbol} indicator warning: {warning if isinstance(warning, str) else str(warning)}"
+                    )
+            signal = str(r.get("signal") or "NEUTRAL")
+            r["symbol"] = symbol
+            r["confidence"] = confidence
+            r["signal"] = signal
+            r["final_score"] = _calc_nss(confidence, tf)
             r["zak"] = ZAK.get(tf, 50)
-        top15 = sorted(results, key=lambda r: r.get("final_score", 0), reverse=True)[:15] if results else []
+            normalized_results.append(r)
+        top15 = sorted(normalized_results, key=lambda r: r.get("final_score", 0), reverse=True)[:15] if normalized_results else []
 
         tf_data[tf] = {
             "scanning": scanner.is_scanning,
             "progress": progress,
             "top15": top15,
-            "total_scanned": len(results),
+            "total_scanned": len(normalized_results),
         }
 
     # If no active scanners, try loading from disk
     if all_idle:
         saved = _load_multi_results()
         if saved:
-            return saved
+            progress = _read_json(RUNTIME_DIR / "auto_scan_progress.json")
+            progress.pop("_json_error", None)
+            return _prefer_fresher_multi_scan_snapshot(saved, progress)
 
     # Find coins that appear in ALL 12 completed top15 lists
     all_complete = True
@@ -1310,6 +2719,8 @@ def api_scanner_multi_progress():
         "cross_ranking": cross_ranking,
         "scan_time": datetime.now(timezone.utc).isoformat() if all_complete else None,
     }
+    if warnings:
+        result["status_warnings"] = list(dict.fromkeys(warnings))
 
     # Save to disk when all complete & clear manual scan lock
     if all_complete and not any_scanning:
@@ -1404,7 +2815,10 @@ def api_get_risk_level():
     """Get current risk level."""
     level = _get_current_risk_level()
     preset = RISK_PRESETS[level]
-    return {"level": level, "label": preset["label"], "presets": RISK_PRESETS}
+    payload = {"level": level, "label": preset["label"], "presets": RISK_PRESETS}
+    if _config_read_error:
+        payload["warning"] = f"Config read failed: {_config_read_error}"
+    return payload
 
 
 @app.post("/api/risk-level", response_class=JSONResponse)
@@ -1438,7 +2852,10 @@ def api_get_daily_loss_limit():
     risk = config.get("risk", {})
     enabled = risk.get("daily_loss_limit_enabled", True)
     pct = risk.get("daily_loss_limit_pct", 0.05)
-    return {"enabled": enabled, "pct": pct}
+    payload = {"enabled": enabled, "pct": pct}
+    if _config_read_error:
+        payload["warning"] = f"Config read failed: {_config_read_error}"
+    return payload
 
 
 @app.post("/api/daily-loss-limit", response_class=JSONResponse)
@@ -1451,8 +2868,16 @@ def api_set_daily_loss_limit(
     config.setdefault("risk", {})
 
     if enabled is not None:
-        config["risk"]["daily_loss_limit_enabled"] = enabled.lower() in ("true", "1", "on")
+        try:
+            config["risk"]["daily_loss_limit_enabled"] = _parse_bool_form(enabled, "enabled")
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
     if pct is not None:
+        if pct <= 0 or pct > 1:
+            return JSONResponse(
+                {"error": "daily_loss_limit_pct must be between 0 and 1"},
+                status_code=400,
+            )
         config["risk"]["daily_loss_limit_pct"] = pct
 
     _write_config(config)
@@ -1470,22 +2895,47 @@ def api_set_daily_loss_limit(
 def api_get_auto_select():
     """Get auto-select enabled status."""
     config = _read_config()
-    return {"enabled": config.get("auto_select_enabled", True)}
+    payload = {"enabled": config.get("auto_select_enabled", False)}
+    if _config_read_error:
+        payload["warning"] = f"Config read failed: {_config_read_error}"
+    return payload
 
 
 @app.post("/api/auto-select", response_class=JSONResponse)
 def api_set_auto_select(enabled: str = Form(...)):
     """Toggle auto coin selection on/off."""
     config = _read_config()
-    is_enabled = enabled.lower() in ("true", "1", "on")
+    try:
+        is_enabled = _parse_bool_form(enabled, "enabled")
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    original_config = deepcopy(config)
     config["auto_select_enabled"] = is_enabled
     _write_config(config)
     # Also manage runtime flag file as belt-and-suspenders for bot process
     flag_file = RUNTIME_DIR / "auto_select_disabled"
-    if is_enabled:
-        flag_file.unlink(missing_ok=True)
-    else:
-        flag_file.write_text("disabled")
+    try:
+        if is_enabled:
+            flag_file.unlink(missing_ok=True)
+        else:
+            _atomic_write_text(flag_file, "disabled")
+    except Exception as exc:
+        logger.warning(f"Failed to update auto_select_disabled flag {flag_file}: {exc}")
+        try:
+            _write_config(original_config)
+        except Exception as rollback_exc:
+            logger.warning(
+                f"Failed to roll back auto_select config after flag error: {rollback_exc}"
+            )
+        if not is_enabled:
+            try:
+                if flag_file.exists():
+                    flag_file.unlink()
+            except Exception as cleanup_exc:
+                logger.warning(
+                    f"Failed to remove stale auto_select_disabled flag after write error: {cleanup_exc}"
+                )
+        return JSONResponse({"error": str(exc)}, status_code=500)
     return {"status": "ok", "enabled": is_enabled}
 
 
@@ -1493,21 +2943,46 @@ def api_set_auto_select(enabled: str = Form(...)):
 def api_get_auto_scan_toggle():
     """Get auto-scan enabled status."""
     config = _read_config()
-    return {"enabled": config.get("auto_scan_enabled", True)}
+    payload = {"enabled": config.get("auto_scan_enabled", False)}
+    if _config_read_error:
+        payload["warning"] = f"Config read failed: {_config_read_error}"
+    return payload
 
 
 @app.post("/api/auto-scan-toggle", response_class=JSONResponse)
 def api_set_auto_scan_toggle(enabled: str = Form(...)):
     """Toggle auto-scan on/off."""
     config = _read_config()
-    is_enabled = enabled.lower() in ("true", "1", "on")
+    try:
+        is_enabled = _parse_bool_form(enabled, "enabled")
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    original_config = deepcopy(config)
     config["auto_scan_enabled"] = is_enabled
     _write_config(config)
     flag_file = RUNTIME_DIR / "auto_scan_disabled"
-    if is_enabled:
-        flag_file.unlink(missing_ok=True)
-    else:
-        flag_file.write_text("disabled")
+    try:
+        if is_enabled:
+            flag_file.unlink(missing_ok=True)
+        else:
+            _atomic_write_text(flag_file, "disabled")
+    except Exception as exc:
+        logger.warning(f"Failed to update auto_scan_disabled flag {flag_file}: {exc}")
+        try:
+            _write_config(original_config)
+        except Exception as rollback_exc:
+            logger.warning(
+                f"Failed to roll back auto_scan config after flag error: {rollback_exc}"
+            )
+        if not is_enabled:
+            try:
+                if flag_file.exists():
+                    flag_file.unlink()
+            except Exception as cleanup_exc:
+                logger.warning(
+                    f"Failed to remove stale auto_scan_disabled flag after write error: {cleanup_exc}"
+                )
+        return JSONResponse({"error": str(exc)}, status_code=500)
     return {"status": "ok", "enabled": is_enabled}
 
 
@@ -1526,6 +3001,14 @@ def api_set_trading_mode(mode: str = Form(...)):
 
     preset = TRADING_MODES[mode]
     config = _read_config()
+    if _config_read_error:
+        return JSONResponse(
+            {
+                "error": "Config file could not be loaded",
+                "warning": f"Config read failed: {_config_read_error}",
+            },
+            status_code=503,
+        )
     config.setdefault("risk", {})
     config["risk"]["stop_loss_pct"] = preset["stop_loss_pct"]
     config["risk"]["take_profit_pct"] = preset["take_profit_pct"]
@@ -1560,25 +3043,35 @@ def api_get_config():
 @app.post("/api/config", response_class=JSONResponse)
 async def api_update_config(request: Request):
     """Update config from JSON body."""
-    body = await request.json()
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
 
     config = _read_config()
+    if _config_read_error:
+        return JSONResponse(
+            {
+                "error": "Config file could not be loaded",
+                "warning": f"Config read failed: {_config_read_error}",
+            },
+            status_code=503,
+        )
     if not config:
         return JSONResponse({"error": "Config file not found"}, status_code=404)
 
-    # Merge updates into config
-    for key, value in body.items():
-        if key in config:
-            if isinstance(config[key], dict) and isinstance(value, dict):
-                config[key].update(value)
-            else:
-                config[key] = value
-        elif "." in key:
-            parts = key.split(".", 1)
-            if parts[0] in config and isinstance(config[parts[0]], dict):
-                config[parts[0]][parts[1]] = value
+    updated_config = _merge_config_updates(config, body)
+    is_valid, validation_errors = _validate_config_for_write(updated_config)
+    if not is_valid:
+        return JSONResponse(
+            {"error": "Invalid config", "details": validation_errors},
+            status_code=400,
+        )
 
-    _write_config(config)
+    _write_config(updated_config)
     return {"status": "ok", "message": "Config updated"}
 
 
@@ -1606,41 +3099,97 @@ def api_get_symbol():
 
 @app.get("/", response_class=HTMLResponse)
 def page_index(request: Request):
+    global _live_signal_error
     status = _read_json(STATUS_FILE)
-    bot_running = _is_bot_running()
-    # Fallback: if process check failed but status file says running (recently updated)
-    if not bot_running and status.get("bot_status") == "running":
-        last_update = status.get("last_update", "")
-        try:
-            from datetime import datetime, timezone
-            lu = datetime.fromisoformat(last_update)
-            age = (datetime.now(timezone.utc) - lu).total_seconds()
-            if age < 120:  # updated within last 2 minutes — bot is likely running
-                bot_running = True
-        except Exception:
-            pass
+    warnings: list[str] = []
+    read_error = status.pop("_json_error", None)
+    if read_error:
+        warnings.append(f"Failed to read dashboard_status.json: {read_error}")
+        fallback = _read_json(STATE_FILE)
+        fallback_error = fallback.pop("_json_error", None)
+        if fallback and not fallback_error:
+            status = _normalize_dashboard_status(fallback)
+            status["_source"] = "state.json (fallback)"
+        elif fallback_error:
+            warnings.append(f"Failed to read state.json: {fallback_error}")
+    elif not status:
+        fallback = _read_json(STATE_FILE)
+        fallback_error = fallback.pop("_json_error", None)
+        if fallback and not fallback_error:
+            status = _normalize_dashboard_status(fallback)
+            status["_source"] = "state.json (fallback)"
+        elif fallback_error:
+            warnings.append(f"Failed to read state.json: {fallback_error}")
+    status = _normalize_dashboard_status(status)
+    if warnings:
+        _status_warning_list(status).extend(warnings)
+    if _config_read_error:
+        _status_warning_list(status).append(
+            f"Config read failed: {_config_read_error}"
+        )
+    if _live_signal_error:
+        _status_warning_list(status).append(
+            f"Live signal refresh failed: {_live_signal_error}"
+        )
+    bot_running = _resolve_bot_running(status)
     bot_start = status.get("bot_start_time") if bot_running else None
 
     risk_level = _get_current_risk_level()
     trading_mode = _get_current_trading_mode()
 
     config = _read_config()
+    if CONFIG_FILE.exists() and not config:
+        _status_warning_list(status).append("Config file could not be loaded.")
     risk_cfg = config.get("risk", {})
     dll_enabled = risk_cfg.get("daily_loss_limit_enabled", True)
     dll_pct = risk_cfg.get("daily_loss_limit_pct", 0.05)
-    auto_select_enabled = config.get("auto_select_enabled", True)
-    auto_scan_enabled = config.get("auto_scan_enabled", True)
+    auto_select_enabled = config.get("auto_select_enabled", False)
+    auto_scan_enabled = config.get("auto_scan_enabled", False)
 
     # Merge auto-scan data from authoritative source (auto_scan_progress.json)
     scan_progress = _read_json(RUNTIME_DIR / "auto_scan_progress.json")
-    if scan_progress.get("last_auto_scan"):
-        status["last_auto_scan"] = scan_progress["last_auto_scan"]
-    if scan_progress.get("last_scan_results"):
+    scan_error = scan_progress.pop("_json_error", None)
+    if scan_error:
+        _status_warning_list(status).append(
+            f"auto_scan_progress.json unreadable: {scan_error}"
+        )
+        scan_progress = {}
+    scan_results = scan_progress.get("last_scan_results")
+    if scan_results is not None and not isinstance(scan_results, list):
+        _status_warning_list(status).append(
+            f"auto_scan_progress.json last_scan_results has invalid type {type(scan_results).__name__}"
+        )
+        scan_progress["last_scan_results"] = []
+    scan_total = scan_progress.get("last_scan_total")
+    if scan_total is not None and (not isinstance(scan_total, (int, float)) or isinstance(scan_total, bool)):
+        _status_warning_list(status).append(
+            f"auto_scan_progress.json last_scan_total has invalid type {type(scan_total).__name__}"
+        )
+        scan_progress["last_scan_total"] = 0
+    scan_hot_count = scan_progress.get("last_scan_hot_count")
+    if scan_hot_count is not None and (not isinstance(scan_hot_count, (int, float)) or isinstance(scan_hot_count, bool)):
+        _status_warning_list(status).append(
+            f"auto_scan_progress.json last_scan_hot_count has invalid type {type(scan_hot_count).__name__}"
+        )
+        scan_progress["last_scan_hot_count"] = 0
+    if "last_auto_scan" in scan_progress:
+        last_auto_scan = scan_progress.get("last_auto_scan")
+        if isinstance(last_auto_scan, str):
+            status["last_auto_scan"] = last_auto_scan
+            status["last_update"] = last_auto_scan
+        elif last_auto_scan is not None:
+            _status_warning_list(status).append(
+                f"auto_scan_progress.json last_auto_scan has invalid type {type(last_auto_scan).__name__}"
+            )
+    if "last_scan_results" in scan_progress:
         status["last_scan_results"] = scan_progress["last_scan_results"]
     if scan_progress.get("last_scan_hot_count") is not None:
         status["last_scan_hot_count"] = scan_progress["last_scan_hot_count"]
     if scan_progress.get("last_scan_total") is not None:
         status["last_scan_total"] = scan_progress["last_scan_total"]
+    multi_scan = _load_multi_results()
+    if multi_scan:
+        status = _merge_multi_scan_into_status(status, multi_scan)
 
     price_view = _price_display(status, bot_running=bot_running)
 
@@ -1669,16 +3218,100 @@ def page_index(request: Request):
 @app.get("/scan", response_class=HTMLResponse)
 def page_scan(request: Request):
     status = _read_json(STATUS_FILE)
+    status_error = status.pop("_json_error", None)
+    if status_error:
+        _status_warning_list(status).append(
+            f"Failed to read dashboard_status.json: {status_error}"
+        )
+        fallback = _read_json(STATE_FILE)
+        fallback_error = fallback.pop("_json_error", None)
+        if fallback and not fallback_error:
+            status = _normalize_dashboard_status(fallback)
+            status["_source"] = "state.json (fallback)"
+        elif fallback_error:
+            _status_warning_list(status).append(
+                f"Failed to read state.json: {fallback_error}"
+            )
+    elif not status:
+        fallback = _read_json(STATE_FILE)
+        fallback_error = fallback.pop("_json_error", None)
+        if fallback and not fallback_error:
+            status = _normalize_dashboard_status(fallback)
+            status["_source"] = "state.json (fallback)"
+    status = _normalize_dashboard_status(status)
     # Merge auto-scan data
     scan_progress = _read_json(RUNTIME_DIR / "auto_scan_progress.json")
-    if scan_progress.get("last_auto_scan"):
-        status["last_auto_scan"] = scan_progress["last_auto_scan"]
-    if scan_progress.get("last_scan_results"):
+    scan_error = scan_progress.pop("_json_error", None)
+    if scan_error:
+        _status_warning_list(status).append(
+            f"auto_scan_progress.json unreadable: {scan_error}"
+        )
+        scan_progress = {
+            "scanning": False,
+            "pct": 0,
+            "done": 0,
+            "total": 0,
+            "state": "error",
+            "error": f"auto_scan_progress.json unreadable: {scan_error}",
+            "status_warnings": [f"auto_scan_progress.json unreadable: {scan_error}"],
+        }
+    scan_results = scan_progress.get("last_scan_results")
+    if scan_results is not None and not isinstance(scan_results, list):
+        _status_warning_list(status).append(
+            f"auto_scan_progress.json last_scan_results has invalid type {type(scan_results).__name__}"
+        )
+        scan_progress["last_scan_results"] = []
+    scan_total = scan_progress.get("last_scan_total")
+    if scan_total is not None and (not isinstance(scan_total, (int, float)) or isinstance(scan_total, bool)):
+        _status_warning_list(status).append(
+            f"auto_scan_progress.json last_scan_total has invalid type {type(scan_total).__name__}"
+        )
+        scan_progress["last_scan_total"] = 0
+    scan_hot_count = scan_progress.get("last_scan_hot_count")
+    if scan_hot_count is not None and (not isinstance(scan_hot_count, (int, float)) or isinstance(scan_hot_count, bool)):
+        _status_warning_list(status).append(
+            f"auto_scan_progress.json last_scan_hot_count has invalid type {type(scan_hot_count).__name__}"
+        )
+        scan_progress["last_scan_hot_count"] = 0
+    if "last_auto_scan" in scan_progress:
+        last_auto_scan = scan_progress.get("last_auto_scan")
+        if isinstance(last_auto_scan, str):
+            status["last_auto_scan"] = last_auto_scan
+            status["last_update"] = last_auto_scan
+        elif last_auto_scan is not None:
+            _status_warning_list(status).append(
+                f"auto_scan_progress.json last_auto_scan has invalid type {type(last_auto_scan).__name__}"
+            )
+    if "last_scan_results" in scan_progress:
         status["last_scan_results"] = scan_progress["last_scan_results"]
     if scan_progress.get("last_scan_hot_count") is not None:
         status["last_scan_hot_count"] = scan_progress["last_scan_hot_count"]
     if scan_progress.get("last_scan_total") is not None:
         status["last_scan_total"] = scan_progress["last_scan_total"]
+    multi_scan = _load_multi_results()
+    if multi_scan:
+        status = _merge_multi_scan_into_status(status, multi_scan)
+        scan_time = multi_scan.get("scan_time") if isinstance(multi_scan, dict) else None
+        candidate_dt = _parse_iso_datetime(scan_time) if isinstance(scan_time, str) else None
+        current_dt = _parse_iso_datetime(scan_progress.get("last_auto_scan") or status.get("last_update")) if isinstance(scan_progress, dict) else None
+        should_replace = candidate_dt is not None and (current_dt is None or candidate_dt > current_dt)
+        if should_replace or not scan_progress:
+            cross_ranking = multi_scan.get("cross_ranking") if isinstance(multi_scan.get("cross_ranking"), list) else []
+            timeframes = multi_scan.get("timeframes") if isinstance(multi_scan.get("timeframes"), dict) else {}
+            totals = [int(t.get("total_scanned", 0)) for t in timeframes.values() if isinstance(t, dict) and isinstance(t.get("total_scanned"), (int, float))]
+            scan_progress = {
+                "scanning": False,
+                "pct": 100,
+                "done": len(timeframes) if timeframes else 0,
+                "total": len(timeframes) if timeframes else 0,
+                "state": "complete",
+                "status": "complete",
+                "last_auto_scan": scan_time,
+                "last_scan_results": cross_ranking[:10] if cross_ranking else [],
+                "last_scan_total": max(totals or [len(cross_ranking)]),
+                "last_scan_hot_count": len(multi_scan.get("common_symbols", [])) if isinstance(multi_scan.get("common_symbols"), list) else 0,
+                "status_warnings": _status_warning_list(status),
+            }
     # S8: canonical scan state (idle/scanning/disabled/complete/error/stale).
     scan_state = _derive_scan_state(scan_progress)
     scan_reason = scan_progress.get("reason", "") if scan_progress else ""
@@ -1688,7 +3321,7 @@ def page_scan(request: Request):
         context={
             "status": status,
             "page": "scan",
-            "bot_running": _is_bot_running(),
+            "bot_running": _resolve_bot_running(status),
             "data_stale": _is_stale(status),
             "scan_state": scan_state,
             "scan_reason": scan_reason,
@@ -1700,13 +3333,34 @@ def page_scan(request: Request):
 @app.get("/positions", response_class=HTMLResponse)
 def page_positions(request: Request):
     status = _read_json(STATUS_FILE)
+    status_error = status.pop("_json_error", None)
+    if status_error:
+        _status_warning_list(status).append(
+            f"Failed to read dashboard_status.json: {status_error}"
+        )
+        fallback = _read_json(STATE_FILE)
+        fallback_error = fallback.pop("_json_error", None)
+        if fallback and not fallback_error:
+            status = _normalize_dashboard_status(fallback)
+            status["_source"] = "state.json (fallback)"
+        elif fallback_error:
+            _status_warning_list(status).append(
+                f"Failed to read state.json: {fallback_error}"
+            )
+    elif not status:
+        fallback = _read_json(STATE_FILE)
+        fallback_error = fallback.pop("_json_error", None)
+        if fallback and not fallback_error:
+            status = _normalize_dashboard_status(fallback)
+            status["_source"] = "state.json (fallback)"
+    status = _normalize_dashboard_status(status)
     return templates.TemplateResponse(
         request=request,
         name="positions.html",
         context={
             "status": status,
             "page": "positions",
-            "bot_running": _is_bot_running(),
+            "bot_running": _resolve_bot_running(status),
             "data_stale": _is_stale(status),
         },
     )
@@ -1715,13 +3369,34 @@ def page_positions(request: Request):
 @app.get("/signals", response_class=HTMLResponse)
 def page_signals(request: Request):
     status = _read_json(STATUS_FILE)
+    status_error = status.pop("_json_error", None)
+    if status_error:
+        _status_warning_list(status).append(
+            f"Failed to read dashboard_status.json: {status_error}"
+        )
+        fallback = _read_json(STATE_FILE)
+        fallback_error = fallback.pop("_json_error", None)
+        if fallback and not fallback_error:
+            status = _normalize_dashboard_status(fallback)
+            status["_source"] = "state.json (fallback)"
+        elif fallback_error:
+            _status_warning_list(status).append(
+                f"Failed to read state.json: {fallback_error}"
+            )
+    elif not status:
+        fallback = _read_json(STATE_FILE)
+        fallback_error = fallback.pop("_json_error", None)
+        if fallback and not fallback_error:
+            status = _normalize_dashboard_status(fallback)
+            status["_source"] = "state.json (fallback)"
+    status = _normalize_dashboard_status(status)
     return templates.TemplateResponse(
         request=request,
         name="signals.html",
         context={
             "status": status,
             "page": "signals",
-            "bot_running": _is_bot_running(),
+            "bot_running": _resolve_bot_running(status),
             "data_stale": _is_stale(status),
         },
     )
@@ -1742,6 +3417,7 @@ def page_logs(
             "page": "logs",
             "current_level": level or "ALL",
             "current_search": search or "",
+            "log_warning": _log_read_error,
         },
     )
 
@@ -1749,28 +3425,49 @@ def page_logs(
 @app.get("/performance", response_class=HTMLResponse)
 def page_performance(request: Request):
     status = _read_json(STATUS_FILE)
-    # Compute daily summary for the template
+    status_error = status.pop("_json_error", None)
+    if status_error:
+        _status_warning_list(status).append(
+            f"Failed to read dashboard_status.json: {status_error}"
+        )
+        fallback = _read_json(STATE_FILE)
+        fallback_error = fallback.pop("_json_error", None)
+        if fallback and not fallback_error:
+            status = _normalize_dashboard_status(fallback)
+            status["_source"] = "state.json (fallback)"
+        elif fallback_error:
+            _status_warning_list(status).append(
+                f"Failed to read state.json: {fallback_error}"
+            )
+    elif not status:
+        fallback = _read_json(STATE_FILE)
+        fallback_error = fallback.pop("_json_error", None)
+        if fallback and not fallback_error:
+            status = _normalize_dashboard_status(fallback)
+            status["_source"] = "state.json (fallback)"
+    status = _normalize_dashboard_status(status)
     trade_history = status.get("trade_history", [])
-    daily: dict[str, list[float]] = {}
-    for t in trade_history:
-        exit_time = t.get("exit_time", "")
-        if not exit_time:
-            continue
-        date_str = str(exit_time)[:10]
-        daily.setdefault(date_str, []).append(t.get("pnl", 0.0))
-
-    daily_summaries = []
-    for d in sorted(daily.keys()):
-        pnls = daily[d]
-        w = [p for p in pnls if p > 0]
-        daily_summaries.append({
-            "date": d,
-            "trades": len(pnls),
-            "wins": len(w),
-            "losses": len(pnls) - len(w),
-            "pnl": round(sum(pnls), 4),
-            "win_rate": round(len(w) / len(pnls) * 100, 1) if pnls else 0,
-        })
+    if isinstance(trade_history, list):
+        normalized_history: list[dict[str, Any]] = []
+        for item in trade_history:
+            if not isinstance(item, dict):
+                continue
+            record = dict(item)
+            try:
+                record["pnl"] = float(record.get("pnl", 0.0) or 0.0)
+            except Exception:
+                record["pnl"] = 0.0
+            exit_time = record.get("exit_time")
+            if exit_time is not None and not isinstance(exit_time, str):
+                try:
+                    record["exit_time"] = str(exit_time)
+                except Exception:
+                    record["exit_time"] = ""
+            normalized_history.append(record)
+    else:
+        normalized_history = []
+    status["trade_history"] = normalized_history
+    daily_summaries = compute_daily_summary(normalized_history)
 
     return templates.TemplateResponse(
         request=request,
@@ -1779,7 +3476,7 @@ def page_performance(request: Request):
             "status": status,
             "daily_summaries": daily_summaries,
             "page": "performance",
-            "bot_running": _is_bot_running(),
+            "bot_running": _resolve_bot_running(status),
             "data_stale": _is_stale(status),
         },
     )
@@ -1790,6 +3487,11 @@ def page_performance(request: Request):
 @app.get("/settings", response_class=HTMLResponse)
 def page_settings(request: Request, saved: Optional[str] = Query(default=None)):
     config = _read_config()
+    config_warning = (
+        f"Config read failed: {_config_read_error}"
+        if _config_read_error
+        else None
+    )
     env = _read_env()
     symbol = _read_symbol()
     return templates.TemplateResponse(
@@ -1800,6 +3502,7 @@ def page_settings(request: Request, saved: Optional[str] = Query(default=None)):
             "config": config,
             "env": env,
             "symbol": symbol,
+            "config_warning": config_warning,
             "mask_key": _mask_key,
             "saved": saved,
             "valid_timeframes": sorted(VALID_TIMEFRAMES, key=lambda t: (
@@ -1848,6 +3551,10 @@ def save_config(
 ):
     """Save general config from the settings form."""
     config = _read_config()
+    if not config:
+        return RedirectResponse("/settings?saved=error_config", status_code=303)
+    candidate = deepcopy(config)
+    config = candidate
 
     # Validate timeframe
     if timeframe not in VALID_TIMEFRAMES:
@@ -1866,7 +3573,12 @@ def save_config(
     config["risk"]["trailing_stop_pct"] = trailing_stop_pct
     config["risk"]["trailing_stop_activation_pct"] = trailing_stop_activation_pct
     config["risk"]["max_open_positions"] = max_open_positions
-    config["risk"]["daily_loss_limit_enabled"] = daily_loss_limit_enabled.lower() in ("true", "1")
+    try:
+        config["risk"]["daily_loss_limit_enabled"] = _parse_bool_form(
+            daily_loss_limit_enabled, "daily_loss_limit_enabled", default=True
+        )
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
     config["risk"]["daily_loss_limit_pct"] = daily_loss_limit_pct
     config["risk"]["confidence_threshold"] = confidence_threshold
     config["risk"]["max_risk_level"] = max_risk_level
@@ -1890,9 +3602,19 @@ def save_config(
     config["no_trade"]["min_confidence"] = min_confidence
 
     config.setdefault("leverage", {})
-    config["leverage"]["enabled"] = leverage_enabled.lower() == "true"
+    try:
+        config["leverage"]["enabled"] = _parse_bool_form(
+            leverage_enabled, "leverage_enabled", default=False
+        )
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
     config["leverage"]["scale_ratio"] = leverage_scale_ratio
     config["leverage"]["min_leverage"] = leverage_min
+
+    validation_errors = validate_config(config)
+    if validation_errors:
+        logger.warning("settings config validation failed: %s", validation_errors)
+        return RedirectResponse("/settings?saved=error_validation", status_code=303)
 
     _write_config(config)
     return RedirectResponse("/settings?saved=config", status_code=303)
@@ -1901,18 +3623,35 @@ def save_config(
 @app.post("/settings/weights", response_class=HTMLResponse)
 async def save_weights(request: Request):
     """Save indicator weights from the settings form."""
-    form = await request.form()
-    config = _read_config()
-    config.setdefault("indicator_weights", {})
+    from math import isfinite
 
-    for key in config["indicator_weights"]:
+    try:
+        form = await request.form()
+    except Exception:
+        return RedirectResponse("/settings?saved=error_validation", status_code=303)
+    config = _read_config()
+    if _config_read_error or not config:
+        return RedirectResponse("/settings?saved=error_config", status_code=303)
+    config.setdefault("indicator_weights", {})
+    updated_weights = dict(config["indicator_weights"])
+    invalid_keys: list[str] = []
+
+    for key in updated_weights:
         form_key = f"weight_{key}"
         if form_key in form:
             try:
-                config["indicator_weights"][key] = float(form[form_key])
+                parsed = float(form[form_key])
+                if not isfinite(parsed):
+                    raise ValueError("non-finite")
+                updated_weights[key] = parsed
             except ValueError:
-                pass
+                invalid_keys.append(key)
 
+    if invalid_keys:
+        logger.warning("indicator weight validation failed: %s", invalid_keys)
+        return RedirectResponse("/settings?saved=error_validation", status_code=303)
+
+    config["indicator_weights"] = updated_weights
     _write_config(config)
     return RedirectResponse("/settings?saved=weights", status_code=303)
 
@@ -1955,8 +3694,18 @@ def save_symbol(
 ):
     """Update active trading symbol."""
     symbol = symbol.strip().upper()
-    if not re.match(r"^[\w]{2,30}$", symbol, re.UNICODE):
+    if not re.fullmatch(r"[A-Z0-9]{2,20}", symbol):
         return RedirectResponse("/settings?saved=error_symbol", status_code=303)
-    SYMBOL_FILE.parent.mkdir(parents=True, exist_ok=True)
-    SYMBOL_FILE.write_text(symbol + "\n")
+    try:
+        _atomic_write_text(SYMBOL_FILE, symbol + "\n")
+    except Exception as exc:
+        try:
+            if SYMBOL_FILE.exists():
+                SYMBOL_FILE.unlink()
+        except Exception as cleanup_exc:
+            logger.warning(
+                f"Failed to remove stale symbol file after save_symbol error: {cleanup_exc}"
+            )
+        logger.warning(f"Failed to save symbol to {SYMBOL_FILE}: {exc}")
+        return RedirectResponse("/settings?saved=error_symbol", status_code=303)
     return RedirectResponse("/settings?saved=symbol", status_code=303)

@@ -6,10 +6,29 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+DEFAULT_LOG_FILE = str(PROJECT_ROOT / "runtime" / "bot.log")
+
+
+def _resolve_log_path(log_file: str) -> Path:
+    text = log_file.strip()
+    if text in {"", "."}:
+        return Path(DEFAULT_LOG_FILE)
+
+    path = Path(text).expanduser()
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+
+    if path.exists() and path.is_dir():
+        return path / "bot.log"
+    if not path.suffix and not path.exists():
+        return path / "bot.log"
+    return path
+
 
 def setup_logger(
     name: str = "trading_bot",
-    log_file: Optional[str] = "runtime/bot.log",
+    log_file: Optional[str] = DEFAULT_LOG_FILE,
     level: int = logging.INFO,
     max_bytes: int = 10 * 1024 * 1024,  # 10MB
     backup_count: int = 5,
@@ -32,7 +51,7 @@ def setup_logger(
     logger.addHandler(console_handler)
 
     if log_file:
-        log_path = Path(log_file)
+        log_path = _resolve_log_path(str(log_file))
         log_path.parent.mkdir(parents=True, exist_ok=True)
         file_handler = logging.handlers.RotatingFileHandler(
             log_path,

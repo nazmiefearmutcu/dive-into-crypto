@@ -9,14 +9,34 @@ from src.utils.logger import get_logger
 
 logger = get_logger("monitoring.log_reader")
 
-DEFAULT_LOG_PATH = "runtime/bot.log"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+DEFAULT_LOG_PATH = str(PROJECT_ROOT / "runtime" / "bot.log")
+
+
+def _resolve_log_path(log_path: str) -> Path:
+    text = log_path.strip()
+    if text in {"", "."}:
+        return Path(DEFAULT_LOG_PATH)
+
+    path = Path(text).expanduser()
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+
+    if path.exists() and path.is_dir():
+        return path / "bot.log"
+    if not path.suffix and not path.exists():
+        return path / "bot.log"
+    return path
 
 
 class LogReader:
     """Reads the bot log file tail and supports level filtering."""
 
     def __init__(self, log_path: str = DEFAULT_LOG_PATH) -> None:
-        self.log_path = Path(log_path)
+        if isinstance(log_path, (str, Path)):
+            self.log_path = _resolve_log_path(str(log_path))
+        else:
+            self.log_path = Path(DEFAULT_LOG_PATH)
 
     def read_tail(self, n: int = 200) -> list[str]:
         """Read the last N lines from the log file."""

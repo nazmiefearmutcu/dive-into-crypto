@@ -21,8 +21,14 @@ class BinanceClient:
 
     def __init__(self, config: dict[str, Any]) -> None:
         self.config = config
-        self.mode = config.get("mode", "paper")
-        self.market_type = config.get("market_type", "spot")
+        mode = config.get("mode", "paper")
+        self.mode = mode.strip().lower() if isinstance(mode, str) else "paper"
+        market_type = config.get("market_type", "spot")
+        self.market_type = market_type.strip().lower() if isinstance(market_type, str) else "spot"
+        if self.mode not in {"paper", "live"}:
+            raise ValueError(f"Invalid mode: {self.mode}")
+        if self.market_type not in {"spot", "futures"}:
+            raise ValueError(f"Invalid market_type: {self.market_type}")
         self._client: Optional[Client] = None
         self._initialized = False
 
@@ -114,10 +120,19 @@ class BinanceClient:
     def get_account_balance(self, asset: str = "USDT") -> float:
         """Get account balance for a specific asset."""
         try:
-            account = self.client.get_account()
-            for balance in account["balances"]:
-                if balance["asset"] == asset:
-                    return float(balance["free"])
+            if self.market_type == "futures":
+                account = self.client.futures_account_balance()
+                for balance in account:
+                    if balance.get("asset") == asset:
+                        amount = balance.get("availableBalance")
+                        if amount is None:
+                            amount = balance.get("balance")
+                        return float(amount)
+            else:
+                account = self.client.get_account()
+                for balance in account["balances"]:
+                    if balance["asset"] == asset:
+                        return float(balance["free"])
             return 0.0
         except Exception as e:
             logger.error(f"Failed to get account balance: {e}")
@@ -143,10 +158,18 @@ class BinanceClient:
             logger.warning("place_market_buy called in paper mode - should use paper engine")
             return None
         try:
-            order = self.client.order_market_buy(
-                symbol=symbol,
-                quantity=quantity,
-            )
+            if self.market_type == "futures":
+                order = self.client.futures_create_order(
+                    symbol=symbol,
+                    side="BUY",
+                    type="MARKET",
+                    quantity=quantity,
+                )
+            else:
+                order = self.client.order_market_buy(
+                    symbol=symbol,
+                    quantity=quantity,
+                )
             logger.info(f"MARKET BUY executed | {symbol} | qty={quantity} | order_id={order['orderId']}")
             return order
         except BinanceAPIException as e:
@@ -162,10 +185,18 @@ class BinanceClient:
             logger.warning("place_market_sell called in paper mode - should use paper engine")
             return None
         try:
-            order = self.client.order_market_sell(
-                symbol=symbol,
-                quantity=quantity,
-            )
+            if self.market_type == "futures":
+                order = self.client.futures_create_order(
+                    symbol=symbol,
+                    side="SELL",
+                    type="MARKET",
+                    quantity=quantity,
+                )
+            else:
+                order = self.client.order_market_sell(
+                    symbol=symbol,
+                    quantity=quantity,
+                )
             logger.info(f"MARKET SELL executed | {symbol} | qty={quantity} | order_id={order['orderId']}")
             return order
         except BinanceAPIException as e:
@@ -180,11 +211,21 @@ class BinanceClient:
         if self.mode == "paper":
             return None
         try:
-            order = self.client.order_limit_buy(
-                symbol=symbol,
-                quantity=quantity,
-                price=str(price),
-            )
+            if self.market_type == "futures":
+                order = self.client.futures_create_order(
+                    symbol=symbol,
+                    side="BUY",
+                    type="LIMIT",
+                    timeInForce="GTC",
+                    quantity=quantity,
+                    price=str(price),
+                )
+            else:
+                order = self.client.order_limit_buy(
+                    symbol=symbol,
+                    quantity=quantity,
+                    price=str(price),
+                )
             logger.info(f"LIMIT BUY placed | {symbol} | qty={quantity} | price={price}")
             return order
         except Exception as e:
@@ -196,11 +237,21 @@ class BinanceClient:
         if self.mode == "paper":
             return None
         try:
-            order = self.client.order_limit_sell(
-                symbol=symbol,
-                quantity=quantity,
-                price=str(price),
-            )
+            if self.market_type == "futures":
+                order = self.client.futures_create_order(
+                    symbol=symbol,
+                    side="SELL",
+                    type="LIMIT",
+                    timeInForce="GTC",
+                    quantity=quantity,
+                    price=str(price),
+                )
+            else:
+                order = self.client.order_limit_sell(
+                    symbol=symbol,
+                    quantity=quantity,
+                    price=str(price),
+                )
             logger.info(f"LIMIT SELL placed | {symbol} | qty={quantity} | price={price}")
             return order
         except Exception as e:
@@ -212,7 +263,16 @@ class BinanceClient:
         if self.mode == "paper":
             return None
         try:
-            result = self.client.cancel_order(symbol=symbol, orderId=order_id)
+            if self.market_type == "futures":
+                result = self.client.futures_cancel_order(
+                    symbol=symbol,
+                    orderId=order_id,
+                )
+            else:
+                result = self.client.cancel_order(
+                    symbol=symbol,
+                    orderId=order_id,
+                )
             logger.info(f"Order cancelled | {symbol} | order_id={order_id}")
             return result
         except Exception as e:
@@ -240,7 +300,15 @@ class BinanceClient:
     def get_order_status(self, symbol: str, order_id: int) -> Optional[dict]:
         """Check the status of an order."""
         try:
-            return self.client.get_order(symbol=symbol, orderId=order_id)
+            if self.market_type == "futures":
+                return self.client.futures_get_order(
+                    symbol=symbol,
+                    orderId=order_id,
+                )
+            return self.client.get_order(
+                symbol=symbol,
+                orderId=order_id,
+            )
         except Exception as e:
             logger.error(f"Error getting order status {order_id}: {e}")
             return None

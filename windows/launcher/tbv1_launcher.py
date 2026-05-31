@@ -40,8 +40,8 @@ import json
 import platform
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import Optional
-from urllib.request import urlopen
+from typing import Any, Optional
+from urllib.request import Request, urlopen
 from urllib.error import URLError
 
 # Tkinter - stdlib, no extra dependency
@@ -76,9 +76,137 @@ THEME_ACCENT = "#f5c518"  # matches the yellow tone in the icon
 THEME_DANGER = "#e0524a"
 THEME_OK = "#3ad28a"
 THEME_MUTED = "#888888"
+RUN_BOT_ARG = "--run-bot"
+
+
+def _read_config_path(root: Path) -> Path:
+    """Return the dashboard-config file path used by this packaged app."""
+    return root / "config" / "default.yaml"
+
+
+def _is_likely_bot_commandline(cmd: str) -> bool:
+    """Heuristic matcher for trading-bot worker command lines."""
+    if not cmd:
+        return False
+    lowered = cmd.lower()
+    return "src.main" in lowered or "--run-bot" in lowered or "run_bot.py" in lowered
+
+
+def _windows_process_commandline(pid: int) -> str:
+    """Return command line for PID on Windows, or empty string on failure."""
+    try:
+        result = subprocess.run(
+            ["wmic", "process", "where", f"ProcessId={pid}", "get", "CommandLine", "/FORMAT:LIST"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        if result.returncode == 0:
+            for raw_line in result.stdout.splitlines():
+                line = raw_line.strip()
+                if line.startswith("CommandLine="):
+                    return line.split("=", 1)[1].strip()
+    except Exception:
+        pass
+
+    try:
+        result = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                f"(Get-CimInstance Win32_Process -Filter \"ProcessId = {pid}\" | Select-Object -ExpandProperty CommandLine)",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+
+    return ""
+
+
+def _windows_process_name(pid: int) -> str:
+    """Return process name for PID on Windows, or empty string on failure."""
+    try:
+        result = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                f"(Get-Process -Id {pid} -ErrorAction Stop | Select-Object -ExpandProperty ProcessName)",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _allows_python_process_name_fallback() -> bool:
+    """Allow python-family process-name matching only in a real Python runtime."""
+    exe_name = Path(sys.executable).name.lower()
+    return exe_name.startswith("python") or exe_name in {"py", "py.exe", "pyw", "pyw.exe", "pythonw.exe", "python3.exe"}
+
+
+def _resolve_bot_pid_path(root: Path) -> Path:
+    """Resolve bot pid path from launcher-owned config, with safe fallback."""
+    config_path = _read_config_path(root)
+    fallback = root / "runtime" / "bot.pid"
+    if not config_path.exists():
+        return fallback
+
+    try:
+        import yaml
+        raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return fallback
+
+    def _as_runtime_file(value: Any, default_filename: str) -> Path | None:
+        if not isinstance(value, (str, Path)):
+            return None
+        text = str(value).strip()
+        if not text or text == ".":
+            return None
+        try:
+            p = Path(text)
+        except Exception:
+            return None
+        if not p.is_absolute():
+            p = root / p
+        if p.suffix:
+            return p
+        return p / default_filename
+
+    pid_path = _as_runtime_file(raw.get("pid_path"), default_filename="bot.pid")
+    if pid_path is not None:
+        return pid_path
+
+    dashboard_status = _as_runtime_file(
+        raw.get("dashboard_status_path"),
+        default_filename="dashboard_status.json",
+    )
+    if dashboard_status is not None:
+        return dashboard_status.parent / "bot.pid"
+    return fallback
 
 
 # ── PyInstaller path helpers ────────────────────────────────────────────────
+def is_packaged_runtime() -> bool:
+    """Return True when running from a packaged PyInstaller executable."""
+    return bool(getattr(sys, "frozen", False))
+
+
 def resource_dir() -> Path:
     """If packaged with PyInstaller --onefile, _MEIPASS; otherwise this file's parent."""
     if hasattr(sys, "_MEIPASS"):
@@ -94,18 +222,54 @@ def app_dir() -> Path:
     folder NEXT TO THE LAUNCHER, since _MEIPASS is read-only.
     """
     if hasattr(sys, "_MEIPASS"):
+        def _is_valid_app_root(candidate: Path) -> bool:
+            checks = (
+                candidate / "src" / "main.py",
+                candidate / "dashboard" / "app.py",
+                candidate / "config" / "default.yaml",
+                candidate / "src" / "persistence" / "atomic_io.py",
+                candidate / "src" / "persistence" / "command_queue.py",
+                candidate / "src" / "persistence" / "schemas.py",
+                candidate / "src" / "services" / "command_processor.py",
+                candidate / "src" / "market" / "live_price_service.py",
+            )
+            if not candidate.is_dir():
+                return False
+            return all(path.is_file() for path in checks)
+
         # app/ created/existing next to the .exe
         exe_dir = Path(sys.executable).resolve().parent
         external = exe_dir / "app"
-        if external.exists():
-            return external
-        # On first launch, copy it from MEIPASS
         internal = Path(sys._MEIPASS) / "app"  # type: ignore[attr-defined]
-        if internal.exists() and not external.exists():
-            import shutil
-            shutil.copytree(internal, external)
+
+        if _is_valid_app_root(external):
             return external
-        return internal
+
+        # On first launch or when a stale/incomplete app cache exists, restore
+        # it from the immutable bundle.
+        if _is_valid_app_root(internal):
+            if external.exists():
+                try:
+                    import shutil
+                    if external.is_dir():
+                        shutil.rmtree(external)
+                    else:
+                        external.unlink()
+                except Exception:
+                    pass
+            try:
+                import shutil
+                shutil.copytree(internal, external)
+            except Exception as exc:
+                raise RuntimeError(f"Failed to prepare writable app bundle at {external}") from exc
+            if _is_valid_app_root(external):
+                return external
+            raise RuntimeError(f"Copied app bundle at {external} is invalid.")
+        raise RuntimeError(
+            "Could not locate a valid app bundle in packaged resources or next to the launcher."
+        )
+    if is_packaged_runtime():
+        return Path(sys.executable).resolve().parent / "app"
     # Developer mode
     return Path(__file__).resolve().parent.parent / "app"
 
@@ -175,6 +339,49 @@ class Logger:
             self._fh.close()
         except Exception:
             pass
+
+
+def run_as_bundled_bot() -> int:
+    """Run the trading bot as a pure worker process when launched from packaged exe.
+
+    The packaged exe itself becomes the runtime entrypoint. In this mode we:
+      - move CWD to the writable app folder (where config/runtime live),
+      - ensure app root is on sys.path for `import src.main`,
+      - invoke `src.main.main` directly.
+    """
+    try:
+        root = app_dir()
+        os.chdir(str(root))
+        if str(root) not in sys.path:
+            sys.path.insert(0, str(root))
+
+        from src.main import main  # type: ignore[import]
+
+        config_path = "config/default.yaml"
+        args = sys.argv[1:]
+        if args:
+            next_is_config = False
+            for arg in args:
+                if next_is_config:
+                    config_path = arg
+                    break
+                if arg == RUN_BOT_ARG:
+                    next_is_config = True
+                    continue
+                if arg.startswith("-"):
+                    continue
+                config_path = arg
+                break
+        if not Path(config_path).is_absolute():
+            config_path = str(root / config_path)
+        if not Path(config_path).is_file():
+            raise FileNotFoundError(f"Bot config file not found: {config_path}")
+
+        main(config_path)
+        return 0
+    except Exception:
+        traceback.print_exc()
+        return 1
 
 
 # ── Preflight checks ────────────────────────────────────────────────────────
@@ -292,7 +499,7 @@ class DashboardProcess:
     def start(self) -> None:
         # In an exe packaged with PyInstaller, uvicorn is embedded as a module;
         # start it with in-process Python (worker thread) instead of a subprocess.
-        if hasattr(sys, "_MEIPASS"):
+        if is_packaged_runtime():
             self._start_inproc()
         else:
             self._start_subprocess()
@@ -417,13 +624,17 @@ class LauncherApp:
                 pass
 
         # Logger
-        log_path = (app_dir().parent if app_dir().name == "app" else app_dir()) / "runtime" / LOG_FILENAME
-        # safer: packaging/launcher.log next to the application
+        # Prefer runtime directory near writable app root, fallback to exe root.
         try:
-            log_path = (Path(sys.executable).resolve().parent if hasattr(sys, "_MEIPASS")
-                        else Path(__file__).resolve().parent.parent / "packaging") / LOG_FILENAME
+            base_dir = app_dir()
+            if (base_dir / "runtime").exists() or is_packaged_runtime():
+                (base_dir / "runtime").mkdir(parents=True, exist_ok=True)
+                log_path = base_dir / "runtime" / LOG_FILENAME
+            else:
+                log_path = Path(__file__).resolve().parent.parent / "packaging" / LOG_FILENAME
         except Exception:
-            pass
+            # Final fallback: place next to executable
+            log_path = Path(sys.executable).resolve().parent / LOG_FILENAME
         self.log = Logger(log_path)
         self.log.info(f"==== {APP_NAME} v{APP_VERSION} opened ====")
         self.log.info(f"Python {sys.version.split()[0]} on {platform.platform()}")
@@ -584,6 +795,14 @@ class LauncherApp:
             return
         self.log.info("Stop request received...")
         self.status_var.set("STOPPING...")
+        if not self._stop_bot_process():
+            self.log.warn("Bot stop did not complete; leaving launcher active")
+            self.status_var.set("STOP FAILED")
+            self.status_lbl.configure(fg=THEME_DANGER)
+            self.btn_open.configure(state="normal")
+            self.btn_stop.configure(state="normal")
+            self.btn_start.configure(state="disabled")
+            return
         if self.dashboard:
             self.dashboard.stop()
         self.is_running = False
@@ -598,6 +817,141 @@ class LauncherApp:
                 self.lock_file.unlink()
             except Exception:
                 pass
+
+    def _stop_bot_process(self) -> bool:
+        """Ask the dashboard API to stop the bot worker process."""
+        stop_request_ok = False
+        try:
+            req = Request(
+                f"{self.url}api/bot/stop",
+                data=b"",
+                method="POST",
+            )
+            try:
+                with urlopen(req, timeout=2.0) as response:
+                    raw_body = response.read().decode("utf-8", errors="replace").strip()
+                    payload: dict[str, Any] = {}
+                    if raw_body:
+                        try:
+                            parsed = json.loads(raw_body)
+                            if isinstance(parsed, dict):
+                                payload = parsed
+                        except Exception:
+                            payload = {}
+                    response_status = payload.get("status")
+                    if response.status == 200 and response_status in {"stopped", "not_running"}:
+                        stop_request_ok = True
+                    else:
+                        self.log.warn(
+                            f"Bot stop request returned HTTP {response.status} status={response_status!r}"
+                        )
+            except TimeoutError as exc:
+                self.log.warn(f"Bot stop request timed out: {exc}")
+            except Exception as exc:  # pragma: no cover - network edge
+                # Dashboard may already be offline or unreachable; still continue
+                # so launcher shutdown is predictable.
+                self.log.warn(f"Bot stop request failed: {exc}")
+        except Exception as exc:
+            self.log.warn(f"Unable to issue bot stop request: {exc}")
+        if not stop_request_ok:
+            stop_request_ok = self._stop_bot_via_pidfile()
+        return stop_request_ok
+
+    def _stop_bot_via_pidfile(self) -> bool:
+        """Best-effort fallback when dashboard API is unavailable."""
+        root = app_dir()
+        pid_file = _resolve_bot_pid_path(root)
+        pid: Optional[int] = None
+        try:
+            if not pid_file.exists():
+                return False
+            pid_raw = pid_file.read_text(encoding="utf-8").strip()
+            if not pid_raw:
+                return False
+            pid = int(pid_raw)
+            if pid <= 0:
+                return False
+            try:
+                command_line = _windows_process_commandline(pid)
+                process_name = _windows_process_name(pid)
+                if command_line and not _is_likely_bot_commandline(command_line):
+                    self.log.warn(
+                        f"PID {pid} does not appear to be a bot process (cmd mismatch), skipping"
+                    )
+                    return False
+                if not command_line:
+                    if not process_name:
+                        return False
+                    lowered_name = process_name.lower()
+                    if not (
+                        lowered_name.startswith("tradingbotv1")
+                        or (_allows_python_process_name_fallback() and lowered_name in {"python", "pythonw", "python3", "py", "pyw"})
+                    ):
+                        self.log.warn(
+                            f"PID {pid} does not appear to be a bot process (name mismatch), skipping"
+                        )
+                        return False
+            except Exception:
+                # If we cannot inspect either command line or process name, avoid
+                # a potentially unsafe kill.
+                return False
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                return True
+            # Give the process a short window to exit before removing the marker.
+            deadline = time.time() + 3.0
+            while time.time() < deadline:
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    break
+                except Exception:
+                    time.sleep(0.25)
+                    continue
+                time.sleep(0.25)
+            else:
+                # SIGTERM did not make progress; on Windows escalate to a
+                # hard stop so the launcher does not leave the bot running.
+                if platform.system() == "Windows":
+                    try:
+                        subprocess.run(
+                            ["taskkill", "/F", "/T", "/PID", str(pid)],
+                            capture_output=True,
+                            text=True,
+                            check=False,
+                        )
+                    except Exception:
+                        pass
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    pass
+                except Exception:
+                    return False
+                else:
+                    return False
+        except ValueError as exc:
+            self.log.warn(f"Fallback bot pidfile stop failed: {exc}")
+            return False
+        except ProcessLookupError:
+            return True
+        except Exception as exc:
+            self.log.warn(f"Fallback bot pidfile stop failed: {exc}")
+            return False
+        finally:
+            # Remove marker only when process is confirmed gone.
+            if pid is not None:
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    try:
+                        pid_file.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+        return True
 
     def _show_error(self, exc: LauncherError, fatal: bool = True) -> None:
         entry = exc.entry
@@ -674,6 +1028,8 @@ class LauncherApp:
             ):
                 return
             self.stop_bot()
+        else:
+            self._stop_bot_process()
         self.log.info("==== Launcher closing ====")
         self.log.close()
         if self.lock_file and self.lock_file.exists():
@@ -709,4 +1065,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    if RUN_BOT_ARG in sys.argv[1:]:
+        sys.exit(run_as_bundled_bot())
     sys.exit(main())

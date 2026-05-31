@@ -43,6 +43,19 @@
 </div>
 {% endif %}
 
+{% set runtime_warnings = s.get("status_warnings") or [] %}
+<div class="warning-banner" id="status-warning-banner" {% if not runtime_warnings %}style="display:none"{% endif %}>
+    <span class="warning-banner-icon" aria-hidden="true">⚠</span>
+    <div class="warning-banner-body">
+        <strong>Runtime warnings</strong>
+        <ul id="status-warning-list">
+            {% for warning in runtime_warnings %}
+            <li>{{ warning }}</li>
+            {% endfor %}
+        </ul>
+    </div>
+</div>
+
 <!-- Bot Control -->
 <div class="bot-control-bar">
     <div class="bot-control-left">
@@ -116,6 +129,7 @@
 <div id="risk-toast" class="toast" style="display:none"></div>
 <div id="mode-toast" class="toast" style="display:none"></div>
 <div id="dll-toast" class="toast" style="display:none"></div>
+<div id="bot-toast" class="toast" style="display:none"></div>
 
 <!-- Bot Status Bar -->
 <div class="status-bar">
@@ -176,10 +190,11 @@
 
 <!-- Live Multi-TF Signals for Active Coin -->
 <div class="card" id="live-tf-signals-card">
-    <div class="scanner-header">
-        <h3 id="live-tf-title">Live Timeframe Confidence</h3>
-        <span id="live-tf-updated" class="muted"></span>
-    </div>
+<div class="scanner-header">
+    <h3 id="live-tf-title">Live Timeframe Confidence</h3>
+    <span id="live-tf-updated" class="muted"></span>
+    <span id="live-tf-status" class="muted"></span>
+</div>
     <div id="live-tf-grid" class="live-tf-grid">
         <div class="empty-state" style="padding:12px;">Waiting for data...</div>
     </div>
@@ -320,16 +335,47 @@ function updateUptime() {
     if (el) el.textContent = formatUptime(diff);
 }
 
+function showBotToast(message, isSuccess) {
+    var toast = document.getElementById("bot-toast");
+    if (!toast) {
+        console.warn(message);
+        return;
+    }
+    toast.className = "toast " + (isSuccess ? "toast-success" : "toast-error");
+    toast.textContent = message;
+    toast.style.display = "block";
+    setTimeout(function() {
+        toast.style.display = "none";
+    }, 4000);
+}
+
 function toggleBot() {
     var btn = document.getElementById("bot-toggle");
+    var wasRunning = botRunning;
     btn.disabled = true;
-    btn.textContent = botRunning ? "Stopping..." : "Starting...";
+    btn.textContent = wasRunning ? "Stopping..." : "Starting...";
 
-    var url = botRunning ? "/api/bot/stop" : "/api/bot/start";
+    var url = wasRunning ? "/api/bot/stop" : "/api/bot/start";
     fetch(url, { method: "POST" })
-        .then(function(r) { return r.json(); })
-        .then(function() { window.location.reload(); })
-        .catch(function() { window.location.reload(); });
+        .then(function(r) {
+            return r.json().then(function(data) {
+                return { ok: r.ok, data: data };
+            });
+        })
+        .then(function(result) {
+            var data = result.data || {};
+            var status = data.status || "";
+            var successStatuses = wasRunning ? ["stopped", "not_running"] : ["started", "already_running"];
+            if (!result.ok || successStatuses.indexOf(status) === -1) {
+                throw new Error(data.message || data.error || ("Unexpected status: " + status));
+            }
+            window.location.reload();
+        })
+        .catch(function(err) {
+            btn.disabled = false;
+            btn.textContent = wasRunning ? "Stop Bot" : "Start Bot";
+            showBotToast((wasRunning ? "Stop" : "Start") + " failed: " + err.message, false);
+        });
 }
 
 if (botRunning && botStartTime) {
@@ -339,6 +385,7 @@ if (botRunning && botStartTime) {
 
 function setRisk(level) {
     var btns = document.querySelectorAll(".risk-btn");
+    var previousActive = document.querySelector(".risk-btn.active");
     btns.forEach(function(b) { b.classList.remove("active"); b.disabled = true; });
 
     var formData = new FormData();
@@ -364,15 +411,22 @@ function setRisk(level) {
                 toast.textContent = data.error || "Failed";
                 toast.style.display = "block";
                 btns.forEach(function(b) { b.disabled = false; });
+                if (previousActive) previousActive.classList.add("active");
             }
         })
         .catch(function() {
             btns.forEach(function(b) { b.disabled = false; });
+            if (previousActive) previousActive.classList.add("active");
+            var toast = document.getElementById("risk-toast");
+            toast.className = "toast toast-error";
+            toast.textContent = "Failed to update risk preset";
+            toast.style.display = "block";
         });
 }
 
 function setTradingMode(mode) {
     var btns = document.querySelectorAll(".mode-btn");
+    var previousActive = document.querySelector(".mode-btn.active");
     btns.forEach(function(b) { b.classList.remove("active"); b.disabled = true; });
 
     var formData = new FormData();
@@ -398,10 +452,16 @@ function setTradingMode(mode) {
                 toast.textContent = data.error || "Failed";
                 toast.style.display = "block";
                 btns.forEach(function(b) { b.disabled = false; });
+                if (previousActive) previousActive.classList.add("active");
             }
         })
         .catch(function() {
             btns.forEach(function(b) { b.disabled = false; });
+            if (previousActive) previousActive.classList.add("active");
+            var toast = document.getElementById("mode-toast");
+            toast.className = "toast toast-error";
+            toast.textContent = "Failed to update trading mode";
+            toast.style.display = "block";
         });
 }
 
@@ -432,9 +492,19 @@ function toggleDailyLossLimit() {
                 toast.textContent = "Daily loss limit: " + (data.enabled ? "On (" + (data.pct * 100).toFixed(1) + "%)" : "Off");
                 toast.style.display = "block";
                 setTimeout(function() { toast.style.display = "none"; }, 3000);
+            } else {
+                toast.className = "toast toast-error";
+                toast.textContent = data.error || "Failed to update daily loss limit";
+                toast.style.display = "block";
             }
         })
-        .catch(function() { btn.disabled = false; });
+        .catch(function() {
+            btn.disabled = false;
+            var toast = document.getElementById("dll-toast");
+            toast.className = "toast toast-error";
+            toast.textContent = "Failed to update daily loss limit";
+            toast.style.display = "block";
+        });
 }
 
 function toggleAutoScan() {
@@ -464,9 +534,20 @@ function toggleAutoScan() {
                 toast.textContent = "Automatic scan: " + (data.enabled ? "On" : "Off");
                 toast.style.display = "block";
                 setTimeout(function() { toast.style.display = "none"; }, 3000);
+            } else {
+                var toast = document.getElementById("dll-toast");
+                toast.className = "toast toast-error";
+                toast.textContent = data.error || "Failed to update automatic scan";
+                toast.style.display = "block";
             }
         })
-        .catch(function() { btn.disabled = false; });
+        .catch(function() {
+            btn.disabled = false;
+            var toast = document.getElementById("dll-toast");
+            toast.className = "toast toast-error";
+            toast.textContent = "Failed to update automatic scan";
+            toast.style.display = "block";
+        });
 }
 
 function toggleAutoSelect() {
@@ -496,9 +577,20 @@ function toggleAutoSelect() {
                 toast.textContent = "Automatic coin selection: " + (data.enabled ? "On" : "Off");
                 toast.style.display = "block";
                 setTimeout(function() { toast.style.display = "none"; }, 3000);
+            } else {
+                var toast = document.getElementById("dll-toast");
+                toast.className = "toast toast-error";
+                toast.textContent = data.error || "Failed to update automatic coin selection";
+                toast.style.display = "block";
             }
         })
-        .catch(function() { btn.disabled = false; });
+        .catch(function() {
+            btn.disabled = false;
+            var toast = document.getElementById("dll-toast");
+            toast.className = "toast toast-error";
+            toast.textContent = "Failed to update automatic coin selection";
+            toast.style.display = "block";
+        });
 }
 
 /* ── Live Multi-TF Signals for Active Coin ── */
@@ -508,6 +600,7 @@ var _alertLooping = false;
 var _alertDismissed = false; // true after user clicks "I'm Here", reset when signals change
 var _dismissGeneration = 0; // incremented on each dismiss to invalidate pending play() promises
 var _dismissCooldownUntil = 0; // timestamp — no alerts until this time (3 min cooldown)
+var _alertStopPromise = null; // in-flight stop request dedupe
 
 // Init alert toggle button on load
 (function() {
@@ -525,9 +618,26 @@ function _startAlertLoop(detail) {
 
     // PRIMARY: Server-side sound via macOS afplay — bypasses ALL browser restrictions
     fetch("/api/alert/play", { method: "POST" })
-        .then(function(r) { return r.json(); })
-        .then(function(d) { console.log("[Alert] Server sound:", d.status); })
-        .catch(function(e) { console.warn("[Alert] Server sound failed:", e); });
+        .then(function(r) {
+            return r.json().then(function(data) {
+                return { ok: r.ok, status: r.status, data: data };
+            });
+        })
+        .then(function(result) {
+            var d = result.data || {};
+            if (!result.ok) {
+                if (d.error !== "alert_sound_not_supported") {
+                    showBotToast("Alert sound failed: " + (d.message || d.error || ("HTTP " + result.status)), false);
+                } else {
+                    console.warn("[Alert] Server sound unavailable:", d.message || d.error);
+                }
+                return;
+            }
+            console.log("[Alert] Server sound:", d.status);
+        })
+        .catch(function(e) {
+            showBotToast("Alert sound request failed: " + e, false);
+        });
 
     // Show popup
     var overlay = document.getElementById("alert-overlay");
@@ -537,18 +647,45 @@ function _startAlertLoop(detail) {
 }
 
 function dismissAlert() {
-    _alertLooping = false;
-    _alertDismissed = true;
-    _dismissGeneration++;
-    _dismissCooldownUntil = Date.now() + 3 * 60 * 1000; // 3 min cooldown
-
-    // Stop server-side sound
-    fetch("/api/alert/stop", { method: "POST" })
-        .then(function(r) { return r.json(); })
-        .then(function(d) { console.log("[Alert] Server sound stopped:", d.status); })
-        .catch(function() {});
-
-    document.getElementById("alert-overlay").style.display = "none";
+    if (_alertStopPromise) {
+        return _alertStopPromise;
+    }
+    var overlay = document.getElementById("alert-overlay");
+    _alertStopPromise = fetch("/api/alert/stop", { method: "POST" })
+        .then(function(r) {
+            return r.json().then(function(data) {
+                return { ok: r.ok, data: data };
+            });
+        })
+        .then(function(result) {
+            var data = result.data || {};
+            var status = data.status || "";
+            var successStatuses = ["stopped", "not_playing", "not_supported"];
+            if (successStatuses.indexOf(status) === -1) {
+                throw new Error(data.message || data.error || ("Unexpected status: " + status));
+            }
+            if (!result.ok && status !== "not_supported") {
+                throw new Error(data.message || data.error || ("HTTP " + result.status));
+            }
+            _alertLooping = false;
+            _alertDismissed = true;
+            _dismissGeneration++;
+            _dismissCooldownUntil = Date.now() + 3 * 60 * 1000; // 3 min cooldown
+            if (overlay) {
+                overlay.style.display = "none";
+            }
+            return true;
+        })
+        .catch(function(err) {
+            showBotToast("Alert stop failed: " + err.message, false);
+            _dismissCooldownUntil = Date.now() + 15 * 1000; // prevent repeated stop spam on failure
+            return false;
+        })
+        .then(function(result) {
+            _alertStopPromise = null;
+            return result;
+        });
+    return _alertStopPromise;
 }
 
 function testAlert() {
@@ -557,6 +694,7 @@ function testAlert() {
 }
 
 function toggleAlertSound() {
+    var previousEnabled = _alertEnabled;
     _alertEnabled = !_alertEnabled;
     localStorage.setItem("alertEnabled", _alertEnabled ? "true" : "false");
     var btn = document.getElementById("alert-toggle");
@@ -564,16 +702,30 @@ function toggleAlertSound() {
     if (_alertEnabled) {
         btn.classList.add("dll-on");
         btn.textContent = "ON";
+        var toast = document.getElementById("dll-toast");
+        toast.className = "toast toast-success";
+        toast.textContent = "Reverse-signal alert: On";
+        toast.style.display = "block";
+        setTimeout(function() { toast.style.display = "none"; }, 3000);
     } else {
         btn.classList.add("dll-off");
         btn.textContent = "OFF";
-        dismissAlert();
+        dismissAlert().then(function(ok) {
+            if (!ok) {
+                _alertEnabled = previousEnabled;
+                localStorage.setItem("alertEnabled", "true");
+                btn.classList.remove("dll-on", "dll-off");
+                btn.classList.add("dll-on");
+                btn.textContent = "ON";
+            } else {
+                var toast = document.getElementById("dll-toast");
+                toast.className = "toast toast-success";
+                toast.textContent = "Reverse-signal alert: Off";
+                toast.style.display = "block";
+                setTimeout(function() { toast.style.display = "none"; }, 3000);
+            }
+        });
     }
-    var toast = document.getElementById("dll-toast");
-    toast.className = "toast toast-success";
-    toast.textContent = "Reverse-signal alert: " + (_alertEnabled ? "On" : "Off");
-    toast.style.display = "block";
-    setTimeout(function() { toast.style.display = "none"; }, 3000);
 }
 
 function _sigColor(signal) {
@@ -597,9 +749,14 @@ function _checkReverseAlert(symbol, timeframes) {
     // 3-minute cooldown after dismiss
     if (Date.now() < _dismissCooldownUntil) return;
 
+    var statusEl = document.getElementById("live-tf-status");
     fetch("/api/status")
         .then(function(r) { return r.json(); })
         .then(function(s) {
+            if (statusEl) {
+                statusEl.textContent = "";
+                statusEl.style.color = "";
+            }
             // Honest contract: a stopped bot must NOT trigger audible reverse
             // alerts. The signals are frozen at the last cycle — they aren't
             // "now" — so any reverse condition is historical, not actionable.
@@ -671,15 +828,42 @@ function _checkReverseAlert(symbol, timeframes) {
                 ": " + reverseTfs.join(", ");
             _startAlertLoop(detail);
         })
-        .catch(function() {});
+        .catch(function() {
+            if (statusEl) {
+                statusEl.textContent = "Alert status feed unavailable";
+                statusEl.style.color = "var(--red)";
+            }
+        });
 }
 
 function pollActiveCoinSignals() {
     fetch("/api/active-coin-signals")
         .then(function(r) { return r.json(); })
         .then(function(d) {
-            if (!d.symbol || !d.timeframes) return;
+            var statusEl = document.getElementById("live-tf-status");
             var titleEl = document.getElementById("live-tf-title");
+            var grid = document.getElementById("live-tf-grid");
+            if (!d.symbol || !d.timeframes || Object.keys(d.timeframes).length === 0) {
+                if (statusEl) {
+                    statusEl.textContent = "Waiting for live signals";
+                    statusEl.style.color = "";
+                }
+                var updEl = document.getElementById("live-tf-updated");
+                if (updEl) {
+                    updEl.textContent = "";
+                }
+                if (titleEl) {
+                    titleEl.textContent = "Live Timeframe Confidence";
+                }
+                if (grid) {
+                    grid.innerHTML = '<div class="empty-state" style="padding:12px;">Waiting for data...</div>';
+                }
+                return;
+            }
+            if (statusEl) {
+                statusEl.textContent = "";
+                statusEl.style.color = "";
+            }
             titleEl.textContent = d.symbol + " - Live Timeframe Confidence";
 
             var updEl = document.getElementById("live-tf-updated");
@@ -689,9 +873,10 @@ function pollActiveCoinSignals() {
                     String(dt.getHours()).padStart(2,'0') + ":" +
                     String(dt.getMinutes()).padStart(2,'0') + ":" +
                     String(dt.getSeconds()).padStart(2,'0');
+            } else if (updEl) {
+                updEl.textContent = "";
             }
 
-            var grid = document.getElementById("live-tf-grid");
             var html = "";
             _liveTfTFS.forEach(function(tf) {
                 var info = d.timeframes[tf];
@@ -702,7 +887,8 @@ function pollActiveCoinSignals() {
                         '<div class="live-tf-signal">N/A</div></div>';
                     return;
                 }
-                var color = _sigColor(info.signal);
+                var signal = (info.signal || "NEUTRAL").toString();
+                var color = _sigColor(signal);
                 var conf = info.confidence || 0;
                 var nss = info.final_score || 0;
                 var nssLabel = Math.round(nss) > 0 ? Math.round(nss).toLocaleString() : '0';
@@ -710,14 +896,32 @@ function pollActiveCoinSignals() {
                     '<div class="live-tf-label">' + tf + '</div>' +
                     '<div class="live-tf-conf">' + conf + '% <small style="opacity:.6">(' + nssLabel + ')</small></div>' +
                     '<div class="live-tf-bar-wrap"><div class="live-tf-bar live-tf-bar-' + color + '" style="width:' + conf + '%"></div></div>' +
-                    '<div class="live-tf-signal">' + info.signal + '</div></div>';
+                    '<div class="live-tf-signal">' + signal + '</div></div>';
             });
             grid.innerHTML = html;
 
             // Check for reverse signals and play alert
             _checkReverseAlert(d.symbol, d.timeframes);
         })
-        .catch(function() {});
+        .catch(function() {
+            var titleEl = document.getElementById("live-tf-title");
+            var grid = document.getElementById("live-tf-grid");
+            var statusEl = document.getElementById("live-tf-status");
+            var updEl = document.getElementById("live-tf-updated");
+            if (updEl) {
+                updEl.textContent = "";
+            }
+            if (titleEl) {
+                titleEl.textContent = "Live Timeframe Confidence";
+            }
+            if (grid) {
+                grid.innerHTML = '<div class="empty-state" style="padding:12px;">Live signal feed unavailable</div>';
+            }
+            if (statusEl) {
+                statusEl.textContent = "Live signal feed unavailable";
+                statusEl.style.color = "var(--red)";
+            }
+        });
 }
 
 setInterval(pollActiveCoinSignals, 10000);

@@ -50,6 +50,7 @@
     <div id="multi-scan-status" style="display:none">
         <div class="multi-progress-grid" id="multi-progress-grid"></div>
     </div>
+    <div id="multi-scan-warnings" style="display:none; margin-top:8px; padding:8px 12px; border-radius:10px; background:rgba(255,193,7,0.10); border:1px solid rgba(255,193,7,0.30); color:#d9a400; font-size:13px; line-height:1.45;"></div>
 
     <!-- Timeframe tabs (dynamically generated) -->
     <div id="multi-scan-result" style="display:none">
@@ -78,6 +79,7 @@
             {{ s.get("last_scan_total", 0) }} coins | Every 10 min | 12 timeframes
         </span>
     </div>
+    <div id="auto-scan-warnings" style="display:none; margin-top:8px; padding:8px 12px; border-radius:10px; background:rgba(255,193,7,0.10); border:1px solid rgba(255,193,7,0.30); color:#d9a400; font-size:13px; line-height:1.45;"></div>
     <div id="auto-scan-table-wrap" style="overflow-x:auto;">
     {% set scan_results = s.get("last_scan_results", []) %}
     {% set all_tfs = ["1m","3m","5m","15m","30m","1h","2h","4h","6h","8h","12h","1d"] %}
@@ -136,6 +138,8 @@
 /* ── Multi-Timeframe Scanner ── */
 var multiPollTimer = null;
 var TFS = [];
+var DEFAULT_TFS = ["1m","3m","5m","15m","30m","1h","2h","4h","6h","8h","12h","1d"];
+var _multiPollErrorShown = false;
 var _multiData = null;
 
 function _buildDynamicUI() {
@@ -163,14 +167,23 @@ function startMultiScan() {
     var btn = document.getElementById("scan-btn");
     btn.disabled = true;
     btn.textContent = "Checking...";
+    _renderWarningBox("multi-scan-warnings", [], "Warnings: ");
 
     fetch("/api/scan-lock-status")
-        .then(function(r) { return r.json(); })
+        .then(function(r) {
+            return r.json().then(function(data) {
+                return { ok: r.ok, data: data };
+            });
+        })
         .then(function(lock) {
-            if (lock.auto_scan_active) {
+            var data = lock.data || {};
+            if (!lock.ok) {
+                throw new Error(data.error || data.message || "Could not check scan lock");
+            }
+            if (data.any_active) {
                 btn.disabled = false;
                 btn.textContent = "Start Scan";
-                showScanToast("Auto-scan in progress, please wait for it to finish.", "error");
+                showScanToast("A scan is already in progress, please wait for it to finish.", "error");
                 return;
             }
             btn.textContent = "Starting...";
@@ -178,8 +191,14 @@ function startMultiScan() {
                 .then(function(r) { return r.json(); })
                 .then(function(data) {
                     if (data.status === "started") {
-                        TFS = data.timeframes || TFS;
+                        if (data.timeframes && Object.keys(data.timeframes).length > 0) {
+                            TFS = Object.keys(data.timeframes);
+                        } else {
+                            TFS = DEFAULT_TFS.slice();
+                            showScanToast("Multi-scan started without timeframe metadata. Using fallback timeframes.", "error");
+                        }
                         _buildDynamicUI();
+                        window._scannerActive = true;
                         btn.style.display = "none";
                         document.getElementById("scan-stop-btn").style.display = "inline-block";
                         document.getElementById("multi-scan-status").style.display = "block";
@@ -191,41 +210,92 @@ function startMultiScan() {
                         showScanToast(data.error || "Could not start", "error");
                     }
                 })
-                .catch(function() {
+                .catch(function(err) {
                     btn.disabled = false;
                     btn.textContent = "Start Scan";
+                    showScanToast("Could not start multi-scan: " + (err && err.message ? err.message : "network error"), "error");
                 });
         })
-        .catch(function() {
+        .catch(function(err) {
             btn.disabled = false;
             btn.textContent = "Start Scan";
+            showScanToast("Could not check scan lock: " + (err && err.message ? err.message : "network error"), "error");
         });
 }
 
 function stopMultiScan() {
     fetch("/api/scanner/multi-stop", { method: "POST" })
-        .then(function() { resetMultiUI(); })
-        .catch(function() { resetMultiUI(); });
+        .then(function(r) {
+            return r.json().then(function(data) {
+                return { ok: r.ok, data: data };
+            });
+        })
+        .then(function(result) {
+            var data = result.data || {};
+            if (!result.ok || data.status !== "stopped") {
+                throw new Error(data.error || data.message || "Could not stop multi-scan");
+            }
+            resetMultiUI(true);
+        })
+        .catch(function(err) {
+            showScanToast("Could not stop multi-scan: " + (err && err.message ? err.message : "network error"), "error");
+        });
 }
 
-function resetMultiUI() {
+function resetMultiUI(clearResults) {
     if (multiPollTimer) { clearInterval(multiPollTimer); multiPollTimer = null; }
+    window._scannerActive = false;
     var btn = document.getElementById("scan-btn");
     btn.style.display = "inline-block";
     btn.disabled = false;
     btn.textContent = "Start Scan";
     document.getElementById("scan-stop-btn").style.display = "none";
+    document.getElementById("multi-scan-status").style.display = "none";
+    if (clearResults) {
+        var resultEl = document.getElementById("multi-scan-result");
+        var crossEl = document.getElementById("cross-ranking");
+        var crossBody = document.getElementById("cross-ranking-body");
+        var infoEl = document.getElementById("multi-common-info");
+        var timeEl = document.getElementById("multi-scan-time");
+        if (resultEl) resultEl.style.display = "none";
+        if (crossEl) crossEl.style.display = "none";
+        if (crossBody) crossBody.innerHTML = "";
+        if (infoEl) infoEl.style.display = "none";
+        if (timeEl) {
+            timeEl.textContent = "";
+            timeEl.style.display = "none";
+        }
+        _renderWarningBox("multi-scan-warnings", [], "Warnings: ");
+    }
 }
 
 function pollMultiProgress() {
     fetch("/api/scanner/multi-progress")
         .then(function(r) { return r.json(); })
         .then(function(data) {
+            if (!data || !data.timeframes || Object.keys(data.timeframes).length === 0) {
+                _renderWarningBox("multi-scan-warnings", _collectMultiScanWarnings(data), "Warnings: ");
+                if (!_multiPollErrorShown) {
+                    _multiPollErrorShown = true;
+                    showScanToast("Multi-scan data unavailable.", "error");
+                }
+                return;
+            }
+            _multiPollErrorShown = false;
             _multiData = data;
+            _renderWarningBox("multi-scan-warnings", _collectMultiScanWarnings(data), "Warnings: ");
             var allDone = true;
 
             TFS.forEach(function(tf) {
                 var d = data.timeframes[tf];
+                if (!d || typeof d.progress !== "object" || d.progress === null) {
+                    allDone = false;
+                    var fillEl = document.getElementById("mp-fill-" + tf);
+                    var countEl = document.getElementById("mp-count-" + tf);
+                    if (fillEl) fillEl.style.width = "0%";
+                    if (countEl) countEl.textContent = "0/0";
+                    return;
+                }
                 var p = d.progress;
                 var pct = p.total > 0 ? Math.round((p.current / p.total) * 100) : 0;
                 var fillEl = document.getElementById("mp-fill-" + tf);
@@ -251,21 +321,29 @@ function pollMultiProgress() {
                 showMultiResults(data);
                 resetMultiUI();
             }
+        })
+        .catch(function() {
+            if (!_multiPollErrorShown) {
+                _multiPollErrorShown = true;
+                showScanToast("Multi-scan status unavailable.", "error");
+            }
         });
 }
 
 function showMultiResults(data) {
-    var common = data.common_symbols || [];
+    var common = Array.isArray(data.common_symbols) ? data.common_symbols : [];
     var commonSet = {};
     common.forEach(function(s) { commonSet[s] = true; });
+    _renderWarningBox("multi-scan-warnings", _collectMultiScanWarnings(data), "Warnings: ");
 
     document.getElementById("multi-scan-result").style.display = "block";
 
     TFS.forEach(function(tf) {
         var panel = document.getElementById("tf-panel-" + tf);
-        var d = data.timeframes[tf];
-        var top15 = d.top15 || [];
-        panel.innerHTML = buildTfList(top15, commonSet, d.total_scanned);
+        var d = (data.timeframes && typeof data.timeframes === "object") ? data.timeframes[tf] : null;
+        var top15 = d && Array.isArray(d.top15) ? d.top15 : [];
+        var totalScanned = d && Number.isFinite(d.total_scanned) ? d.total_scanned : 0;
+        panel.innerHTML = buildTfList(top15, commonSet, totalScanned);
     });
 
     var infoEl = document.getElementById("multi-common-info");
@@ -278,7 +356,7 @@ function showMultiResults(data) {
         infoEl.innerHTML = '<span class="common-none">No coin made the common top 15 across ' + TFS.length + ' timeframes</span>';
     }
 
-    var crossRanking = data.cross_ranking || [];
+    var crossRanking = Array.isArray(data.cross_ranking) ? data.cross_ranking : [];
     var crossEl = document.getElementById("cross-ranking");
     var crossBody = document.getElementById("cross-ranking-body");
     if (crossRanking.length > 0) {
@@ -292,7 +370,7 @@ function showMultiResults(data) {
             var isAll = c.count === TFS.length;
             var rowCls = isAll ? 'cross-row-all' : (c.count >= TFS.length - 1 ? 'cross-row-3' : '');
             var netNss = c.net_nss || c.total_nss || 0;
-            var domDir = (c.dominant_dir || 'N/A').toUpperCase();
+            var domDir = (c.dominant_dir || 'N/A').toString().toUpperCase();
             var dirCls = domDir === 'BUY' ? 'cross-val-buy' : (domDir === 'SELL' ? 'cross-val-sell' : '');
             html += '<tr class="' + rowCls + '">';
             html += '<td>' + (idx + 1) + '</td>';
@@ -305,9 +383,11 @@ function showMultiResults(data) {
                 if (allSig) {
                     var isTop15 = allSig.in_top15 === true || (c.signals && c.signals[tf]);
                     var tdCls = isTop15 ? 'cross-td-hit' : 'cross-td-dim';
-                    var dir = allSig.signal.toUpperCase().replace("STRONG_","").toLowerCase();
-                    var nss = allSig.final_score || 0;
-                    var label = Math.round(nss) > 0 ? Math.round(nss).toLocaleString() : allSig.confidence + '%';
+                    var rawSignal = (allSig.signal || "NEUTRAL").toString();
+                    var dir = rawSignal.toUpperCase().replace("STRONG_","").toLowerCase();
+                    var nss = Number(allSig.final_score || 0);
+                    var confidence = Number(allSig.confidence || 0);
+                    var label = Math.round(nss) > 0 ? Math.round(nss).toLocaleString() : confidence + '%';
                     html += '<td class="' + tdCls + '"><span class="cross-val cross-val-' + dir + '">' + label + '</span></td>';
                 } else {
                     html += '<td class="muted">-</td>';
@@ -319,6 +399,9 @@ function showMultiResults(data) {
         });
         html += '</tbody></table>';
         crossBody.innerHTML = html;
+    } else {
+        crossBody.innerHTML = "";
+        crossEl.style.display = "none";
     }
 
     if (data.scan_time) {
@@ -332,12 +415,18 @@ function showMultiResults(data) {
         var ss = String(dt.getSeconds()).padStart(2,'0');
         timeEl.textContent = "Last scan: " + dd + "." + mm + "." + yy + " " + hh + ":" + mi + ":" + ss;
         timeEl.style.display = "block";
+    } else {
+        var timeEl = document.getElementById("multi-scan-time");
+        timeEl.textContent = "";
+        timeEl.style.display = "none";
     }
 
     switchTfTab("15m");
 }
 
 function buildTfList(top15, commonSet, totalScanned) {
+    top15 = Array.isArray(top15) ? top15 : [];
+    totalScanned = Number.isFinite(totalScanned) ? totalScanned : 0;
     var html = '<div class="scanner-hot-title">' + totalScanned + ' coins scanned - top 15:</div>';
     if (top15.length === 0) {
         return html + '<div class="empty-state">No results</div>';
@@ -345,17 +434,20 @@ function buildTfList(top15, commonSet, totalScanned) {
     html += '<div class="scanner-hot-list">';
     top15.forEach(function(r, idx) {
         var isCommon = commonSet[r.symbol];
-        var isHot = r.confidence >= 55 && r.signal !== "NEUTRAL";
+        var signal = (r.signal || "NEUTRAL").toString();
+        var riskLevel = (r.risk_level || "HIGH").toString();
+        var confidence = Number(r.confidence || 0);
+        var isHot = confidence >= 55 && signal !== "NEUTRAL";
         var itemCls = isCommon ? 'scanner-hot-item scanner-common' : (isHot ? 'scanner-hot-item' : 'scanner-item');
         var btnCls = isHot ? 'btn-success' : 'btn-secondary';
         html += '<div class="' + itemCls + '" onclick="selectScannedSymbol(\'' + r.symbol + '\')">' +
             '<span class="scanner-rank">#' + (idx + 1) + '</span>' +
             (isCommon ? '<span class="common-star">*</span>' : '') +
             '<span class="scanner-symbol">' + r.symbol + '</span>' +
-            '<span class="signal-badge signal-' + r.signal.toLowerCase() + '">' + r.signal + '</span>' +
-            '<span class="scanner-conf">' + r.confidence + '%</span>' +
+            '<span class="signal-badge signal-' + signal.toLowerCase() + '">' + signal + '</span>' +
+            '<span class="scanner-conf">' + confidence + '%</span>' +
             '<span class="scanner-found-price">$' + r.price + '</span>' +
-            '<span class="risk-badge risk-' + r.risk_level.toLowerCase() + '">' + r.risk_level + '</span>' +
+            '<span class="risk-badge risk-' + riskLevel.toLowerCase() + '">' + riskLevel + '</span>' +
             '<span class="btn ' + btnCls + ' btn-sm">Select</span>' +
             '</div>';
     });
@@ -386,7 +478,12 @@ function selectScannedSymbol(symbol) {
             if (data.status === "ok") {
                 showScanToast(symbol + " set as the active coin!", "success");
                 setTimeout(function() { window.location.reload(); }, 1500);
+            } else {
+                showScanToast(data.error || "Could not set active coin", "error");
             }
+        })
+        .catch(function(err) {
+            showScanToast("Could not set active coin: " + (err && err.message ? err.message : "network error"), "error");
         });
 }
 
@@ -398,12 +495,78 @@ function showScanToast(msg, type) {
     setTimeout(function() { toast.style.display = "none"; }, 6000);
 }
 
+function _renderWarningBox(id, warnings, emptyTitle) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    var list = Array.isArray(warnings) ? warnings : [];
+    var normalized = [];
+    list.forEach(function(item) {
+        if (item === null || item === undefined) return;
+        var text = String(item).trim();
+        if (text) normalized.push(text);
+    });
+    var seen = {};
+    normalized = normalized.filter(function(text) {
+        if (seen[text]) return false;
+        seen[text] = true;
+        return true;
+    });
+    if (normalized.length === 0) {
+        el.textContent = "";
+        el.style.display = "none";
+        return;
+    }
+    el.textContent = (emptyTitle || "Warnings: ") + normalized.join(" | ");
+    el.style.display = "block";
+}
+
+function _collectMultiScanWarnings(data) {
+    var warnings = [];
+    if (data && Array.isArray(data.status_warnings)) {
+        warnings = warnings.concat(data.status_warnings);
+    }
+    if (data && Array.isArray(data.warnings)) {
+        warnings = warnings.concat(data.warnings);
+    }
+    if (data && data.timeframes && typeof data.timeframes === "object") {
+        Object.keys(data.timeframes).forEach(function(tf) {
+            var progress = data.timeframes[tf] && data.timeframes[tf].progress;
+            if (progress && Array.isArray(progress.warnings)) {
+                progress.warnings.forEach(function(w) {
+                    warnings.push(tf + " progress warning: " + w);
+                });
+            }
+            var top15 = data.timeframes[tf] && Array.isArray(data.timeframes[tf].top15) ? data.timeframes[tf].top15 : [];
+            top15.forEach(function(row) {
+                if (row && Array.isArray(row.indicator_warnings)) {
+                    row.indicator_warnings.forEach(function(w) {
+                        warnings.push(tf + " " + (row.symbol || "unknown") + " indicator warning: " + w);
+                    });
+                }
+            });
+        });
+    }
+    return warnings;
+}
+
+function _collectAutoScanWarnings(data) {
+    var warnings = [];
+    if (data && Array.isArray(data.status_warnings)) {
+        warnings = warnings.concat(data.status_warnings);
+    }
+    if (data && Array.isArray(data.warnings)) {
+        warnings = warnings.concat(data.warnings);
+    }
+    return warnings;
+}
+
 /* On page load: check if multi-scan is running */
 (function initScanner() {
     fetch("/api/scanner/multi-progress")
         .then(function(r) { return r.json(); })
         .then(function(data) {
-            if (data.timeframes) {
+            var usedFallback = false;
+            if (data.timeframes && Object.keys(data.timeframes).length > 0) {
                 TFS = Object.keys(data.timeframes);
                 var tfOrder = {"m":1,"h":60,"d":1440};
                 TFS.sort(function(a,b) {
@@ -411,31 +574,44 @@ function showScanToast(msg, type) {
                     var bMin = parseInt(b) * (tfOrder[b.slice(-1)] || 1);
                     return aMin - bMin;
                 });
+            } else {
+                TFS = DEFAULT_TFS.slice();
+                usedFallback = true;
             }
             if (TFS.length === 0) return;
             _buildDynamicUI();
+            if (usedFallback) {
+                showScanToast("Multi-scan status unavailable. Using fallback timeframes.", "error");
+            }
 
             var anyActive = data.any_scanning;
             var anyComplete = false;
             TFS.forEach(function(tf) {
-                if (data.timeframes[tf] && data.timeframes[tf].progress.status === "complete") anyComplete = true;
+                if (data.timeframes[tf] && data.timeframes[tf].progress && data.timeframes[tf].progress.status === "complete") anyComplete = true;
             });
 
             if (anyActive) {
+                window._scannerActive = true;
                 document.getElementById("scan-btn").style.display = "none";
                 document.getElementById("scan-stop-btn").style.display = "inline-block";
                 document.getElementById("multi-scan-status").style.display = "block";
                 multiPollTimer = setInterval(pollMultiProgress, 1500);
                 pollMultiProgress();
             } else if (anyComplete) {
+                window._scannerActive = false;
                 showMultiResults(data);
             }
         })
-        .catch(function() {});
+        .catch(function() {
+            TFS = DEFAULT_TFS.slice();
+            _buildDynamicUI();
+            showScanToast("Multi-scan status unavailable. Using fallback timeframes.", "error");
+        });
 })();
 
 // --- Auto-scan progress polling (bot's 10-minute auto-scan) ---
 var _autoScanWasScanning = false;
+var _autoScanPollErrorShown = false;
 var _lastRenderedScanTime = null;
 var _ALL_TFS = ["1m","3m","5m","15m","30m","1h","2h","4h","6h","8h","12h","1d"];
 
@@ -444,6 +620,7 @@ function _renderAutoScanTable(data) {
     var totalTfs = _ALL_TFS.length;
     var card = document.getElementById("auto-scan-card");
     card.style.display = "";
+    _renderWarningBox("auto-scan-warnings", _collectAutoScanWarnings(data), "Warnings: ");
 
     var meta = document.getElementById("auto-scan-meta");
     var ts = data.last_auto_scan || data.completed_at || "";
@@ -472,7 +649,7 @@ function _renderAutoScanTable(data) {
         var isAll = c.count === totalTfs;
         var rowCls = isAll ? "cross-row-all" : (c.count >= totalTfs - 1 ? "cross-row-3" : "");
         var netNss = c.net_nss || c.total_nss || 0;
-        var domDir = (c.dominant_dir || 'N/A').toUpperCase();
+        var domDir = (c.dominant_dir || 'N/A').toString().toUpperCase();
         var dirCls = domDir === 'BUY' ? 'cross-val-buy' : (domDir === 'SELL' ? 'cross-val-sell' : '');
         html += '<tr class="' + rowCls + '">';
         html += '<td>' + (idx+1) + '</td>';
@@ -487,9 +664,11 @@ function _renderAutoScanTable(data) {
             if (s) {
                 var isTop15 = s.in_top15 === true || !!signals[tf];
                 var cls = isTop15 ? "cross-td-hit" : "cross-td-dim";
-                var dir = s.signal.toUpperCase().replace("STRONG_","").toLowerCase();
-                var nss = s.final_score || 0;
-                var label = Math.round(nss) > 0 ? Math.round(nss).toLocaleString() : s.confidence + '%';
+                var rawSignal = (s.signal || "NEUTRAL").toString();
+                var dir = rawSignal.toUpperCase().replace("STRONG_","").toLowerCase();
+                var nss = Number(s.final_score || 0);
+                var confidence = Number(s.confidence || 0);
+                var label = Math.round(nss) > 0 ? Math.round(nss).toLocaleString() : confidence + '%';
                 html += '<td class="' + cls + '"><span class="cross-val cross-val-' + dir + '">' + label + '</span></td>';
             } else {
                 html += '<td class="muted">-</td>';
@@ -507,8 +686,13 @@ function pollAutoScanProgress() {
     fetch("/api/auto-scan-progress")
         .then(function(r) { return r.json(); })
         .then(function(d) {
+            _autoScanPollErrorShown = false;
             var banner = document.getElementById("auto-scan-banner");
             var scanBtn = document.getElementById("scan-btn");
+            var hasScanResults = Object.prototype.hasOwnProperty.call(d, "last_scan_results");
+            var hasScanTime = Object.prototype.hasOwnProperty.call(d, "last_auto_scan");
+            var autoWarnings = _collectAutoScanWarnings(d);
+            _renderWarningBox("auto-scan-warnings", autoWarnings, "Warnings: ");
             if (d.scanning) {
                 if (banner) {
                     banner.style.display = "flex";
@@ -527,7 +711,7 @@ function pollAutoScanProgress() {
                     scanBtn.disabled = false;
                     scanBtn.textContent = "Start Scan";
                 }
-                if (_autoScanWasScanning && d.last_scan_results) {
+                if (_autoScanWasScanning) {
                     _autoScanWasScanning = false;
                     if (banner) {
                         banner.style.display = "flex";
@@ -540,16 +724,52 @@ function pollAutoScanProgress() {
                         }, 3000);
                     }
                     _renderAutoScanTable(d);
+                    if (hasScanTime) {
+                        _lastRenderedScanTime = d.last_auto_scan;
+                    }
                 } else {
                     if (banner) banner.style.display = "none";
-                    if (d.last_scan_results && d.last_auto_scan && d.last_auto_scan !== _lastRenderedScanTime) {
+                    if (hasScanResults && hasScanTime && d.last_auto_scan !== _lastRenderedScanTime) {
                         _renderAutoScanTable(d);
                         _lastRenderedScanTime = d.last_auto_scan;
+                    } else if (!hasScanResults || !hasScanTime) {
+                        var autoCard = document.getElementById("auto-scan-card");
+                        var tableWrap = document.getElementById("auto-scan-table-wrap");
+                        if (!autoWarnings.length) {
+                            if (tableWrap) {
+                                tableWrap.innerHTML = "";
+                            }
+                            if (autoCard) {
+                                autoCard.style.display = "none";
+                            }
+                            _renderWarningBox("auto-scan-warnings", [], "Warnings: ");
+                        } else if (autoCard) {
+                            autoCard.style.display = "";
+                            if (tableWrap) {
+                                tableWrap.innerHTML = '<div class="empty-state" style="padding:8px">No scan results yet</div>';
+                            }
+                        }
+                        _lastRenderedScanTime = null;
                     }
                 }
             }
         })
-        .catch(function() {});
+        .catch(function() {
+            if (!_autoScanPollErrorShown) {
+                _autoScanPollErrorShown = true;
+                showScanToast("Auto-scan status unavailable.", "error");
+            }
+            var autoCard = document.getElementById("auto-scan-card");
+            var tableWrap = document.getElementById("auto-scan-table-wrap");
+            if (tableWrap) {
+                tableWrap.innerHTML = "";
+            }
+            if (autoCard) {
+                autoCard.style.display = "none";
+            }
+            _renderWarningBox("auto-scan-warnings", [], "Warnings: ");
+            _lastRenderedScanTime = null;
+        });
 }
 
 setInterval(pollAutoScanProgress, 5000);

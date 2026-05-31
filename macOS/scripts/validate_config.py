@@ -18,21 +18,46 @@ sys.path.insert(0, str(project_root))
 from src.utils.validators import validate_config
 
 
+def _resolve_config_path(config_arg: str | Path | None) -> Path:
+    if config_arg is None:
+        return project_root / "config" / "default.yaml"
+    text = str(config_arg).strip()
+    if text in {"", "."}:
+        return project_root / "config" / "default.yaml"
+    candidate = Path(text).expanduser()
+    if not candidate.is_absolute():
+        candidate = project_root / candidate
+    if candidate.exists() and candidate.is_dir():
+        return candidate / "default.yaml"
+    if not candidate.suffix and not candidate.exists():
+        return candidate / "default.yaml"
+    return candidate
+
+
 def main():
     parser = argparse.ArgumentParser(description="Validate the trading bot config file")
     parser.add_argument("--config", default="config/default.yaml", help="Config file path")
     args = parser.parse_args()
 
-    config_path = Path(args.config)
+    config_path = _resolve_config_path(args.config)
     if not config_path.exists():
         print(f"ERROR: Config file not found: {config_path}", file=sys.stderr)
         sys.exit(1)
 
     try:
-        with open(config_path) as f:
-            config = yaml.safe_load(f) or {}
+        with open(config_path, encoding="utf-8") as f:
+            config = yaml.safe_load(f)
     except yaml.YAMLError as e:
         print(f"ERROR: Invalid YAML: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if config is None:
+        config = {}
+    elif not isinstance(config, dict):
+        print(
+            f"ERROR: Config file {config_path} must contain a top-level mapping",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     errors = validate_config(config)

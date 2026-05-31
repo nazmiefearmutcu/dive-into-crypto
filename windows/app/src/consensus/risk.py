@@ -35,7 +35,8 @@ def assess_risk(
     # 1. Check ATR volatility
     for r in results:
         if r.name == "atr_filter" and r.raw_values:
-            volatility = r.raw_values.get("volatility", "NORMAL")
+            volatility_value = r.raw_values.get("volatility", "NORMAL")
+            volatility = str(volatility_value).strip().upper()
             if volatility == "HIGH":
                 risk_score += 3
                 risk_factors.append("High ATR volatility")

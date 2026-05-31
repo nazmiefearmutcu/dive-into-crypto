@@ -16,8 +16,15 @@
 <div class="toast toast-success">Active symbol updated.</div>
 {% elif saved == "error_timeframe" %}
 <div class="toast toast-error">Invalid timeframe.</div>
+{% elif saved == "error_config" %}
+<div class="toast toast-error">Config file could not be loaded.</div>
 {% elif saved == "error_symbol" %}
-<div class="toast toast-error">Invalid symbol format (letters and digits only).</div>
+<div class="toast toast-error">Invalid symbol format (2-20 uppercase letters and digits only).</div>
+{% elif saved == "error_validation" %}
+<div class="toast toast-error">Invalid settings values. Please check the form and try again.</div>
+{% endif %}
+{% if config_warning %}
+<div class="toast toast-error">{{ config_warning }}</div>
 {% endif %}
 
 <!-- ─── Active Symbol ─── -->
@@ -165,11 +172,11 @@
     <div class="settings-grid">
         <div class="form-group">
             <label>Starting Balance (USDT)</label>
-            <input type="number" name="starting_balance" value="{{ p.starting_balance or 10000 }}" class="form-input" step="100" min="100">
+            <input type="number" name="starting_balance" value="{{ p.get('starting_balance') if p.get('starting_balance') is not none else 10000 }}" class="form-input" step="100" min="0">
         </div>
         <div class="form-group">
             <label>Fee %</label>
-            <input type="number" name="fee_pct" value="{{ p.fee_pct or 0.001 }}" class="form-input" step="0.0001" min="0" max="0.01">
+            <input type="number" name="fee_pct" value="{{ p.get('fee_pct') if p.get('fee_pct') is not none else 0.001 }}" class="form-input" step="0.0001" min="0" max="0.01">
         </div>
     </div>
 </div>
@@ -180,7 +187,7 @@
     <div class="reset-row">
         <div class="form-group" style="margin-bottom:0">
             <label>New Balance (USDT)</label>
-            <input type="number" id="reset-balance" value="{{ (config.paper or {}).starting_balance or 10000 }}" class="form-input" step="100" min="100" style="width:160px">
+            <input type="number" id="reset-balance" value="{{ ((config.paper or {}).get('starting_balance') if (config.paper or {}).get('starting_balance') is not none else 10000) }}" class="form-input" step="100" min="0" style="width:160px">
         </div>
         <button type="button" class="btn btn-danger" id="reset-btn" onclick="resetPaper()">
             Reset Paper Trading
@@ -205,11 +212,12 @@ function resetPaper() {
         .then(function(r) { return r.json(); })
         .then(function(data) {
             var toast = document.getElementById("reset-toast");
-            if (data.status === "ok") {
+            if (data.status === "ok" || data.status === "enqueued") {
                 toast.className = "toast toast-success";
-                toast.textContent = data.message;
+                toast.textContent = data.message || "Paper reset queued";
                 toast.style.display = "block";
-                setTimeout(function() { window.location.reload(); }, 2000);
+                btn.textContent = data.status === "ok" ? "Reset Paper Trading" : "Reset queued";
+                setTimeout(function() { window.location.reload(); }, 3000);
             } else {
                 toast.className = "toast toast-error";
                 toast.textContent = data.error || "Failed";
@@ -218,7 +226,11 @@ function resetPaper() {
                 btn.textContent = "Reset Paper Trading";
             }
         })
-        .catch(function() {
+        .catch(function(err) {
+            var toast = document.getElementById("reset-toast");
+            toast.className = "toast toast-error";
+            toast.textContent = "Error: " + (err && err.message ? err.message : "network error");
+            toast.style.display = "block";
             btn.disabled = false;
             btn.textContent = "Reset Paper Trading";
         });
@@ -232,19 +244,19 @@ function resetPaper() {
     <div class="settings-grid">
         <div class="form-group">
             <label>Strong Buy Threshold</label>
-            <input type="number" name="strong_buy_threshold" value="{{ c.strong_buy_threshold or 1.2 }}" class="form-input" step="0.1">
+            <input type="number" name="strong_buy_threshold" value="{{ c.get('strong_buy_threshold') if c.get('strong_buy_threshold') is not none else 1.2 }}" class="form-input" step="0.1">
         </div>
         <div class="form-group">
             <label>Buy Threshold</label>
-            <input type="number" name="buy_threshold" value="{{ c.buy_threshold or 0.4 }}" class="form-input" step="0.1">
+            <input type="number" name="buy_threshold" value="{{ c.get('buy_threshold') if c.get('buy_threshold') is not none else 0.4 }}" class="form-input" step="0.1">
         </div>
         <div class="form-group">
             <label>Sell Threshold</label>
-            <input type="number" name="sell_threshold" value="{{ c.sell_threshold or -0.4 }}" class="form-input" step="0.1">
+            <input type="number" name="sell_threshold" value="{{ c.get('sell_threshold') if c.get('sell_threshold') is not none else -0.4 }}" class="form-input" step="0.1">
         </div>
         <div class="form-group">
             <label>Strong Sell Threshold</label>
-            <input type="number" name="strong_sell_threshold" value="{{ c.strong_sell_threshold or -1.2 }}" class="form-input" step="0.1">
+            <input type="number" name="strong_sell_threshold" value="{{ c.get('strong_sell_threshold') if c.get('strong_sell_threshold') is not none else -1.2 }}" class="form-input" step="0.1">
         </div>
         <div class="form-group">
             <label>Min. Active Signals</label>
@@ -252,7 +264,7 @@ function resetPaper() {
         </div>
         <div class="form-group">
             <label>Conflict Ratio Threshold</label>
-            <input type="number" name="conflict_ratio_threshold" value="{{ c.conflict_ratio_threshold or 0.6 }}" class="form-input" step="0.05" min="0" max="1">
+            <input type="number" name="conflict_ratio_threshold" value="{{ c.get('conflict_ratio_threshold') if c.get('conflict_ratio_threshold') is not none else 0.6 }}" class="form-input" step="0.05" min="0" max="1">
         </div>
     </div>
 </div>
@@ -264,7 +276,7 @@ function resetPaper() {
     <div class="settings-grid">
         <div class="form-group">
             <label>ADX Minimum</label>
-            <input type="number" name="adx_min" value="{{ nt.adx_min or 15 }}" class="form-input" step="1" min="0" max="100">
+            <input type="number" name="adx_min" value="{{ nt.get('adx_min') if nt.get('adx_min') is not none else 15 }}" class="form-input" step="1" min="0" max="100">
         </div>
         <div class="form-group">
             <label>ATR High Percentile</label>
@@ -272,7 +284,7 @@ function resetPaper() {
         </div>
         <div class="form-group">
             <label>Min. Confidence</label>
-            <input type="number" name="min_confidence" value="{{ nt.min_confidence or 40 }}" class="form-input" step="1" min="0" max="100">
+            <input type="number" name="min_confidence" value="{{ nt.get('min_confidence') if nt.get('min_confidence') is not none else 40 }}" class="form-input" step="1" min="0" max="100">
         </div>
     </div>
 </div>

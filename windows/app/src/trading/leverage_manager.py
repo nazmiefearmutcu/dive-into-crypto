@@ -30,7 +30,7 @@ class LeverageManager:
         leverage_config = config.get("leverage", {})
         self.scale_ratio = leverage_config.get("scale_ratio", SCALE_RATIO)
         self.min_leverage = leverage_config.get("min_leverage", MIN_LEVERAGE)
-        self.enabled = leverage_config.get("enabled", True)
+        self.enabled = leverage_config.get("enabled", False)
 
     def get_max_leverage(self, symbol: str) -> int:
         """Get the maximum leverage allowed for a symbol on Binance Futures.
@@ -55,6 +55,8 @@ class LeverageManager:
                     else:
                         # Fallback: use common known values
                         max_lev = self._get_known_max_leverage(symbol)
+                else:
+                    max_lev = self._get_known_max_leverage(symbol)
             except Exception as e:
                 logger.warning(f"Failed to fetch max leverage for {symbol}: {e}")
                 max_lev = self._get_known_max_leverage(symbol)

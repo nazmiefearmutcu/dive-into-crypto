@@ -10,6 +10,7 @@
     var countdown = REFRESH_INTERVAL;
     var countdownEl = document.getElementById("refresh-countdown");
     var timer = null;
+    var refreshErrorShown = false;
 
     // Pages that use AJAX updates — no full reload
     var path = window.location.pathname;
@@ -44,6 +45,7 @@
         fetch("/api/status")
             .then(function (r) { return r.json(); })
             .then(function (s) {
+                refreshErrorShown = false;
                 // Update last-update time (honor stale state visually).
                 // Mirror server-side _time_ago: show d/h/m/s instead of
                 // pretending a 28-day-old snapshot is "41001m ago".
@@ -99,6 +101,21 @@
                         || (s._bot_running === false)
                         || (s._price_display && s._price_display.state === "unavailable");
                     banner.style.display = stillSnapshot ? "" : "none";
+                }
+
+                var warningBanner = document.getElementById("status-warning-banner");
+                var warningList = document.getElementById("status-warning-list");
+                var warnings = s.status_warnings || [];
+                if (warningBanner) {
+                    if (warningList) {
+                        warningList.innerHTML = "";
+                        for (var i = 0; i < warnings.length; i++) {
+                            var li = document.createElement("li");
+                            li.textContent = warnings[i];
+                            warningList.appendChild(li);
+                        }
+                    }
+                    warningBanner.style.display = warnings.length > 0 ? "" : "none";
                 }
 
                 // Symbol
@@ -189,7 +206,33 @@
                 if (dneu) { dneu.style.width = Math.round((dist.neutral||0)/total*100)+"%"; dneu.textContent = "NEUTRAL " + (dist.neutral||0); }
                 if (dsell) { dsell.style.width = Math.round((dist.sell||0)/total*100)+"%"; dsell.textContent = "SELL " + (dist.sell||0); }
             })
-            .catch(function () {});
+            .catch(function (err) {
+                if (!refreshErrorShown) {
+                    refreshErrorShown = true;
+                    if (window.showBotToast) {
+                        window.showBotToast("Dashboard refresh failed: " + (err && err.message ? err.message : "network error"), false);
+                    } else {
+                        console.warn("Dashboard refresh failed:", err);
+                    }
+                }
+
+                var luEl = document.getElementById("last-update");
+                if (luEl) {
+                    luEl.classList.add("stale");
+                }
+
+                var priceEl = document.getElementById("live-price");
+                var priceTagEl = document.getElementById("live-price-tag");
+                if (priceEl) {
+                    priceEl.textContent = "No Data";
+                    priceEl.dataset.state = "unavailable";
+                    priceEl.className = "value price-value price-unavailable";
+                }
+                if (priceTagEl) {
+                    priceTagEl.textContent = "OFFLINE";
+                    priceTagEl.className = "price-tag price-tag-unavailable";
+                }
+            });
     }
 
     function startAutoRefresh() {

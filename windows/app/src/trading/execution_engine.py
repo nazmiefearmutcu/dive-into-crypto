@@ -12,6 +12,14 @@ from src.utils.helpers import iso_now, retry_with_backoff
 
 logger = get_logger("trading.execution_engine")
 
+# S5: explicit, single-source contract string for the live-short refusal.
+# Bot-side guard (`_assert_live_action_supported`) and the execution engine
+# reuse the same prefix so dashboard parsers can match `live_short_unsupported`
+# without depending on free-text reason copy.
+LIVE_SHORT_UNSUPPORTED_REASON = (
+    "live_short_unsupported: futures live short execution is not implemented"
+)
+
 
 class ExecutionEngine:
     """Executes trading decisions in either paper or live mode."""
@@ -25,7 +33,10 @@ class ExecutionEngine:
         self.config = config
         self.client = binance_client
         self.position_manager = position_manager
-        self.mode = config.get("mode", "paper")
+        mode = config.get("mode", "paper")
+        self.mode = mode.strip().lower() if isinstance(mode, str) else "paper"
+        if self.mode not in {"paper", "live"}:
+            raise ValueError(f"Invalid mode: {self.mode}")
         self.paper_config = config.get("paper", {})
         self.paper_balance: float = self.paper_config.get("starting_balance", 10000.0)
         self.paper_fee_pct: float = self.paper_config.get("fee_pct", 0.001)
@@ -47,8 +58,9 @@ class ExecutionEngine:
 
         if self.mode == "paper":
             return self._execute_paper(action, symbol, quantity, price, decision["reason"], leverage)
-        else:
+        if self.mode == "live":
             return self._execute_live(action, symbol, quantity, price, decision["reason"], leverage)
+        raise ValueError(f"Invalid execution mode: {self.mode}")
 
     def _execute_paper(
         self,
@@ -238,6 +250,11 @@ class ExecutionEngine:
                 logger.info(f"[LIVE] Leverage set to {leverage}x for {symbol}")
             except Exception as e:
                 logger.error(f"Failed to set leverage for {symbol}: {e}")
+                return {
+                    "executed": False,
+                    "action": action.value,
+                    "reason": f"Failed to set leverage for {symbol}: {e}",
+                }
 
         if action == TradeAction.OPEN_LONG:
             # Round quantity to symbol precision
@@ -295,9 +312,20 @@ class ExecutionEngine:
             return {"executed": False, "action": action.value, "reason": "Market sell failed"}
 
         elif action in (TradeAction.OPEN_SHORT, TradeAction.CLOSE_SHORT):
-            # Futures short execution - architecture ready
-            logger.warning(f"Short execution requires futures mode. Action: {action.value}")
-            return {"executed": False, "action": action.value, "reason": "Futures short not yet enabled"}
+            # S5: live shorts (OPEN/CLOSE) are NOT wired through to the
+            # exchange. Refuse explicitly with a stable reason prefix so the
+            # queue's `error` field, the dashboard, and any monitoring can
+            # parse `live_short_unsupported` reliably. Fails CLOSED — never
+            # pretends the position was opened/closed.
+            logger.warning(
+                f"[LIVE] Short execution refused: {action.value} — "
+                f"{LIVE_SHORT_UNSUPPORTED_REASON}"
+            )
+            return {
+                "executed": False,
+                "action": action.value,
+                "reason": LIVE_SHORT_UNSUPPORTED_REASON,
+            }
 
         return {"executed": False, "action": action.value, "reason": "Unhandled action"}
 

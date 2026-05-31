@@ -23,16 +23,30 @@ from src.consensus.engine import ConsensusEngine
 from src.trading.decision_engine import DecisionEngine
 from src.trading.execution_engine import ExecutionEngine
 from src.trading.position_manager import PositionManager
-from src.trading.order_models import TradeAction
+from src.trading.order_models import TradeAction, PositionSide
 from src.utils.logger import setup_logger, get_logger
+from src.utils.validators import VALID_TIMEFRAMES, validate_symbol
 
 
 def run_backtest(symbol: str = "BTCUSDT", timeframe: str = "1h", candle_limit: int = 500):
+    symbol = symbol.strip().upper()
+    timeframe = timeframe.strip()
+    if timeframe.upper() == "1M":
+        timeframe = "1M"
+    else:
+        timeframe = timeframe.lower()
+    if not validate_symbol(symbol):
+        raise ValueError(f"Invalid symbol '{symbol}'")
+    if timeframe not in VALID_TIMEFRAMES:
+        raise ValueError(f"Invalid timeframe '{timeframe}'")
+    if candle_limit <= 0:
+        raise ValueError("candle_limit must be a positive integer")
+
     env_path = project_root / ".env"
     if env_path.exists():
         load_dotenv(env_path)
 
-    config = load_config("config/default.yaml")
+    config = load_config(str(project_root / "config" / "default.yaml"))
     config["mode"] = "paper"
     config["timeframe"] = timeframe
     config["candle_limit"] = candle_limit
@@ -101,21 +115,35 @@ def run_backtest(symbol: str = "BTCUSDT", timeframe: str = "1h", candle_limit: i
 
         # Simulate execution
         if action == TradeAction.OPEN_LONG.value:
-            qty = decision["quantity"]
-            cost = current_price * qty * (1 + fee_pct)
-            if cost <= balance:
-                balance -= cost
-                position_manager.open_position(
-                    symbol, __import__("src.trading.order_models", fromlist=["PositionSide"]).PositionSide.LONG,
-                    current_price, qty
-                )
+            if not position_manager.has_position(symbol):
+                qty = decision["quantity"]
+                cost = current_price * qty * (1 + fee_pct)
+                if cost <= balance:
+                    balance -= cost
+                    position_manager.open_position(symbol, PositionSide.LONG, current_price, qty)
+
+        elif action == TradeAction.OPEN_SHORT.value:
+            if not position_manager.has_position(symbol):
+                qty = decision["quantity"]
+                notional = current_price * qty
+                if notional <= balance:
+                    balance += current_price * qty * (1 - fee_pct)
+                    position_manager.open_position(symbol, PositionSide.SHORT, current_price, qty)
 
         elif action == TradeAction.CLOSE_LONG.value:
             pos = position_manager.get_position(symbol)
-            if pos:
+            if pos and pos.side == PositionSide.LONG:
                 record = position_manager.close_position(symbol, current_price, "backtest_exit", fee_pct)
                 if record:
                     balance += current_price * record.quantity * (1 - fee_pct)
+                    trades.append(record.to_dict())
+
+        elif action == TradeAction.CLOSE_SHORT.value:
+            pos = position_manager.get_position(symbol)
+            if pos and pos.side == PositionSide.SHORT:
+                record = position_manager.close_position(symbol, current_price, "backtest_exit", fee_pct)
+                if record:
+                    balance -= current_price * record.quantity * (1 + fee_pct)
                     trades.append(record.to_dict())
 
     # Close any remaining position at last price
@@ -124,7 +152,10 @@ def run_backtest(symbol: str = "BTCUSDT", timeframe: str = "1h", candle_limit: i
     if pos:
         record = position_manager.close_position(symbol, last_price, "backtest_end", fee_pct)
         if record:
-            balance += last_price * record.quantity * (1 - fee_pct)
+            if pos.side == PositionSide.SHORT:
+                balance -= last_price * record.quantity * (1 + fee_pct)
+            else:
+                balance += last_price * record.quantity * (1 - fee_pct)
             trades.append(record.to_dict())
 
     # Report
@@ -178,7 +209,15 @@ def run_backtest(symbol: str = "BTCUSDT", timeframe: str = "1h", candle_limit: i
 
 
 if __name__ == "__main__":
-    sym = sys.argv[1] if len(sys.argv) > 1 else "BTCUSDT"
-    tf = sys.argv[2] if len(sys.argv) > 2 else "1h"
-    limit = int(sys.argv[3]) if len(sys.argv) > 3 else 500
-    run_backtest(sym, tf, limit)
+    sym = sys.argv[1].strip() if len(sys.argv) > 1 else "BTCUSDT"
+    tf = sys.argv[2].strip() if len(sys.argv) > 2 else "1h"
+    try:
+        limit = int(sys.argv[3]) if len(sys.argv) > 3 else 500
+    except ValueError:
+        print(f"ERROR: Invalid candle limit '{sys.argv[3]}'", file=sys.stderr)
+        sys.exit(1)
+    try:
+        run_backtest(sym, tf, limit)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)

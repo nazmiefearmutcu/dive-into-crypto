@@ -5,6 +5,7 @@
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776ab?logo=python&logoColor=white)](https://python.org)
 [![Mode](https://img.shields.io/badge/default%20mode-paper-success)](#status)
 [![Platforms](https://img.shields.io/badge/platforms-macOS%20%2B%20Windows-lightgrey)](#subdirectories)
+[![Packaging Smoke](https://github.com/nazmiefearmutcu/TRADING-BOT/actions/workflows/packaging-smoke.yml/badge.svg)](https://github.com/nazmiefearmutcu/TRADING-BOT/actions/workflows/packaging-smoke.yml)
 
 **A trading bot that won't trade until 15 indicators agree across 12 timeframes — on every coin on the market.** It scans the entire Binance USDT-margined perpetual-futures universe, runs a 15-indicator weighted consensus on all 12 timeframes for each coin, and cross-ranks the results to surface the coins with the strongest, most consistent multi-timeframe signal. Paper-mode by default; live trading must be explicitly enabled per credential. Python backend, 7-tab web dashboard, macOS and Windows packaged distributions.
 
@@ -52,6 +53,11 @@ Windows builds wrap the same Python code; the dashboard markup is identical.
 Paper-mode is the default. Live trading on a credentialed perpetual-futures
 account requires explicit opt-in via **Settings → Mode = LIVE** and a
 per-credential confirmation prompt.
+
+The safety invariant is tested in CI: the default macOS and Windows configs
+must stay `mode: paper`, and paper execution must not call live exchange client
+methods. Packaging smoke also builds the Windows PyInstaller onedir bundle from
+the checked-in spec without using secrets.
 
 ## License
 

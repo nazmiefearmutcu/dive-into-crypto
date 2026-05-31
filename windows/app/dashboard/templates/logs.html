@@ -8,6 +8,10 @@
     <span class="update-time">Showing the last {{ entries | length }} entries</span>
 </div>
 
+{% if log_warning %}
+<div class="toast toast-error">{{ log_warning }}</div>
+{% endif %}
+
 <!-- Filters -->
 <div class="card log-filters">
     <form method="get" action="/logs" class="filter-form">

@@ -5,6 +5,7 @@ import json
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
+import sys
 from typing import Any, Optional
 
 from src.api.binance_client import BinanceClient
@@ -23,12 +24,229 @@ from src.control.config_watcher import ConfigWatcher, load_config
 from src.persistence.command_queue import CommandQueue
 from src.persistence.schemas import CommandKind, CommandSchema
 from src.persistence.state_store import StateStore
+from src.persistence.atomic_io import atomic_write_json
 from src.services.command_processor import CommandProcessor
 from src.monitoring.status_exporter import StatusExporter
 from src.utils.logger import get_logger
 from src.utils.helpers import iso_now
 
 logger = get_logger("services.bot_service")
+
+
+def _is_valid_app_root(candidate: Path) -> bool:
+    required_files = (
+        candidate / "src" / "main.py",
+        candidate / "dashboard" / "app.py",
+        candidate / "config" / "default.yaml",
+        candidate / "src" / "persistence" / "atomic_io.py",
+        candidate / "src" / "persistence" / "command_queue.py",
+        candidate / "src" / "persistence" / "schemas.py",
+        candidate / "src" / "services" / "command_processor.py",
+        candidate / "src" / "market" / "live_price_service.py",
+    )
+    if not candidate.is_dir():
+        return False
+    return all(path.is_file() for path in required_files)
+
+
+def _project_root() -> Path:
+    """Resolve writable project root for packaged and developer runs."""
+    if hasattr(sys, "_MEIPASS"):
+        exe_root = Path(sys.executable).resolve().parent
+        external = exe_root / "app"
+        if _is_valid_app_root(external):
+            return external
+        internal = Path(sys._MEIPASS).resolve() / "app"  # type: ignore[attr-defined]
+        if _is_valid_app_root(internal):
+            if external.exists():
+                try:
+                    import shutil
+                    if external.is_dir():
+                        shutil.rmtree(external)
+                    else:
+                        external.unlink()
+                except Exception as exc:
+                    print(
+                        f"Warning: failed to clean writable app bundle {external}: {exc}",
+                        file=sys.stderr,
+                    )
+            try:
+                import shutil
+                shutil.copytree(internal, external)
+            except Exception as exc:
+                raise RuntimeError(f"Failed to prepare writable app bundle at {external}") from exc
+            if _is_valid_app_root(external):
+                return external
+            raise RuntimeError(f"Copied app bundle at {external} is invalid.")
+        raise RuntimeError("Could not locate a valid app bundle in packaged environment.")
+    return Path(__file__).resolve().parent.parent
+
+
+PROJECT_ROOT = _project_root()
+DEFAULT_RUNTIME_DIR = PROJECT_ROOT / "runtime"
+
+
+def _as_project_path(value: str | Path | None, fallback: Path | None = None) -> Path:
+    """Resolve a path value relative to project root when not absolute."""
+    if value is None:
+        if fallback is None:
+            return PROJECT_ROOT
+        return fallback if fallback.is_absolute() else PROJECT_ROOT / fallback
+    try:
+        text = str(value).strip()
+    except Exception:
+        if fallback is None:
+            return PROJECT_ROOT
+        return fallback if fallback.is_absolute() else PROJECT_ROOT / fallback
+    if not text:
+        if fallback is None:
+            return PROJECT_ROOT
+        return fallback if fallback.is_absolute() else PROJECT_ROOT / fallback
+    candidate = Path(text).expanduser()
+    if not candidate.is_absolute():
+        candidate = PROJECT_ROOT / candidate
+    return candidate
+
+
+def _resolve_runtime_dir(config: dict[str, Any] | None = None) -> Path:
+    """Resolve runtime directory from configured runtime artifact paths."""
+    if not isinstance(config, dict):
+        return DEFAULT_RUNTIME_DIR
+    candidates = (
+        config.get("dashboard_status_path"),
+        config.get("state_path"),
+        config.get("active_symbol_path"),
+        config.get("command_queue_path"),
+        config.get("log_path"),
+    )
+    for anchor in candidates:
+        if not isinstance(anchor, (str, Path)):
+            continue
+        text = str(anchor).strip()
+        if not text or text in {"."}:
+            continue
+        try:
+            anchor_path = _as_project_path(anchor)
+        except Exception:
+            continue
+        if anchor_path.suffix:
+            return anchor_path.parent
+        return anchor_path
+    return DEFAULT_RUNTIME_DIR
+
+
+def _parse_iso_datetime(value: Any) -> datetime | None:
+    """Parse ISO timestamps and normalize to UTC-aware datetime objects."""
+    if not value:
+        return None
+    try:
+        text = str(value)
+    except Exception:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(text)
+    except Exception:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _as_runtime_file(value: str | Path | None, *, fallback: Path, default_filename: str) -> Path:
+    """Resolve runtime artifact path, supporting directory or file config values."""
+    if value is None:
+        return fallback
+    try:
+        text = str(value).strip()
+    except Exception:
+        return fallback
+    if not text or text in {"."}:
+        return fallback
+    candidate = Path(text).expanduser()
+    if not candidate.is_absolute():
+        candidate = PROJECT_ROOT / candidate
+    if candidate.suffix:
+        return candidate
+    return candidate / default_filename
+
+
+def _resolve_status_path(config: dict[str, Any] | None = None) -> Path:
+    """Resolve dashboard status file path from config with safe fallback."""
+    runtime_dir = _resolve_runtime_dir(config)
+    fallback = runtime_dir / "dashboard_status.json"
+    if not isinstance(config, dict):
+        return fallback
+    return _as_runtime_file(
+        config.get("dashboard_status_path"),
+        fallback=fallback,
+        default_filename="dashboard_status.json",
+    )
+
+
+def _coerce_optional_str(value: Any) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _coerce_runtime_list(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    return []
+
+
+def _coerce_runtime_dict_list(value: Any) -> list[dict[str, Any]]:
+    items = _coerce_runtime_list(value)
+    result: list[dict[str, Any]] = []
+    for item in items:
+        if isinstance(item, dict):
+            result.append(dict(item))
+    return result
+
+
+def _coerce_number(value: Any) -> int | float:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, (int, float)):
+        return value
+    return 0
+
+
+def _normalize_auto_scan_progress(payload: Any) -> dict[str, Any]:
+    data = dict(payload) if isinstance(payload, dict) else {}
+    normalized = dict(data)
+    normalized["scanning"] = bool(data.get("scanning", False))
+    state_value = data.get("state")
+    normalized["state"] = state_value if isinstance(state_value, str) and state_value.strip() else ("scanning" if normalized["scanning"] else "idle")
+    normalized["pct"] = _coerce_number(data.get("pct", 0))
+    normalized["done"] = _coerce_number(data.get("done", 0))
+    normalized["total"] = _coerce_number(data.get("total", 0))
+    normalized["last_auto_scan"] = _coerce_optional_str(data.get("last_auto_scan"))
+    normalized["last_scan_results"] = _coerce_runtime_dict_list(data.get("last_scan_results", []))
+    normalized["last_scan_hot_count"] = _coerce_number(data.get("last_scan_hot_count", 0))
+    normalized["last_scan_total"] = _coerce_number(data.get("last_scan_total", 0))
+    warnings = _coerce_warning_list(data.get("warnings", []))
+    warnings.extend(_coerce_warning_list(data.get("status_warnings", [])))
+    normalized["warnings"] = warnings
+    normalized["status_warnings"] = list(warnings)
+    return normalized
+
+
+def _coerce_warning_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, (list, tuple)):
+        warnings: list[str] = []
+        for item in value:
+            if item is None:
+                continue
+            warnings.append(item if isinstance(item, str) else str(item))
+        return warnings
+    return [str(value)]
 
 
 def _compute_candle_key(df: Any) -> str:
@@ -72,6 +290,27 @@ class BotService:
     def __init__(self, config: dict[str, Any]) -> None:
         self.config = config
         self.running = False
+        mode = self.config.get("mode")
+        if isinstance(mode, str):
+            self.config["mode"] = mode.strip().lower()
+        market_type = self.config.get("market_type")
+        if isinstance(market_type, str):
+            self.config["market_type"] = market_type.strip().lower()
+        timeframe = self.config.get("timeframe")
+        if isinstance(timeframe, str):
+            tf = timeframe.strip()
+            self.config["timeframe"] = "1M" if tf.upper() == "1M" else tf.lower()
+        risk = self.config.get("risk")
+        if isinstance(risk, dict):
+            max_risk_level = risk.get("max_risk_level")
+            if isinstance(max_risk_level, str):
+                risk["max_risk_level"] = max_risk_level.strip().upper()
+
+        config_path = _as_project_path(
+            config.get("_config_path"),
+            fallback=PROJECT_ROOT / "config" / "default.yaml",
+        )
+        self._config_path = config_path
 
         # Initialize components
         self.binance_client = BinanceClient(config)
@@ -85,32 +324,16 @@ class BotService:
         self.leverage_manager = LeverageManager(config, self.binance_client)
         self.decision_engine = DecisionEngine(config, self.position_manager, self.leverage_manager)
         self.execution_engine = ExecutionEngine(config, self.binance_client, self.position_manager)
-        self.symbol_controller = SymbolController(config.get("active_symbol_path", "runtime/active_symbol.txt"))
-        self.state_store = StateStore(config.get("state_path", "runtime/state.json"))
-        self.status_exporter = StatusExporter(config.get("dashboard_status_path", "runtime/dashboard_status.json"))
-
-        # S5: control-plane command queue + processor. The dashboard writes
-        # to the SAME file (see dashboard/app.py COMMAND_QUEUE_FILE). The
-        # default path is anchored to the runtime dir derived from
-        # dashboard_status_path so test harnesses that point at tmp_path get
-        # their own isolated queue automatically.
-        _ds_path = Path(config.get("dashboard_status_path", "runtime/dashboard_status.json"))
-        _runtime_dir = _ds_path.parent if _ds_path.parent != Path(".") else Path("runtime")
-        self.command_queue = CommandQueue(
-            config.get("command_queue_path", _runtime_dir / "command_queue.json")
-        )
-        self.command_processor = CommandProcessor(self.command_queue)
-        self.command_processor.register(CommandKind.MANUAL_CLOSE, self._handle_manual_close)
-        self.command_processor.register(CommandKind.PAPER_RESET, self._handle_paper_reset)
+        self._bind_runtime_artifacts(config)
         # Configuration health surfaces: surfaced to dashboard so an operator
         # who picks live+futures+short knows the execution path won't honor it.
         self._status_warnings: list[str] = []
-        config_path = config.get("_config_path", "config/default.yaml")
+        self._last_multi_scan_warnings: list[str] = []
         self.config_watcher = ConfigWatcher(config_path)
         self.config_watcher.config = config
         # Set mtime to current so we don't reload on first cycle
         try:
-            self.config_watcher._last_mtime = Path(config_path).stat().st_mtime
+            self.config_watcher._last_mtime = self.config_watcher.config_path.stat().st_mtime
         except Exception:
             self.config_watcher._last_mtime = 0.0
 
@@ -123,6 +346,7 @@ class BotService:
 
         # Per-cycle state for status export
         self._last_indicator_results: list[Any] | None = None
+        self._last_indicator_errors: list[str] = []
         self._last_consensus: dict[str, Any] | None = None
         self._last_decision: dict[str, Any] | None = None
         self._last_execution: dict[str, Any] | None = None
@@ -137,25 +361,44 @@ class BotService:
         # Restore last scan time from progress file to avoid immediate re-scan on restart
         self._last_auto_scan_time: float = 0.0
         try:
-            _prog_path = Path(config.get("dashboard_status_path", "runtime/dashboard_status.json")).parent / "auto_scan_progress.json"
+            _prog_path = self._runtime_dir() / "auto_scan_progress.json"
             if _prog_path.exists():
-                _prog = json.loads(_prog_path.read_text())
+                _prog = json.loads(_prog_path.read_text(encoding="utf-8"))
+                if not isinstance(_prog, dict):
+                    raise ValueError(
+                        f"auto_scan_progress must be a mapping, got {type(_prog).__name__}"
+                    )
                 _last_ts = _prog.get("last_auto_scan") or _prog.get("completed_at") or _prog.get("started_at")
-                if _last_ts:
-                    from datetime import datetime as _dt, timezone as _tz
-                    _parsed = _dt.fromisoformat(_last_ts)
-                    _age_secs = (_dt.now(_tz.utc) - _parsed).total_seconds()
-                    if _age_secs < self._auto_scan_interval:
-                        # Recent scan exists — set timer so we wait the remaining interval
-                        self._last_auto_scan_time = time.time() - _age_secs
-                        logger.info(f"Restored last scan time: {_last_ts} ({_age_secs:.0f}s ago)")
-        except Exception:
-            pass
+                if not _last_ts:
+                    raise ValueError("auto_scan_progress missing timestamp markers")
+                _parsed = _parse_iso_datetime(_last_ts)
+                if _parsed is None:
+                    raise ValueError(f"unparseable manual scan timestamp: {_last_ts}")
+                _age_secs = (datetime.now(timezone.utc) - _parsed).total_seconds()
+                if _age_secs < self._auto_scan_interval:
+                    # Recent scan exists — set timer so we wait the remaining interval
+                    self._last_auto_scan_time = time.time() - _age_secs
+                    logger.info(f"Restored last scan time: {_last_ts} ({_age_secs:.0f}s ago)")
+        except Exception as exc:
+            if _prog_path.exists():
+                logger.warning(
+                    f"Failed to restore last auto-scan time from {_prog_path}: {exc}"
+                )
+                try:
+                    _prog_path.unlink(missing_ok=True)
+                except Exception as cleanup_exc:
+                    logger.warning(f"Failed to remove stale auto-scan progress file {_prog_path}: {cleanup_exc}")
+                # Fail closed: avoid an immediate re-scan when the progress
+                # file is corrupt or unreadable.
+                self._last_auto_scan_time = time.time()
         self._scan_threads: list[threading.Thread] = []
         self._scan_lock = threading.Lock()
         self._multi_scan_done_count = 0
         self._multi_scan_results: dict[str, list] = {}  # tf → top15 results
         self._multi_scan_full: dict[str, list] = {}    # tf → ALL results
+        self._last_auto_scan_progress_error: str | None = None
+        self._last_dashboard_status_patch_error: str | None = None
+        self._last_auto_select_error: str | None = None
 
         # All 12 timeframes sorted by duration
         _TF_MINUTES = {"m": 1, "h": 60, "d": 1440}
@@ -176,23 +419,42 @@ class BotService:
         # Clean stale manual scan lock from previous runs
         # (auto_scan_progress.json is kept — it has last_auto_scan timestamp)
         try:
-            p = Path("runtime/manual_scan_active.json")
+            p = self._runtime_dir() / "manual_scan_active.json"
             if p.exists():
                 p.unlink()
                 logger.info("Cleaned stale manual scan lock file")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(f"Failed to clean stale manual scan lock: {exc}")
         # Mark any in-progress auto-scan as not-scanning (stale from previous run)
         try:
-            p = Path("runtime/auto_scan_progress.json")
+            p = self._runtime_dir() / "auto_scan_progress.json"
             if p.exists():
-                _d = json.loads(p.read_text())
+                _d = json.loads(p.read_text(encoding="utf-8"))
+                if not isinstance(_d, dict):
+                    raise ValueError(
+                        f"auto_scan_progress must be a mapping, got {type(_d).__name__}"
+                    )
+                if "scanning" not in _d:
+                    raise ValueError("auto_scan_progress missing scanning state")
                 if _d.get("scanning"):
                     _d["scanning"] = False
-                    p.write_text(json.dumps(_d, default=str))
+                    from src.persistence.atomic_io import atomic_write_json
+                    atomic_write_json(p, _d)
                     logger.info("Reset stale auto-scan scanning flag")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(f"Failed to reset stale auto-scan progress: {exc}")
+            try:
+                if p.exists():
+                    p.unlink(missing_ok=True)
+            except Exception as cleanup_exc:
+                logger.warning(f"Failed to remove stale auto-scan progress file {p}: {cleanup_exc}")
+            try:
+                if p.exists():
+                    p.unlink(missing_ok=True)
+            except Exception as unlink_exc:
+                logger.warning(
+                    f"Failed to remove unreadable auto-scan progress file {p}: {unlink_exc}"
+                )
         logger.info("=" * 60)
         logger.info("Trading Bot Initializing...")
         logger.info(f"Mode: {self.config.get('mode', 'paper')}")
@@ -213,7 +475,8 @@ class BotService:
             logger.info(f"Active symbol: {symbol}")
         else:
             logger.warning("No valid symbol found, defaulting to BTCUSDT")
-            self.symbol_controller.set_symbol("BTCUSDT")
+            if not self.symbol_controller.set_symbol("BTCUSDT"):
+                logger.warning("Failed to write default BTCUSDT symbol during initialization")
 
         self.state_store.update(bot_start_time=iso_now())
         logger.info("Bot initialization complete")
@@ -279,25 +542,53 @@ class BotService:
         """Apply a new config to all components at runtime."""
         old_tf = self.config.get("timeframe")
         old_interval = self.config.get("polling_interval_seconds")
-        self.config = new_config
+        old_runtime = _resolve_runtime_dir(self.config)
+        normalized_config = dict(new_config)
+        mode = normalized_config.get("mode")
+        if isinstance(mode, str):
+            normalized_config["mode"] = mode.strip().lower()
+        market_type = normalized_config.get("market_type")
+        if isinstance(market_type, str):
+            normalized_config["market_type"] = market_type.strip().lower()
+        timeframe = normalized_config.get("timeframe")
+        if isinstance(timeframe, str):
+            tf = timeframe.strip()
+            normalized_config["timeframe"] = "1M" if tf.upper() == "1M" else tf.lower()
+        risk = normalized_config.get("risk")
+        if isinstance(risk, dict):
+            max_risk_level = risk.get("max_risk_level")
+            if isinstance(max_risk_level, str):
+                risk["max_risk_level"] = max_risk_level.strip().upper()
+        self.config = normalized_config
+        self.binance_client.mode = normalized_config.get("mode", "paper")
+        self.binance_client.market_type = normalized_config.get("market_type", "spot")
+        self.execution_engine.mode = normalized_config.get("mode", "paper")
+        self.execution_engine.paper_config = normalized_config.get("paper", {})
+        self.execution_engine.paper_fee_pct = self.execution_engine.paper_config.get("fee_pct", 0.001)
+        self._bind_runtime_artifacts(normalized_config)
+        new_runtime = _resolve_runtime_dir(normalized_config)
+        if old_runtime != new_runtime:
+            logger.info(f"Runtime directory changed: {old_runtime} -> {new_runtime}")
 
         # Update polling interval
-        self.polling_interval = new_config.get("polling_interval_seconds", 60)
+        self.polling_interval = normalized_config.get("polling_interval_seconds", 60)
 
         # Re-initialize components that depend on config
-        self.signal_service = SignalService(new_config)
-        self.consensus_engine = ConsensusEngine(new_config)
-        self.leverage_manager = LeverageManager(new_config, self.binance_client)
+        self.signal_service = SignalService(normalized_config)
+        self.consensus_engine = ConsensusEngine(normalized_config)
+        self.leverage_manager = LeverageManager(normalized_config, self.binance_client)
         # Update position manager's risk config so max_open_positions etc. take effect
-        self.position_manager.risk_config = new_config.get("risk", {})
-        self.decision_engine = DecisionEngine(new_config, self.position_manager, self.leverage_manager)
-        self.market_data = MarketDataProvider(self.binance_client, new_config)
+        self.position_manager.risk_config = normalized_config.get("risk", {})
+        self.decision_engine = DecisionEngine(normalized_config, self.position_manager, self.leverage_manager)
+        self.market_data = MarketDataProvider(self.binance_client, normalized_config)
+        if hasattr(self, "_auto_scan_scanners"):
+            self._auto_scan_scanners.clear()
 
         changes = []
-        if old_tf != new_config.get("timeframe"):
-            changes.append(f"timeframe: {old_tf} -> {new_config.get('timeframe')}")
-        if old_interval != new_config.get("polling_interval_seconds"):
-            changes.append(f"interval: {old_interval}s -> {new_config.get('polling_interval_seconds')}s")
+        if old_tf != normalized_config.get("timeframe"):
+            changes.append(f"timeframe: {old_tf} -> {normalized_config.get('timeframe')}")
+        if old_interval != normalized_config.get("polling_interval_seconds"):
+            changes.append(f"interval: {old_interval}s -> {normalized_config.get('polling_interval_seconds')}s")
         if changes:
             logger.info(f"Config reloaded: {', '.join(changes)}")
         else:
@@ -381,6 +672,7 @@ class BotService:
         if signal_stack_fresh:
             # 3. Calculate all indicators
             indicator_results = self.signal_service.calculate_all(df)
+            self._last_indicator_errors = list(getattr(self.signal_service, "last_errors", []))
 
             # 4. Run consensus engine
             consensus = self.consensus_engine.evaluate(indicator_results)
@@ -402,6 +694,7 @@ class BotService:
             self._update_state_after_cycle(
                 symbol, decision, execution_result, consensus, current_price, balance
             )
+            self._refresh_status_warnings()
         else:
             # Same candle as last cycle — reuse cached signal stack. The
             # dashboard still gets a fresh display_price via the live-price
@@ -578,17 +871,29 @@ class BotService:
             )
             raise RuntimeError(guard)
 
+        pre_close_positions = deepcopy(self.position_manager.positions)
+        pre_close_history = deepcopy(self.position_manager.trade_history)
+        pre_close_realized_pnl = self.position_manager.total_realized_pnl
+        pre_close_balance = self.execution_engine.paper_balance
+
         exec_result = self.execution_engine.execute(decision)
         if exec_result.get("executed"):
             pnl = exec_result.get("pnl", 0)
             daily_pnl = self.state_store.get("daily_pnl", 0.0) + pnl
-            self.state_store.update(
-                daily_pnl=round(daily_pnl, 4),
-                total_realized_pnl=round(self.position_manager.total_realized_pnl, 4),
-                positions=self.position_manager.get_positions_dict(),
-                trade_history=[t.to_dict() for t in self.position_manager.trade_history[-100:]],
-                paper_balance=round(self.execution_engine.paper_balance, 4),
-            )
+            try:
+                self.state_store.update(
+                    daily_pnl=round(daily_pnl, 4),
+                    total_realized_pnl=round(self.position_manager.total_realized_pnl, 4),
+                    positions=self.position_manager.get_positions_dict(),
+                    trade_history=[t.to_dict() for t in self.position_manager.trade_history[-100:]],
+                    paper_balance=round(self.execution_engine.paper_balance, 4),
+                )
+            except Exception:
+                self.position_manager.positions = deepcopy(pre_close_positions)
+                self.position_manager.trade_history = deepcopy(pre_close_history)
+                self.position_manager.total_realized_pnl = pre_close_realized_pnl
+                self.execution_engine.set_paper_balance(pre_close_balance)
+                raise
             logger.info(
                 f"✅ manual_close {symbol} via command queue | "
                 f"mode={exec_result.get('mode', self.execution_engine.mode)} | "
@@ -621,6 +926,11 @@ class BotService:
         if target_balance <= 0:
             raise ValueError("paper_reset balance must be positive")
 
+        pre_reset_positions = deepcopy(self.position_manager.positions)
+        pre_reset_history = deepcopy(self.position_manager.trade_history)
+        pre_reset_realized_pnl = self.position_manager.total_realized_pnl
+        pre_reset_balance = self.execution_engine.paper_balance
+
         # Close any open paper positions at last-known price so PnL accounting
         # stays consistent (no orphaned positions after a reset).
         for sym in list(self.position_manager.positions.keys()):
@@ -648,15 +958,22 @@ class BotService:
         self.execution_engine.set_paper_balance(target_balance)
 
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        self.state_store.update(
-            paper_balance=round(target_balance, 4),
-            positions=self.position_manager.get_positions_dict(),
-            trade_history=[],
-            daily_pnl=0.0,
-            daily_start_balance=target_balance,
-            daily_date=today,
-            total_realized_pnl=0.0,
-        )
+        try:
+            self.state_store.update(
+                paper_balance=round(target_balance, 4),
+                positions=self.position_manager.get_positions_dict(),
+                trade_history=[],
+                daily_pnl=0.0,
+                daily_start_balance=target_balance,
+                daily_date=today,
+                total_realized_pnl=0.0,
+            )
+        except Exception:
+            self.position_manager.positions = deepcopy(pre_reset_positions)
+            self.position_manager.trade_history = deepcopy(pre_reset_history)
+            self.position_manager.total_realized_pnl = pre_reset_realized_pnl
+            self.execution_engine.set_paper_balance(pre_reset_balance)
+            raise
         logger.info(
             f"✅ paper_reset via command queue | balance={target_balance:.2f} | "
             f"positions cleared"
@@ -687,71 +1004,77 @@ class BotService:
         """
         warnings: list[str] = []
         if (
-            self.config.get("mode") == "live"
-            and str(self.config.get("market_type", "spot")).lower() == "futures"
+            str(self.config.get("mode", "paper")).strip().lower() == "live"
+            and str(self.config.get("market_type", "spot")).strip().lower() == "futures"
         ):
             warnings.append(LIVE_SHORT_UNSUPPORTED_REASON)
+        yaml_read_error = getattr(self, "_yaml_read_error", None)
+        if yaml_read_error:
+            warnings.append(f"Runtime config read failed: {yaml_read_error}")
+        config_reload_error = getattr(self.config_watcher, "last_error", None)
+        if config_reload_error:
+            warnings.append(f"Config reload failed: {config_reload_error}")
+        config_reload_warnings = getattr(self.config_watcher, "last_warnings", [])
+        if config_reload_warnings:
+            warnings.extend(config_reload_warnings)
+        state_load_error = getattr(self.state_store, "_last_load_error", None)
+        if state_load_error:
+            warnings.append(f"State load failed: {state_load_error}")
+        state_save_error = getattr(self.state_store, "_last_save_error", None)
+        if state_save_error:
+            warnings.append(f"State save failed: {state_save_error}")
+        status_write_error = getattr(self.status_exporter, "_last_write_error", None)
+        if status_write_error:
+            warnings.append(f"Dashboard status write failed: {status_write_error}")
+        auto_scan_progress_error = getattr(self, "_last_auto_scan_progress_error", None)
+        if auto_scan_progress_error:
+            warnings.append(f"Auto-scan progress write failed: {auto_scan_progress_error}")
+        dashboard_status_patch_error = getattr(self, "_last_dashboard_status_patch_error", None)
+        if dashboard_status_patch_error:
+            warnings.append(f"Dashboard status patch failed: {dashboard_status_patch_error}")
+        auto_select_error = getattr(self, "_last_auto_select_error", None)
+        if auto_select_error:
+            warnings.append(f"Auto-select failed: {auto_select_error}")
+        indicator_errors = getattr(self, "_last_indicator_errors", [])
+        if indicator_errors:
+            warnings.extend(f"Indicator failed: {err}" for err in indicator_errors)
+        multi_scan_warnings = getattr(self, "_last_multi_scan_warnings", [])
+        if multi_scan_warnings:
+            warnings.extend(f"Multi-scan warning: {err}" for err in multi_scan_warnings)
         self._status_warnings = warnings
 
     # ── Legacy file-glob close command reader ──────────────────
     # Kept callable for the transitional period; the queue-based path is the
-    # new source of truth. test_cycle_cadence.py stubs this method directly.
+    # single source of truth. This cleanup prevents old or manually-created
+    # legacy files from triggering legacy side effects.
 
     def _process_close_commands(self) -> None:
-        """Check for manual close commands written by dashboard and execute them."""
-        runtime_dir = Path("runtime")
+        """Clear stale legacy close command files without executing actions."""
+        runtime_dir = self._runtime_dir()
         try:
             cmd_files = list(runtime_dir.glob("close_cmd_*.json"))
         except Exception:
             return
+
+        if not cmd_files:
+            return
+
+        logger.warning(
+            "Legacy close command files detected; ignoring dashboard side effects and "
+            "cleaning files for safety."
+        )
+
         for cmd_file in cmd_files:
             try:
-                data = json.loads(cmd_file.read_text())
-                sym = data.get("symbol", "")
-                cmd_file.unlink(missing_ok=True)  # remove command file immediately
-                if not sym:
-                    continue
-                pos = self.position_manager.get_position(sym)
-                if not pos:
-                    logger.info(f"Close command for {sym} but no position found (already closed)")
-                    continue
-                price = self.binance_client.get_ticker_price(sym)
-                if not price:
-                    price = pos.entry_price
-                close_action = (
-                    TradeAction.CLOSE_LONG if pos.side.value == "LONG"
-                    else TradeAction.CLOSE_SHORT
-                )
-                decision = {
-                    "action": close_action.value,
-                    "symbol": sym,
-                    "quantity": pos.quantity,
-                    "price": price,
-                    "reason": "Manuel kapatma (dashboard)",
-                    "timestamp": iso_now(),
-                    "consensus_signal": "NEUTRAL",
-                    "confidence": 0,
-                    "risk_level": "LOW",
-                    "leverage": pos.leverage,
-                }
-                exec_result = self.execution_engine.execute(decision)
-                if exec_result.get("executed"):
-                    pnl = exec_result.get("pnl", 0)
-                    daily_pnl = self.state_store.get("daily_pnl", 0.0) + pnl
-                    self.state_store.update(
-                        daily_pnl=round(daily_pnl, 4),
-                        total_realized_pnl=round(self.position_manager.total_realized_pnl, 4),
-                        positions=self.position_manager.get_positions_dict(),
-                        trade_history=[t.to_dict() for t in self.position_manager.trade_history[-100:]],
-                        paper_balance=round(self.execution_engine.paper_balance, 4),
-                    )
-                    logger.info(f"✅ {sym} manually closed via dashboard | PnL: {pnl:.4f}")
+                cmd_file.unlink(missing_ok=True)
             except Exception as e:
                 logger.warning(f"Failed to process close command {cmd_file}: {e}")
                 try:
                     cmd_file.unlink(missing_ok=True)
-                except Exception:
-                    pass
+                except Exception as inner_exc:
+                    logger.warning(
+                        f"Second attempt to remove legacy close command file {cmd_file} failed: {inner_exc}"
+                    )
 
     def _check_other_positions(self, active_symbol: str, balance: float) -> None:
         """Check SL/TP/trailing AND signal reversal for non-active positions.
@@ -913,9 +1236,10 @@ class BotService:
                         if df is None or df.empty:
                             results[tf] = {"signal": "N/A", "confidence": 0, "risk_level": "N/A"}
                             continue
-                        svc = SignalService({**self.config, "timeframe": tf})
+                        tf_config = {**self.config, "timeframe": tf}
+                        svc = SignalService(tf_config)
                         indicators = svc.calculate_all(df)
-                        consensus = ConsensusEngine(self.config).evaluate(indicators)
+                        consensus = ConsensusEngine(tf_config).evaluate(indicators)
                         conf = consensus["confidence"]
                         zak = self._ZAK.get(tf, 50)
                         results[tf] = {
@@ -935,13 +1259,19 @@ class BotService:
                     "timeframes": results,
                     "updated_at": iso_now(),
                 }
-                runtime_dir = Path(self.config.get("dashboard_status_path", "runtime/dashboard_status.json")).parent
+                runtime_dir = self._runtime_dir()
                 out = runtime_dir / "active_coin_signals.json"
-                tmp = out.with_suffix(".tmp")
-                tmp.write_text(json.dumps(data, default=str))
-                tmp.replace(out)
+                atomic_write_json(out, data)
             except Exception as e:
                 logger.warning(f"Active coin signals update failed: {e}")
+                try:
+                    out = self._runtime_dir() / "active_coin_signals.json"
+                    if out.exists():
+                        out.unlink()
+                except Exception as cleanup_exc:
+                    logger.warning(
+                        f"Failed to remove stale active coin signals after write error: {cleanup_exc}"
+                    )
 
         self._active_signals_thread = threading.Thread(target=_worker, daemon=True)
         self._active_signals_thread.start()
@@ -951,24 +1281,61 @@ class BotService:
         Auto-clears stale locks older than 30 minutes.
         """
         try:
-            runtime_dir = Path(self.config.get("dashboard_status_path", "runtime/dashboard_status.json")).parent
+            runtime_dir = self._runtime_dir()
             lock_file = runtime_dir / "manual_scan_active.json"
             if lock_file.exists():
-                d = json.loads(lock_file.read_text())
-                if d.get("active", False):
-                    # Check if lock is stale (>30 min old)
-                    ts = d.get("ts", "")
-                    if ts:
-                        from datetime import datetime, timezone
-                        lock_time = datetime.fromisoformat(ts)
-                        age_minutes = (datetime.now(timezone.utc) - lock_time).total_seconds() / 60
-                        if age_minutes > 30:
-                            logger.warning(f"Stale manual scan lock ({age_minutes:.0f} min old) — auto-clearing")
-                            lock_file.unlink(missing_ok=True)
-                            return False
-                    return True
-        except Exception:
-            pass
+                d = json.loads(lock_file.read_text(encoding="utf-8"))
+                if not isinstance(d, dict):
+                    raise ValueError(f"manual scan lock must be a mapping, got {type(d).__name__}")
+                if "active" not in d:
+                    raise ValueError("manual scan lock missing active state")
+                if not d.get("active", False):
+                    lock_file.unlink(missing_ok=True)
+                    return False
+                # Check if lock is stale (>30 min old)
+                ts = d.get("ts", "")
+                if not ts:
+                    logger.warning("Manual scan lock missing ts — auto-clearing")
+                    lock_file.unlink(missing_ok=True)
+                    return False
+                lock_time = _parse_iso_datetime(ts)
+                if lock_time is None:
+                    logger.warning(f"Malformed manual scan lock ts: {ts} — auto-clearing")
+                    lock_file.unlink(missing_ok=True)
+                    return False
+                age_minutes = (datetime.now(timezone.utc) - lock_time).total_seconds() / 60
+                if age_minutes > 30:
+                    logger.warning(f"Stale manual scan lock ({age_minutes:.0f} min old) — auto-clearing")
+                    lock_file.unlink(missing_ok=True)
+                    return False
+                return True
+        except Exception as exc:
+            if lock_file.exists():
+                try:
+                    age_minutes = (
+                        datetime.now(timezone.utc).timestamp() - lock_file.stat().st_mtime
+                    ) / 60
+                except Exception:
+                    age_minutes = None
+                if age_minutes is not None and age_minutes > 30:
+                    logger.warning(
+                        f"Stale manual scan lock ({age_minutes:.0f} min old) after read error — auto-clearing"
+                    )
+                    try:
+                        lock_file.unlink()
+                    except Exception as cleanup_exc:
+                        logger.warning(
+                            f"Failed to remove stale manual scan lock after read error: {cleanup_exc}"
+                        )
+                    return False
+            logger.warning(f"Manual scan lock read failed; treating as inactive: {exc}")
+            try:
+                lock_file.unlink(missing_ok=True)
+            except Exception as cleanup_exc:
+                logger.warning(
+                    f"Failed to remove unreadable manual scan lock after read error: {cleanup_exc}"
+                )
+            return False
         return False
 
     def _auto_scan_market(self) -> None:
@@ -993,7 +1360,15 @@ class BotService:
             })
             return
         disk_cfg = self._read_yaml_config()
-        if not disk_cfg.get("auto_scan_enabled", True):
+        if not disk_cfg:
+            logger.warning("Could not reread YAML config for auto-scan; disabling auto-scan for safety")
+            self._write_auto_scan_progress({
+                "scanning": False, "total": 0, "done": 0, "pct": 0,
+                "error": "auto_scan_config_unreadable",
+                "reason": "auto_scan_config_unreadable",
+            })
+            return
+        if not disk_cfg.get("auto_scan_enabled", False):
             self._write_auto_scan_progress({
                 "scanning": False, "total": 0, "done": 0, "pct": 0,
                 "reason": "auto_scan_enabled_false",
@@ -1040,7 +1415,11 @@ class BotService:
 
         try:
 
-            symbol_path = Path(self.config.get("active_symbol_path", "runtime/active_symbol.txt"))
+            symbol_path = _as_runtime_file(
+                self.config.get("active_symbol_path"),
+                fallback=self._runtime_dir() / "active_symbol.txt",
+                default_filename="active_symbol.txt",
+            )
             total_tfs = len(self._multi_tfs)
             self._multi_scan_done_count = 0
             self._multi_scan_results = {}
@@ -1068,27 +1447,54 @@ class BotService:
             # Write initial progress file — preserve last completed scan data
             self._auto_scan_start_time = iso_now()
             self._auto_scan_scanners: dict[str, ScannerService] = {}
-            prev_progress = {}
+            prev_progress = {
+                "last_auto_scan": self.state_store.get("last_auto_scan"),
+                "last_scan_results": self.state_store.get("last_scan_results"),
+                "last_scan_hot_count": self.state_store.get("last_scan_hot_count"),
+                "last_scan_total": self.state_store.get("last_scan_total"),
+            }
             try:
-                runtime_dir = Path(self.config.get("dashboard_status_path", "runtime/dashboard_status.json")).parent
+                runtime_dir = self._runtime_dir()
                 prev_file = runtime_dir / "auto_scan_progress.json"
                 if prev_file.exists():
-                    prev_progress = json.loads(prev_file.read_text())
+                    loaded_prev = json.loads(prev_file.read_text(encoding="utf-8"))
+                    if not isinstance(loaded_prev, dict):
+                        raise ValueError(
+                            f"auto_scan_progress must be a mapping, got {type(loaded_prev).__name__}"
+                        )
+                    prev_progress = _normalize_auto_scan_progress(loaded_prev)
                 # Fallback: if no last_auto_scan, try dashboard_status.json
                 if not prev_progress.get("last_auto_scan"):
-                    ds_path = Path(self.config.get("dashboard_status_path", "runtime/dashboard_status.json"))
+                    ds_path = _resolve_status_path(self.config)
                     if ds_path.exists():
-                        ds = json.loads(ds_path.read_text())
-                        if ds.get("last_auto_scan"):
-                            prev_progress["last_auto_scan"] = ds["last_auto_scan"]
-                        if ds.get("last_scan_results"):
-                            prev_progress["last_scan_results"] = ds["last_scan_results"]
-                        if ds.get("last_scan_total"):
-                            prev_progress["last_scan_total"] = ds["last_scan_total"]
-                        if ds.get("last_scan_hot_count") is not None:
-                            prev_progress["last_scan_hot_count"] = ds["last_scan_hot_count"]
-            except Exception:
-                pass
+                        try:
+                            ds = json.loads(ds_path.read_text(encoding="utf-8"))
+                            if not isinstance(ds, dict):
+                                raise ValueError(
+                                    f"dashboard_status must be a mapping, got {type(ds).__name__}"
+                                )
+                            if "last_auto_scan" in ds:
+                                prev_progress["last_auto_scan"] = ds["last_auto_scan"]
+                            if "last_scan_results" in ds:
+                                prev_progress["last_scan_results"] = ds["last_scan_results"]
+                            if ds.get("last_scan_total") is not None:
+                                prev_progress["last_scan_total"] = ds["last_scan_total"]
+                            if ds.get("last_scan_hot_count") is not None:
+                                prev_progress["last_scan_hot_count"] = ds["last_scan_hot_count"]
+                        except Exception as ds_exc:
+                            logger.warning(f"Failed to read dashboard status for auto-scan restore: {ds_exc}")
+                            try:
+                                ds_path.unlink(missing_ok=True)
+                            except Exception as cleanup_exc:
+                                logger.warning(f"Failed to remove stale dashboard status file {ds_path}: {cleanup_exc}")
+                prev_progress = _normalize_auto_scan_progress(prev_progress)
+            except Exception as exc:
+                logger.warning(f"Failed to read previous auto-scan progress: {exc}")
+                try:
+                    if prev_file.exists():
+                        prev_file.unlink(missing_ok=True)
+                except Exception as cleanup_exc:
+                    logger.warning(f"Failed to remove stale auto-scan progress file {prev_file}: {cleanup_exc}")
             self._write_auto_scan_progress({
                 "scanning": True,
                 "total": total_tfs,
@@ -1109,6 +1515,8 @@ class BotService:
                 import time as _t
                 while True:
                     _t.sleep(3)
+                    if not self._scanning_active:
+                        break
                     with self._scan_lock:
                         done_count = self._multi_scan_done_count
                         done_tfs = list(self._multi_scan_results.keys())
@@ -1128,8 +1536,8 @@ class BotService:
                             scanned_coins += c
                             if tf not in done_tfs and t > 0:
                                 tf_pct_sum += int(c * 100 / t)
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            logger.debug(f"Failed to read auto-scan progress for {tf}: {exc}")
                     if total_tfs > 0:
                         pct = int(tf_pct_sum / total_tfs)
                     else:
@@ -1157,7 +1565,7 @@ class BotService:
             def _scan_single_tf(tf: str, symbols_override: list[str] | None = None):
                 _scan_semaphore.acquire()
                 try:
-                    syms = symbols_override if symbols_override else shared_symbols
+                    syms = shared_symbols if symbols_override is None else symbols_override
                     scanner = ScannerService(
                         self.config, symbol_file=symbol_path, timeframe=tf,
                         shared_symbols=syms,
@@ -1165,6 +1573,8 @@ class BotService:
                     scanner._request_delay = req_delay
                     self._auto_scan_scanners[tf] = scanner
                     scanner.scan(min_confidence=0)
+                    if scanner._scan_progress.get("status") == "error":
+                        raise RuntimeError(f"Auto-scan {tf} reported an analysis error")
                     results = scanner.results
                     # Net Signal Score (NSS) = (confidence²) × (ZAK / 100)
                     zak = self._ZAK.get(tf, 50)
@@ -1233,13 +1643,40 @@ class BotService:
                     time.sleep(1)
         except Exception as e:
             logger.error(f"Auto-scan failed: {e}", exc_info=True)
+            self._last_auto_select_error = f"auto-scan failed: {e}"
+            self._refresh_status_warnings()
+            scan_time = iso_now()
+            self._write_auto_scan_progress({
+                "scanning": False,
+                "total": total_tfs,
+                "done": self._multi_scan_done_count,
+                "pct": int((self._multi_scan_done_count * 100) / total_tfs) if total_tfs else 0,
+                "done_tfs": list(self._multi_scan_results.keys()),
+                "all_tfs": self._multi_tfs,
+                "completed_at": scan_time,
+                "error": True,
+                "reason": "auto_scan_failed",
+                "last_auto_scan": scan_time,
+                "last_scan_results": self.state_store.get("last_scan_results"),
+                "last_scan_hot_count": self.state_store.get("last_scan_hot_count"),
+                "last_scan_total": self.state_store.get("last_scan_total"),
+            })
             self._scanning_active = False
 
     def _process_multi_scan_results(self, symbol_path: Path) -> None:
         """Process combined multi-TF scan results: cross-ranking, auto-select, save."""
         try:
+            def _remove_stale_multi_scan_results() -> None:
+                try:
+                    stale_scan_file = self._runtime_dir() / "multi_scan_results.json"
+                    if stale_scan_file.exists():
+                        stale_scan_file.unlink()
+                except Exception as unlink_exc:
+                    logger.warning(f"Failed to remove stale multi-scan results: {unlink_exc}")
+
             tf_data = self._multi_scan_results
             total_tfs = len(self._multi_tfs)
+            auto_select_failed = False
 
             # Build cross-ranking with net NSS (opposing signals subtracted)
             symbol_stats: dict[str, dict] = {}
@@ -1274,6 +1711,29 @@ class BotService:
                     symbol_stats[sym]["all_signals"][tf] = {
                         "signal": r["signal"], "confidence": conf, "zak": zak, "final_score": nss, "in_top15": True,
                     }
+
+            if not symbol_stats:
+                logger.error("Multi-scan failed: no symbol data produced")
+                self._last_auto_select_error = "multi-scan produced no symbol data"
+                self._refresh_status_warnings()
+                _remove_stale_multi_scan_results()
+                scan_time = iso_now()
+                self._write_auto_scan_progress({
+                    "scanning": False,
+                    "total": total_tfs,
+                    "done": total_tfs,
+                    "pct": 100,
+                    "done_tfs": self._multi_tfs,
+                    "all_tfs": self._multi_tfs,
+                    "completed_at": scan_time,
+                    "error": True,
+                    "reason": "multi_scan_no_symbol_data",
+                    "last_auto_scan": scan_time,
+                    "last_scan_results": [],
+                    "last_scan_hot_count": 0,
+                    "last_scan_total": 0,
+                })
+                return
 
             # Calculate net_nss: dominant direction NSS minus opposing direction NSS
             for sym, s in symbol_stats.items():
@@ -1321,25 +1781,30 @@ class BotService:
             # ── Triple-check auto_select_enabled ──
             # 1) Primary: re-read YAML config from disk (no caching race)
             # 2) Fallback: runtime flag file (belt-and-suspenders)
-            # 3) Last resort: in-memory self.config
-            auto_select_on = None
+            # 3) Last resort: fail closed (disabled) if config cannot be read
+            auto_select_on = False
             try:
-                _cfg_path = Path(self.config.get("_config_path", "config/default.yaml"))
+                _cfg_path = _as_project_path(
+                    self.config.get("_config_path"),
+                    fallback=self._config_path,
+                )
                 import yaml as _yaml
-                _fresh_cfg = _yaml.safe_load(_cfg_path.read_text()) or {}
-                auto_select_on = _fresh_cfg.get("auto_select_enabled", True)
+                _fresh_cfg = _yaml.safe_load(_cfg_path.read_text(encoding="utf-8"))
+                if _fresh_cfg is None:
+                    _fresh_cfg = {}
+                if not isinstance(_fresh_cfg, dict):
+                    raise ValueError(
+                        f"Config root must be a mapping, got {type(_fresh_cfg).__name__}"
+                    )
+                auto_select_on = bool(_fresh_cfg.get("auto_select_enabled", False))
                 logger.info(f"Auto-select from YAML: {auto_select_on}")
             except Exception as _e:
                 logger.warning(f"Could not read YAML for auto_select: {_e}")
-            # Runtime flag file override: if runtime/auto_select_disabled exists → force OFF
-            _flag_file = Path("runtime/auto_select_disabled")
+            # Runtime flag file override: if auto_select_disabled exists in runtime → force OFF
+            _flag_file = self._runtime_dir() / "auto_select_disabled"
             if _flag_file.exists():
-                logger.info("Auto-select FORCE OFF via runtime/auto_select_disabled flag file")
+                logger.info(f"Auto-select FORCE OFF via {_flag_file.name} flag file")
                 auto_select_on = False
-            # Final fallback
-            if auto_select_on is None:
-                auto_select_on = self.config.get("auto_select_enabled", True)
-                logger.info(f"Auto-select from memory config: {auto_select_on}")
             best = None
             if not auto_select_on:
                 logger.info("Auto-select disabled — skipping coin selection")
@@ -1371,7 +1836,13 @@ class BotService:
                         f"(best_conf={best['best_conf']}%)"
                     )
                     scanner = ScannerService(self.config, symbol_file=symbol_path)
-                    scanner.set_active_symbol(best["symbol"])
+                    if scanner.set_active_symbol(best["symbol"]):
+                        self._last_auto_select_error = None
+                    else:
+                        auto_select_failed = True
+                        self._last_auto_select_error = f"failed to write active symbol {best['symbol']}"
+                        logger.warning(self._last_auto_select_error)
+                        self._refresh_status_warnings()
                 else:
                     logger.info(
                         f"✅ Current symbol {current_symbol} still unanimous {direction} "
@@ -1391,6 +1862,28 @@ class BotService:
                 last_scan_total=len(symbol_stats),
             )
 
+            runtime_warnings = self._collect_auto_scan_warnings()
+            self._last_multi_scan_warnings = list(runtime_warnings)
+            existing_status_warnings = self.state_store.get("status_warnings", [])
+            if not isinstance(existing_status_warnings, list):
+                existing_status_warnings = []
+            merged_status_warnings = list(
+                dict.fromkeys(
+                    [
+                        *(item if isinstance(item, str) else str(item) for item in existing_status_warnings),
+                        *runtime_warnings,
+                    ]
+                )
+            )
+            try:
+                self.state_store.update(status_warnings=merged_status_warnings)
+            except Exception as exc:
+                logger.warning(f"Failed to persist multi-scan warnings to state store: {exc}")
+                self._last_state_save_error = str(exc)
+                self._refresh_status_warnings()
+            else:
+                self._refresh_status_warnings()
+
             # Save full multi-scan data for dashboard
             multi_result = {
                 "any_scanning": False,
@@ -1398,6 +1891,8 @@ class BotService:
                 "common_symbols": [c["symbol"] for c in cross_ranked if c["count"] == total_tfs],
                 "cross_ranking": cross_ranked[:10],
                 "scan_time": iso_now(),
+                "status_warnings": list(runtime_warnings),
+                "warnings": list(runtime_warnings),
             }
             for tf in self._multi_tfs:
                 top15 = tf_data.get(tf, [])
@@ -1408,14 +1903,33 @@ class BotService:
                     "total_scanned": len(top15),
                 }
             try:
-                runtime_dir = Path(self.config.get("dashboard_status_path", "runtime/dashboard_status.json")).parent
-                scan_file = runtime_dir / "multi_scan_results.json"
-                tmp = scan_file.with_suffix(".tmp")
-                tmp.write_text(json.dumps(multi_result, default=str))
-                tmp.replace(scan_file)
+                scan_file = self._runtime_dir() / "multi_scan_results.json"
+                atomic_write_json(scan_file, multi_result)
                 logger.info(f"Multi-TF results saved to {scan_file}")
             except Exception as e:
                 logger.warning(f"Failed to save multi-scan results: {e}")
+                self._last_auto_select_error = f"failed to save multi-scan results: {e}"
+                self._refresh_status_warnings()
+                _remove_stale_multi_scan_results()
+                scan_time = iso_now()
+                self._last_multi_scan_warnings = list(runtime_warnings)
+                self._write_auto_scan_progress({
+                    "scanning": False,
+                    "total": total_tfs,
+                    "done": total_tfs,
+                    "pct": 100,
+                    "done_tfs": self._multi_tfs,
+                    "all_tfs": self._multi_tfs,
+                    "completed_at": scan_time,
+                    "error": True,
+                    "reason": "multi_scan_results_write_failed",
+                    "last_auto_scan": scan_time,
+                    "last_scan_results": cross_ranked[:5],
+                    "last_scan_hot_count": sum(1 for c in cross_ranked if c["count"] == total_tfs),
+                    "last_scan_total": len(symbol_stats),
+                    "warnings": list(runtime_warnings),
+                })
+                return
 
             # Mark progress as complete with full scan data
             scan_time = iso_now()
@@ -1431,10 +1945,33 @@ class BotService:
                 "last_scan_results": cross_ranked[:5],
                 "last_scan_hot_count": sum(1 for c in cross_ranked if c["count"] == total_tfs),
                 "last_scan_total": len(symbol_stats),
+                "warnings": list(runtime_warnings),
             })
+            if not auto_select_failed and self._last_auto_select_error:
+                self._last_auto_select_error = None
+                self._refresh_status_warnings()
 
         except Exception as e:
             logger.error(f"Multi-scan processing failed: {e}", exc_info=True)
+            self._last_auto_select_error = f"multi-scan processing failed: {e}"
+            self._refresh_status_warnings()
+            _remove_stale_multi_scan_results()
+            scan_time = iso_now()
+            self._write_auto_scan_progress({
+                "scanning": False,
+                "total": total_tfs,
+                "done": self._multi_scan_done_count,
+                "pct": int((self._multi_scan_done_count * 100) / total_tfs) if total_tfs else 0,
+                "done_tfs": list(self._multi_scan_results.keys()),
+                "all_tfs": self._multi_tfs,
+                "completed_at": scan_time,
+                "error": True,
+                "reason": "multi_scan_processing_failed",
+                "last_auto_scan": scan_time,
+                "last_scan_results": self.state_store.get("last_scan_results"),
+                "last_scan_hot_count": self.state_store.get("last_scan_hot_count"),
+                "last_scan_total": self.state_store.get("last_scan_total"),
+            })
         finally:
             self._last_auto_scan_time = time.time()
             self._scanning_active = False
@@ -1446,8 +1983,39 @@ class BotService:
         active_symbol.txt) is anchored on the same parent so tmp_path
         isolated test runs never bleed into the developer's real repo.
         """
-        ds = Path(self.config.get("dashboard_status_path", "runtime/dashboard_status.json"))
-        return ds.parent if str(ds.parent) != "." else Path("runtime")
+        return _resolve_runtime_dir(self.config)
+
+    def _bind_runtime_artifacts(self, config: dict[str, Any]) -> None:
+        """Rebind runtime-backed collaborators after config changes."""
+        runtime_dir = _resolve_runtime_dir(config)
+        active_symbol_path = _as_runtime_file(
+            config.get("active_symbol_path"),
+            fallback=runtime_dir / "active_symbol.txt",
+            default_filename="active_symbol.txt",
+        )
+        state_path = _as_runtime_file(
+            config.get("state_path"),
+            fallback=runtime_dir / "state.json",
+            default_filename="state.json",
+        )
+        status_path = _as_runtime_file(
+            config.get("dashboard_status_path"),
+            fallback=runtime_dir / "dashboard_status.json",
+            default_filename="dashboard_status.json",
+        )
+        queue_path = _as_runtime_file(
+            config.get("command_queue_path"),
+            fallback=runtime_dir / "command_queue.json",
+            default_filename="command_queue.json",
+        )
+
+        self.symbol_controller = SymbolController(str(active_symbol_path))
+        self.state_store = StateStore(str(state_path))
+        self.status_exporter = StatusExporter(str(status_path))
+        self.command_queue = CommandQueue(str(queue_path))
+        self.command_processor = CommandProcessor(self.command_queue)
+        self.command_processor.register(CommandKind.MANUAL_CLOSE, self._handle_manual_close)
+        self.command_processor.register(CommandKind.PAPER_RESET, self._handle_paper_reset)
 
     def _read_yaml_config(self) -> dict[str, Any]:
         """Re-read the YAML config from disk so toggles applied via the
@@ -1458,11 +2026,23 @@ class BotService:
         the YAML reread that already exists in ``_process_multi_scan_results``
         for ``auto_select_enabled``.
         """
-        cfg_path = Path(self.config.get("_config_path", "config/default.yaml"))
+        cfg_path = _as_project_path(
+            self.config.get("_config_path"),
+            fallback=self._config_path,
+        )
         try:
             import yaml as _yaml
-            return _yaml.safe_load(cfg_path.read_text()) or {}
-        except Exception:
+            cfg = _yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+            if cfg is None:
+                cfg = {}
+            if not isinstance(cfg, dict):
+                raise ValueError(
+                    f"Config root must be a mapping, got {type(cfg).__name__}"
+                )
+            self._yaml_read_error = None
+            return cfg
+        except Exception as exc:
+            self._yaml_read_error = str(exc)
             return {}
 
     def _write_auto_scan_progress(self, data: dict) -> None:
@@ -1473,16 +2053,55 @@ class BotService:
         complete vs error honestly — never silent. ``reason`` is preserved
         when the caller provides it (e.g. ``auto_scan_disabled_flag``)."""
         try:
-            payload = dict(data)
-            payload.setdefault("state", self._derive_progress_state(payload))
+            self._last_auto_scan_progress_error = None
+            payload = _normalize_auto_scan_progress(data)
+            runtime_warnings = self._collect_auto_scan_warnings()
+            if runtime_warnings:
+                warnings = _coerce_warning_list(payload.get("warnings", []))
+                warnings.extend(runtime_warnings)
+                deduped_warnings = list(dict.fromkeys(warnings))
+                payload["warnings"] = deduped_warnings
+                payload["status_warnings"] = list(deduped_warnings)
+            payload["state"] = self._derive_progress_state(payload)
             runtime_dir = self._runtime_dir()
             runtime_dir.mkdir(parents=True, exist_ok=True)
             progress_file = runtime_dir / "auto_scan_progress.json"
-            tmp = progress_file.with_suffix(".tmp")
-            tmp.write_text(json.dumps(payload, default=str))
-            tmp.replace(progress_file)
-        except Exception:
-            pass  # Non-critical
+            atomic_write_json(progress_file, payload)
+        except Exception as exc:
+            self._last_auto_scan_progress_error = str(exc)
+            logger.warning(f"Failed to write auto-scan progress: {exc}")
+            try:
+                progress_file = self._runtime_dir() / "auto_scan_progress.json"
+                if progress_file.exists():
+                    progress_file.unlink()
+            except Exception as cleanup_exc:
+                logger.warning(f"Failed to remove stale auto-scan progress after write error: {cleanup_exc}")
+            self._refresh_status_warnings()
+
+    def _collect_auto_scan_warnings(self) -> list[str]:
+        warnings: list[str] = []
+        scanners = getattr(self, "_auto_scan_scanners", {})
+        if not isinstance(scanners, dict):
+            return warnings
+        for tf, scanner in scanners.items():
+            try:
+                progress = scanner.progress if isinstance(scanner.progress, dict) else {}
+            except Exception as exc:
+                warnings.append(f"{tf} progress warning: {exc}")
+                continue
+            progress_warnings = progress.get("warnings")
+            if isinstance(progress_warnings, list):
+                for warning in progress_warnings:
+                    if warning is None:
+                        continue
+                    warnings.append(f"{tf} progress warning: {warning if isinstance(warning, str) else str(warning)}")
+            indicator_warnings = getattr(scanner, "last_indicator_errors", [])
+            if isinstance(indicator_warnings, list):
+                for warning in indicator_warnings:
+                    if warning is None:
+                        continue
+                    warnings.append(f"{tf} indicator warning: {warning if isinstance(warning, str) else str(warning)}")
+        return list(dict.fromkeys(warnings))
 
     @staticmethod
     def _derive_progress_state(payload: dict) -> str:
@@ -1503,17 +2122,24 @@ class BotService:
     def _patch_dashboard_status(self, updates: dict) -> None:
         """Directly patch dashboard_status.json with given key-value pairs."""
         try:
-            status_path = Path(self.config.get("dashboard_status_path", "runtime/dashboard_status.json"))
+            self._last_dashboard_status_patch_error = None
+            status_path = _resolve_status_path(self.config)
             if status_path.exists():
-                ds = json.loads(status_path.read_text())
+                ds = json.loads(status_path.read_text(encoding="utf-8"))
             else:
                 ds = {}
             ds.update(updates)
-            tmp = status_path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(ds, indent=2, default=str))
-            tmp.replace(status_path)
+            atomic_write_json(status_path, ds, indent=2)
         except Exception as e:
+            self._last_dashboard_status_patch_error = str(e)
             logger.warning(f"Failed to patch dashboard_status.json: {e}")
+            try:
+                status_path = _resolve_status_path(self.config)
+                if status_path.exists():
+                    status_path.unlink()
+            except Exception as cleanup_exc:
+                logger.warning(f"Failed to remove stale dashboard status after patch error: {cleanup_exc}")
+            self._refresh_status_warnings()
 
     def _fetch_all_position_prices(self) -> dict[str, float]:
         """Fetch current prices for all symbols with open positions."""
@@ -1575,8 +2201,11 @@ class BotService:
         """Graceful shutdown - save state and export stopped status."""
         logger.info("Shutting down bot...")
         self.state_store.save()
+        self._refresh_status_warnings()
         try:
-            self.status_exporter.export_stopped(self.config, self.state_store.state)
+            shutdown_state = dict(self.state_store.state)
+            shutdown_state["status_warnings"] = list(getattr(self, "_status_warnings", []))
+            self.status_exporter.export_stopped(self.config, shutdown_state)
         except Exception as e:
             logger.error(f"Failed to export shutdown status: {e}")
         logger.info("State saved. Bot stopped.")

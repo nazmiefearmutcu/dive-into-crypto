@@ -31,6 +31,7 @@ class SignalService:
     def __init__(self, config: dict[str, Any]) -> None:
         self.config = config
         self.indicators: list[BaseIndicator] = self._build_indicators()
+        self.last_errors: list[str] = []
 
     def _build_indicators(self) -> list[BaseIndicator]:
         """Instantiate all indicator objects."""
@@ -59,6 +60,7 @@ class SignalService:
         Returns list of IndicatorResult objects. Failed indicators return NEUTRAL.
         """
         results: list[IndicatorResult] = []
+        self.last_errors = []
 
         for indicator in self.indicators:
             try:
@@ -70,6 +72,7 @@ class SignalService:
             except Exception as e:
                 logger.error(f"Indicator {indicator.name} failed: {e}")
                 from src.indicators.base import Signal, SIGNAL_SCORES
+                self.last_errors.append(f"{indicator.name}: {str(e)[:100]}")
                 fallback = IndicatorResult(
                     name=indicator.name,
                     signal=Signal.NEUTRAL,

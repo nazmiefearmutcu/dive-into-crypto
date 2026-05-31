@@ -245,6 +245,13 @@ function closePosition(symbol) {
                 var row = document.getElementById("pos-row-" + symbol);
                 if (row) row.style.opacity = "0.3";
                 setTimeout(function() { window.location.reload(); }, 2000);
+            } else if (data.status === "enqueued") {
+                toast.className = "toast toast-success";
+                toast.textContent = symbol + " close command queued | ID: " + (data.command_id || "n/a");
+                toast.style.display = "block";
+                btn.disabled = false;
+                btn.textContent = "Close";
+                setTimeout(function() { window.location.reload(); }, 2500);
             } else {
                 toast.className = "toast toast-error";
                 toast.textContent = data.error || "Could not close position";

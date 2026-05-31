@@ -1,0 +1,305 @@
+name: Packaging Smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "macOS/**"
+      - "windows/**"
+      - ".github/workflows/packaging-smoke.yml"
+  pull_request:
+    paths:
+      - "macOS/**"
+      - "windows/**"
+      - ".github/workflows/packaging-smoke.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos-package-smoke:
+    name: macOS paper-mode package smoke
+    runs-on: macos-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: macOS
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: macOS/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest pyyaml
+
+      - name: S7/S8 smoke invariants
+        run: python -m pytest tests/test_s7_config_guardrails.py tests/test_s7_packaging_and_ci.py -q
+
+      - name: Import smoke
+        run: |
+          python -m py_compile \
+            src/main.py \
+            src/services/bot_service.py \
+            src/trading/execution_engine.py \
+            dashboard/app.py
+
+  windows-package-smoke:
+    name: Windows PyInstaller smoke
+    runs-on: windows-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: windows
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: windows/app/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r app\requirements.txt
+          python -m pip install pyinstaller
+
+      - name: Source import smoke
+        run: |
+          python -m py_compile launcher\tbv1_launcher.py launcher\error_codes.py app\dashboard\app.py app\src\main.py
+
+      - name: PyInstaller onedir smoke
+        run: pyinstaller packaging\TradingBotV1.spec --clean --noconfirm --distpath smoke-dist --workpath smoke-build
+
+      - name: Check executable
+        run: |
+          if (!(Test-Path "smoke-dist\TradingBotV1\TradingBotV1.exe")) {
+            throw "TradingBotV1.exe was not produced"
+          }
+
+      - name: Check bundled app payload
+        run: |
+          $required = @(
+            "smoke-dist\TradingBotV1\app\src\main.py",
+            "smoke-dist\TradingBotV1\app\dashboard\app.py",
+            "smoke-dist\TradingBotV1\app\config\default.yaml",
+            "smoke-dist\TradingBotV1\app\src\persistence\atomic_io.py",
+            "smoke-dist\TradingBotV1\app\src\persistence\command_queue.py",
+            "smoke-dist\TradingBotV1\app\src\persistence\schemas.py",
+            "smoke-dist\TradingBotV1\app\src\services\command_processor.py",
+            "smoke-dist\TradingBotV1\app\src\market\live_price_service.py"
+          )
+
+          foreach ($path in $required) {
+            if (!(Test-Path $path)) {
+              throw "Missing bundled app file: $path"
+            }
+          }
+
+      - name: Windows runtime launcher smoke (start/stop bot)
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $exe = Join-Path (Get-Location) "smoke-dist\TradingBotV1\TradingBotV1.exe"
+          $appBaseDir = Split-Path $exe -Parent
+          $appRuntimeDir = Join-Path $appBaseDir "app\runtime"
+            $runtimeDir = $appRuntimeDir
+            $proc = $null
+            $proc = Start-Process -FilePath $exe -PassThru
+            Write-Host "Launched $exe with PID $($proc.Id)"
+
+            function Get-BotProcessFromPidPath {
+                param (
+                    [Parameter(Mandatory=$true)][string] $PidFile
+                )
+
+                if (-not (Test-Path $PidFile)) {
+                    return $null
+                }
+
+                try {
+                    $pidText = (Get-Content -Path $PidFile -Raw).Trim()
+                    if ([string]::IsNullOrWhiteSpace($pidText)) {
+                        return $null
+                    }
+                    $pidValue = [int]$pidText
+                } catch {
+                    return $null
+                }
+
+                try {
+                    $proc = Get-Process -Id $pidValue -ErrorAction Stop
+                } catch {
+                    return $null
+                }
+
+                $cmd = $null
+                try {
+                    $cmd = (Get-CimInstance Win32_Process -Filter ("ProcessId={0}" -f $pidValue) | Select-Object -ExpandProperty CommandLine)
+                } catch {
+                    $cmd = $null
+                }
+
+                if ($cmd -match "run_bot\\.py|--run-bot|src/main\\.py|_MEIPASS|TradingBotV1\\.exe") {
+                    return $proc
+                }
+
+                if ($proc.ProcessName -eq "TradingBotV1") {
+                    return $proc
+                }
+
+                return $null
+            }
+
+          try {
+            $timeout = (Get-Date).AddSeconds(45)
+            $ready = $false
+            do {
+              try {
+                $root = Invoke-WebRequest -Uri "http://127.0.0.1:8080/" -Method GET -TimeoutSec 2
+                if ($root.StatusCode -eq 200) {
+                  $ready = $true
+                  break
+                }
+                Start-Sleep -Milliseconds 500
+              } catch {
+                Start-Sleep -Milliseconds 500
+              }
+            } until ((Get-Date) -gt $timeout)
+
+            if (-not $ready) {
+              throw "Launcher dashboard did not become ready on port 8080"
+            }
+
+            $startBody = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8080/api/bot/start" -TimeoutSec 5
+            if ($startBody.status -notin @("started", "already_running")) {
+              throw "Unexpected bot-start response: $($startBody | ConvertTo-Json -Compress)"
+            }
+
+            # Respect runtime path configured for bot process when available.
+            $runtimeStatusPath = $null
+            try {
+              $runtimeConfig = Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:8080/api/config" -TimeoutSec 5
+              if ($runtimeConfig -and $runtimeConfig.dashboard_status_path) {
+                $runtimeStatusPath = $runtimeConfig.dashboard_status_path
+              }
+            } catch {
+              Write-Host "Could not read /api/config; defaulting runtime pid path."
+            }
+
+            if ([string]::IsNullOrWhiteSpace($runtimeStatusPath)) {
+              $runtimeDir = $appRuntimeDir
+            } elseif ([IO.Path]::IsPathRooted($runtimeStatusPath)) {
+              $runtimeDir = Split-Path $runtimeStatusPath -Parent
+            } else {
+              $runtimeStatusPath = Join-Path $appBaseDir $runtimeStatusPath
+              $runtimeDir = Split-Path $runtimeStatusPath -Parent
+            }
+
+            $pidPath = Join-Path $runtimeDir "bot.pid"
+            $pidWaitDeadline = (Get-Date).AddSeconds(12)
+            do {
+              $runningBotProc = Get-BotProcessFromPidPath -PidFile $pidPath
+              if ($runningBotProc) {
+                break
+              }
+              Start-Sleep -Milliseconds 500
+            } until ((Get-Date) -gt $pidWaitDeadline)
+
+            if (-not $runningBotProc) {
+              throw "bot.pid was not created after bot start"
+            }
+
+            $startRunningDeadline = (Get-Date).AddSeconds(8)
+            $botRunning = $false
+            $statusBody = $null
+            do {
+              try {
+                $statusBody = Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:8080/api/bot/status" -TimeoutSec 3
+                if ($statusBody.running) {
+                  $botRunning = $true
+                  break
+                }
+              } catch {
+                # Keep polling until timeout. A transient boot delay is expected
+                # while status exporter warms up.
+              }
+              Start-Sleep -Milliseconds 500
+            } until ((Get-Date) -gt $startRunningDeadline)
+
+            if (-not $botRunning) {
+              throw "Bot did not report running after start request: $($statusBody | ConvertTo-Json -Compress)"
+            }
+
+            $stopBody = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8080/api/bot/stop" -TimeoutSec 5
+            if ($stopBody.status -notin @("stopped", "not_running")) {
+              throw "Unexpected bot-stop response: $($stopBody | ConvertTo-Json -Compress)"
+            }
+
+            Start-Sleep 2
+
+            $stopDeadline = (Get-Date).AddSeconds(12)
+            $stopped = $false
+            do {
+              try {
+                $afterStop = Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:8080/api/bot/status" -TimeoutSec 3
+                if (-not $afterStop.running) {
+                  $stopped = $true
+                  break
+                }
+              } catch {
+                # If endpoint is unreachable after stop request, treat as stopped.
+                $stopped = $true
+                break
+              }
+              Start-Sleep -Milliseconds 500
+            } until ((Get-Date) -gt $stopDeadline)
+
+            if (-not $stopped) {
+              throw "Bot still reported running after stop request: $($afterStop | ConvertTo-Json -Compress)"
+            }
+
+            $pidClearDeadline = (Get-Date).AddSeconds(10)
+            do {
+              $runningBotProc = Get-BotProcessFromPidPath -PidFile $pidPath
+              if (-not $runningBotProc -and -not (Test-Path $pidPath)) {
+                break
+              }
+              Start-Sleep -Milliseconds 500
+            } until ((Get-Date) -gt $pidClearDeadline)
+
+            if (Test-Path $pidPath) {
+              throw "bot.pid still exists after bot stop"
+            }
+
+            if ($runningBotProc) {
+              try {
+                Stop-Process -Id $runningBotProc.Id -Force -ErrorAction Stop
+              } catch {
+                Write-Host "bot process already exited before final cleanup"
+              }
+            }
+          }
+          finally {
+            if ($proc -and -not $proc.HasExited) {
+              Stop-Process -Id $proc.Id -Force
+            }
+            if (Test-Path $runtimeDir) {
+              Get-ChildItem -Path $runtimeDir -ErrorAction SilentlyContinue | ForEach-Object {
+                Write-Host "runtime file: $($_.FullName)"
+              }
+            }
+          }

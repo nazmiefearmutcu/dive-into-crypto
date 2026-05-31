@@ -4,8 +4,35 @@ from typing import Any
 from datetime import datetime, timezone
 
 
+def _normalize_trade_history(trade_history: Any) -> list[dict[str, Any]]:
+    if not isinstance(trade_history, list):
+        return []
+
+    normalized: list[dict[str, Any]] = []
+    for item in trade_history:
+        if not isinstance(item, dict):
+            continue
+        record = dict(item)
+        try:
+            record["pnl"] = float(record.get("pnl", 0.0) or 0.0)
+        except Exception:
+            record["pnl"] = 0.0
+
+        exit_time = record.get("exit_time", "")
+        if exit_time is None:
+            record["exit_time"] = ""
+        elif not isinstance(exit_time, str):
+            try:
+                record["exit_time"] = str(exit_time)
+            except Exception:
+                record["exit_time"] = ""
+        normalized.append(record)
+    return normalized
+
+
 def compute_daily_summary(trade_history: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Group trade history by date and produce daily summaries."""
+    trade_history = _normalize_trade_history(trade_history)
     daily: dict[str, list[float]] = {}
     for t in trade_history:
         exit_time = t.get("exit_time", "")
@@ -41,8 +68,12 @@ def compute_equity_curve(
     trade_history: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """Compute equity curve from trade history."""
-    curve = [{"trade_num": 0, "equity": starting_balance, "pnl": 0.0}]
-    equity = starting_balance
+    trade_history = _normalize_trade_history(trade_history)
+    try:
+        equity = float(starting_balance)
+    except Exception:
+        equity = 0.0
+    curve = [{"trade_num": 0, "equity": round(equity, 4), "pnl": 0.0}]
     for i, t in enumerate(trade_history):
         pnl = t.get("pnl", 0.0)
         equity += pnl
@@ -56,6 +87,7 @@ def compute_equity_curve(
 
 def compute_streak(trade_history: list[dict[str, Any]]) -> dict[str, int]:
     """Compute current and max win/loss streaks."""
+    trade_history = _normalize_trade_history(trade_history)
     if not trade_history:
         return {"current_streak": 0, "max_win_streak": 0, "max_loss_streak": 0}
 

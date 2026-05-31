@@ -18,9 +18,9 @@ from __future__ import annotations
 import os
 import time
 import threading
-from contextlib import contextmanager
 import uuid
 from pathlib import Path
+from contextlib import contextmanager
 from typing import Any, Iterator, Optional
 
 from src.persistence.atomic_io import (
@@ -78,7 +78,11 @@ class CommandQueue:
 
     @contextmanager
     def _file_lock(self) -> Iterator[None]:
-        """Serialize queue read/write across processes using an exclusive lock file."""
+        """Serialize queue read/write across processes.
+
+        A lock file created with O_EXCL blocks concurrent readers/writers.
+        Stale locks are removed after a grace window.
+        """
         lock_path = self._lock_path()
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         token = f"{os.getpid()}-{threading.get_ident()}-{time.time_ns()}"
@@ -132,9 +136,7 @@ class CommandQueue:
         except OSError:
             return True
 
-    # ── Persistence ───────────────────────────────────────────
-
-    def _load(self) -> CommandQueueSchema:
+    def _load_unlocked(self) -> CommandQueueSchema:
         if not self.path.exists():
             return CommandQueueSchema()
         try:
@@ -164,7 +166,9 @@ class CommandQueue:
                 f"command_queue.json failed schema validation: {exc}"
             ) from exc
 
-    def _save(self, queue: CommandQueueSchema) -> None:
+    # ── Persistence ───────────────────────────────────────────
+
+    def _save_unlocked(self, queue: CommandQueueSchema) -> None:
         queue.generated_at = _utc_now_iso()
         try:
             atomic_write_json(self.path, queue.model_dump(mode="json"))
@@ -201,7 +205,7 @@ class CommandQueue:
 
         with self._lock:
             with self._file_lock():
-                queue = self._load()
+                queue = self._load_unlocked()
                 for cmd in queue.commands:
                     if (
                         cmd.idempotency_key == idempotency_key
@@ -216,24 +220,24 @@ class CommandQueue:
                     payload=payload,
                 )
                 queue.commands.append(cmd)
-                self._save(queue)
+                self._save_unlocked(queue)
                 return cmd
 
     def list_pending(self) -> list[CommandSchema]:
         with self._lock:
             with self._file_lock():
-                queue = self._load()
+                queue = self._load_unlocked()
                 return [c for c in queue.commands if c.status == CommandStatus.PENDING]
 
     def list_all(self) -> list[CommandSchema]:
         with self._lock:
             with self._file_lock():
-                return list(self._load().commands)
+                return list(self._load_unlocked().commands)
 
     def get(self, command_id: str) -> Optional[CommandSchema]:
         with self._lock:
             with self._file_lock():
-                for cmd in self._load().commands:
+                for cmd in self._load_unlocked().commands:
                     if cmd.id == command_id:
                         return cmd
         return None
@@ -253,15 +257,15 @@ class CommandQueue:
     ) -> None:
         with self._lock:
             with self._file_lock():
-                queue = self._load()
+                queue = self._load_unlocked()
                 for cmd in queue.commands:
                     if cmd.id == command_id:
                         cmd.status = status
                         cmd.processed_at = _utc_now_iso()
                         cmd.error = error
-                        self._save(queue)
+                        self._save_unlocked(queue)
                         return
-            # Command may disappear due to concurrent writer rotation.
+            # Command may disappear due concurrent queue writer rotation.
             return
 
     def purge_processed(self, keep_last: int = 50) -> int:
@@ -269,13 +273,15 @@ class CommandQueue:
         Pending entries are always retained."""
         with self._lock:
             with self._file_lock():
-                queue = self._load()
-                pending = [c for c in queue.commands if c.status == CommandStatus.PENDING]
+                queue = self._load_unlocked()
+                pending = [
+                    c for c in queue.commands if c.status == CommandStatus.PENDING
+                ]
                 done = [c for c in queue.commands if c.status != CommandStatus.PENDING]
                 kept_done = done[-keep_last:] if keep_last > 0 else []
                 new_commands = pending + kept_done
                 removed = len(queue.commands) - len(new_commands)
                 if removed > 0:
                     queue.commands = new_commands
-                    self._save(queue)
+                    self._save_unlocked(queue)
                 return removed

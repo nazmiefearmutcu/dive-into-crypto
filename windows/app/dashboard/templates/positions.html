@@ -5,11 +5,31 @@
 {% set s = status or {} %}
 {% set positions = s.get("open_positions", []) %}
 {% set history = s.get("trade_history", []) %}
+{% set stale = data_stale if data_stale is defined else is_stale(s) %}
+{% set bot_off = not (bot_running if bot_running is defined else true) %}
 
 <div class="page-header">
     <h1>Positions & Trade History</h1>
-    <span class="update-time" id="last-update">Last update: {{ format_dt(s.get("last_update", "")) }}</span>
+    <span class="update-time {% if stale %}stale{% endif %}" id="last-update">
+        Last update: {{ format_dt(s.get("last_update", "")) }}
+        {% if stale %}<span class="badge badge-red">STALE</span>{% endif %}
+    </span>
 </div>
+
+{% if bot_off or stale %}
+<div class="snapshot-banner snapshot-banner-{{ 'stale' if stale else 'stopped' }}">
+    <span class="snapshot-banner-icon" aria-hidden="true">⚠</span>
+    <span class="snapshot-banner-text">
+        {% if bot_off %}
+            <strong>Snapshot — Bot stopped.</strong>
+            Position current prices and PnL values are from the last bot cycle.
+        {% else %}
+            <strong>Data is stale.</strong>
+            Position current prices are no longer being refreshed.
+        {% endif %}
+    </span>
+</div>
+{% endif %}
 
 <!-- Close result toast -->
 <div id="close-toast" class="toast" style="display:none"></div>
@@ -27,8 +47,10 @@
     {% set side = p.get("side", "LONG") %}
     {% set is_long = side == "LONG" %}
     {% set entry = p.get("entry_price", 0) %}
-    {% set cur = (p.get("current_price", 0) or 0) %}
-    {% set pnl_pct = ((cur - entry) / entry * 100) if entry > 0 else 0 %}
+    {% set cur_raw = p.get("current_price") %}
+    {% set cur = cur_raw if (cur_raw is not none and cur_raw|float > 0) else 0 %}
+    {% set has_cur = cur > 0 %}
+    {% set pnl_pct = ((cur - entry) / entry * 100) if (entry > 0 and has_cur) else 0 %}
     {% if not is_long %}{% set pnl_pct = -pnl_pct %}{% endif %}
     {% set ts_pct = p.get("trailing_stop") or 0 %}
     {% set highest = p.get("highest_price") %}
@@ -50,10 +72,14 @@
             </button>
         </div>
 
-        <!-- PnL bar -->
+        <!-- PnL bar (PnL %, if no live price we hide the %, the $ value is last-known) -->
         <div class="pos-pnl-bar {{ 'pos-pnl-positive' if pnl_positive else 'pos-pnl-negative' }}">
-            <span class="pos-pnl-value">${{ pnl | price }}</span>
+            <span class="pos-pnl-value">${{ pnl | price }}{% if not has_cur %}<span class="pos-pnl-stale-tag">SNAPSHOT</span>{% endif %}</span>
+            {% if has_cur %}
             <span class="pos-pnl-pct">({{ "%+.2f" | format(pnl_pct) }}%)</span>
+            {% else %}
+            <span class="pos-pnl-pct muted">(—)</span>
+            {% endif %}
         </div>
 
         <!-- Price info -->
@@ -64,7 +90,11 @@
             </div>
             <div class="pos-info-item">
                 <span class="pos-info-label">Current</span>
+                {% if has_cur %}
                 <span class="pos-info-value">${{ cur | price }}</span>
+                {% else %}
+                <span class="pos-info-value muted">—</span>
+                {% endif %}
             </div>
             <div class="pos-info-item">
                 <span class="pos-info-label">Quantity</span>
@@ -97,7 +127,7 @@
                         {% set ts_price = highest * (1 + ts_pct) %}
                     {% endif %}
                     <span class="pos-level-value highlight">${{ ts_price | price }}</span>
-                    <span class="pos-level-sub">{{ "low" if not is_long else "peak" }}: ${{ highest | price }}</span>
+                    <span class="pos-level-sub">{{ "low" if not is_long else "high" }}: ${{ highest | price }}</span>
                 {% else %}
                     <span class="pos-level-value muted">—</span>
                 {% endif %}
@@ -156,7 +186,7 @@
             <thead>
                 <tr>
                     <th>Symbol</th>
-                    <th>Direction</th>
+                    <th>Side</th>
                     <th>Entry Price</th>
                     <th>Exit Price</th>
                     <th>Quantity</th>
@@ -193,7 +223,7 @@
 <script>
 function closePosition(symbol) {
     var btn = document.getElementById("close-btn-" + symbol);
-    if (!confirm("Do you want to close the " + symbol + " position at the market price?")) return;
+    if (!confirm("Close " + symbol + " position at market price?")) return;
 
     btn.disabled = true;
     btn.textContent = "Closing...";
@@ -215,6 +245,13 @@ function closePosition(symbol) {
                 var row = document.getElementById("pos-row-" + symbol);
                 if (row) row.style.opacity = "0.3";
                 setTimeout(function() { window.location.reload(); }, 2000);
+            } else if (data.status === "enqueued") {
+                toast.className = "toast toast-success";
+                toast.textContent = symbol + " close command queued | ID: " + (data.command_id || "n/a");
+                toast.style.display = "block";
+                btn.disabled = false;
+                btn.textContent = "Close";
+                setTimeout(function() { window.location.reload(); }, 2500);
             } else {
                 toast.className = "toast toast-error";
                 toast.textContent = data.error || "Could not close position";

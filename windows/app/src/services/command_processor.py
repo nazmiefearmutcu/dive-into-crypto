@@ -14,12 +14,12 @@ Idempotency contract:
     `close::BTCUSDT::pending` would silently bind every later legitimate
     request to the first historical command.
 
-    The processor's in-memory set tracks `command.id` (not the
-    idempotency_key) so we are robust against the rare case where the same
-    command appears twice in a single tick's pending snapshot — e.g. if a
-    parallel writer beats `mark_processed` to flush. We never re-dispatch
-    work for an id we've already touched in this run, but identical keys
-    across distinct command ids are always honored.
+The processor's in-memory dedupe set tracks `command.id` (not the
+idempotency_key) for the active tick so we are robust against the rare case
+where the same command appears twice in a single pending snapshot — e.g. if a
+parallel writer beats `mark_processed` to flush. We never re-dispatch
+work for an id we've already touched in this run, but identical keys
+across distinct command ids are always honored.
 """
 
 from __future__ import annotations

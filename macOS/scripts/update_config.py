@@ -12,6 +12,8 @@ Usage:
 
 import argparse
 import sys
+import os
+import tempfile
 from pathlib import Path
 
 import yaml
@@ -19,19 +21,59 @@ import yaml
 project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
+from src.utils.validators import validate_config
+
 DEFAULT_CONFIG_PATH = project_root / "config" / "default.yaml"
 
 
 def load_config(path: Path) -> dict:
-    with open(path) as f:
-        return yaml.safe_load(f) or {}
+    with open(path, encoding="utf-8") as f:
+        config = yaml.safe_load(f)
+    if config is None:
+        return {}
+    if not isinstance(config, dict):
+        raise ValueError(f"Config file {path} must contain a top-level mapping")
+    errors = validate_config(config)
+    if errors:
+        raise ValueError(f"Config validation failed: {'; '.join(errors)}")
+    return config
 
 
-def save_config(config: dict, path: Path):
-    tmp = path.with_suffix(".tmp")
-    with open(tmp, "w") as f:
-        yaml.dump(config, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
-    tmp.replace(path)
+def save_config(config: dict, path: Path) -> None:
+    """Write config atomically using temp file + fsync + os.replace."""
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=path.name + ".",
+        suffix=".tmp",
+        dir=str(path.parent),
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            yaml.dump(config, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_name, path)
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except OSError as cleanup_exc:
+            sys.stderr.write(f"Warning: failed to remove temp file {tmp_name}: {cleanup_exc}\n")
+        raise
+
+
+def _resolve_config_path(config_arg: str | Path | None) -> Path:
+    if config_arg is None:
+        return DEFAULT_CONFIG_PATH
+    text = str(config_arg).strip()
+    if text in {"", "."}:
+        return DEFAULT_CONFIG_PATH
+    candidate = Path(text).expanduser()
+    if not candidate.is_absolute():
+        candidate = project_root / candidate
+    if candidate.exists() and candidate.is_dir():
+        return candidate / "default.yaml"
+    if not candidate.suffix and not candidate.exists():
+        return candidate / "default.yaml"
+    return candidate
 
 
 def main():
@@ -40,8 +82,8 @@ def main():
     )
     parser.add_argument("--config", type=str, default=str(DEFAULT_CONFIG_PATH), help="Config file path")
     parser.add_argument("--show", action="store_true", help="Show current config and exit")
-    parser.add_argument("--mode", choices=["paper", "live"], help="Trading mode")
-    parser.add_argument("--market-type", choices=["spot", "futures"], help="Market type")
+    parser.add_argument("--mode", type=lambda s: s.strip().lower(), choices=["paper", "live"], help="Trading mode")
+    parser.add_argument("--market-type", type=lambda s: s.strip().lower(), choices=["spot", "futures"], help="Market type")
     parser.add_argument("--timeframe", type=str, help="Candle timeframe (1m,5m,15m,1h,4h,1d,...)")
     parser.add_argument("--polling-interval", type=int, help="Polling interval in seconds")
     parser.add_argument("--candle-limit", type=int, help="Number of candles to fetch")
@@ -50,18 +92,22 @@ def main():
     parser.add_argument("--take-profit", type=float, help="Take profit percentage (0.05=5%%)")
     parser.add_argument("--trailing-stop", type=float, help="Trailing stop percentage")
     parser.add_argument("--confidence-threshold", type=int, help="Min confidence to trade (0-100)")
-    parser.add_argument("--max-risk-level", choices=["LOW", "MEDIUM", "HIGH"], help="Max risk level for trading")
+    parser.add_argument("--max-risk-level", type=lambda s: s.strip().upper(), choices=["LOW", "MEDIUM", "HIGH"], help="Max risk level for trading")
     parser.add_argument("--max-positions", type=int, help="Max open positions")
     parser.add_argument("--daily-loss-limit", type=float, help="Daily loss limit percentage")
 
     args = parser.parse_args()
-    config_path = Path(args.config)
+    config_path = _resolve_config_path(args.config)
 
     if not config_path.exists():
         print(f"ERROR: Config file not found: {config_path}", file=sys.stderr)
         sys.exit(1)
 
-    config = load_config(config_path)
+    try:
+        config = load_config(config_path)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)
 
     if args.show:
         print(yaml.dump(config, default_flow_style=False, sort_keys=False))
@@ -79,11 +125,13 @@ def main():
 
     if args.timeframe:
         valid_tf = {"1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M"}
-        if args.timeframe not in valid_tf:
+        tf = args.timeframe.strip()
+        tf = "1M" if tf.upper() == "1M" else tf.lower()
+        if tf not in valid_tf:
             print(f"ERROR: Invalid timeframe '{args.timeframe}'. Valid: {sorted(valid_tf)}", file=sys.stderr)
             sys.exit(1)
-        config["timeframe"] = args.timeframe
-        changes.append(f"timeframe -> {args.timeframe}")
+        config["timeframe"] = tf
+        changes.append(f"timeframe -> {tf}")
 
     if args.polling_interval:
         config["polling_interval_seconds"] = args.polling_interval

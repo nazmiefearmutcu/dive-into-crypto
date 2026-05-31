@@ -7,6 +7,7 @@ import numpy as np
 
 from src.api.binance_client import BinanceClient
 from src.utils.logger import get_logger
+from src.utils.validators import validate_timeframe
 
 logger = get_logger("data.market_data")
 
@@ -23,7 +24,13 @@ class MarketDataProvider:
     def __init__(self, binance_client: BinanceClient, config: dict[str, Any]) -> None:
         self.client = binance_client
         self.config = config
-        self.timeframe = config.get("timeframe", "1h")
+        timeframe = config.get("timeframe", "1h")
+        if not isinstance(timeframe, str):
+            raise ValueError(f"Invalid timeframe type: {type(timeframe).__name__}")
+        timeframe = timeframe.strip()
+        self.timeframe = "1M" if timeframe.upper() == "1M" else timeframe.lower()
+        if not validate_timeframe(self.timeframe):
+            raise ValueError(f"Invalid timeframe: {timeframe}")
         self.candle_limit = config.get("candle_limit", 200)
 
     def get_ohlcv(self, symbol: str) -> Optional[pd.DataFrame]:

@@ -16,8 +16,15 @@
 <div class="toast toast-success">Active symbol updated.</div>
 {% elif saved == "error_timeframe" %}
 <div class="toast toast-error">Invalid timeframe.</div>
+{% elif saved == "error_config" %}
+<div class="toast toast-error">Config file could not be loaded.</div>
 {% elif saved == "error_symbol" %}
-<div class="toast toast-error">Invalid symbol format (letters and digits only).</div>
+<div class="toast toast-error">Invalid symbol format (2-20 uppercase letters and digits only).</div>
+{% elif saved == "error_validation" %}
+<div class="toast toast-error">Invalid settings values. Please check the form and try again.</div>
+{% endif %}
+{% if config_warning %}
+<div class="toast toast-error">{{ config_warning }}</div>
 {% endif %}
 
 <!-- ─── Active Symbol ─── -->
@@ -63,7 +70,7 @@
             <label>Polling Interval (s)</label>
             <input type="number" name="polling_interval_seconds" value="{{ config.polling_interval_seconds or 1 }}" class="form-input" min="1" max="3600">
             <div class="sub-text" style="color: var(--yellow); margin-top:4px; font-size:11px;">
-                ⚠ No new position opens until the candle changes. A lower interval = faster SL/TP detection, not trade spam.
+                ⚠ No new position opens until the candle changes. Lower interval = faster SL/TP detection, not trade spam.
             </div>
         </div>
         <div class="form-group">
@@ -165,22 +172,22 @@
     <div class="settings-grid">
         <div class="form-group">
             <label>Starting Balance (USDT)</label>
-            <input type="number" name="starting_balance" value="{{ p.starting_balance or 10000 }}" class="form-input" step="100" min="100">
+            <input type="number" name="starting_balance" value="{{ p.get('starting_balance') if p.get('starting_balance') is not none else 10000 }}" class="form-input" step="100" min="0">
         </div>
         <div class="form-group">
             <label>Fee %</label>
-            <input type="number" name="fee_pct" value="{{ p.fee_pct or 0.001 }}" class="form-input" step="0.0001" min="0" max="0.01">
+            <input type="number" name="fee_pct" value="{{ p.get('fee_pct') if p.get('fee_pct') is not none else 0.001 }}" class="form-input" step="0.0001" min="0" max="0.01">
         </div>
     </div>
 </div>
 
-<!-- ─── Paper Reset (outside the form to avoid a form conflict) ─── -->
+<!-- ─── Paper Reset (outside the form to avoid form conflicts) ─── -->
 <div class="card">
     <h3>Paper Reset</h3>
     <div class="reset-row">
         <div class="form-group" style="margin-bottom:0">
             <label>New Balance (USDT)</label>
-            <input type="number" id="reset-balance" value="{{ (config.paper or {}).starting_balance or 10000 }}" class="form-input" step="100" min="100" style="width:160px">
+            <input type="number" id="reset-balance" value="{{ ((config.paper or {}).get('starting_balance') if (config.paper or {}).get('starting_balance') is not none else 10000) }}" class="form-input" step="100" min="0" style="width:160px">
         </div>
         <button type="button" class="btn btn-danger" id="reset-btn" onclick="resetPaper()">
             Reset Paper Trading
@@ -205,11 +212,12 @@ function resetPaper() {
         .then(function(r) { return r.json(); })
         .then(function(data) {
             var toast = document.getElementById("reset-toast");
-            if (data.status === "ok") {
+            if (data.status === "ok" || data.status === "enqueued") {
                 toast.className = "toast toast-success";
-                toast.textContent = data.message;
+                toast.textContent = data.message || "Paper reset queued";
                 toast.style.display = "block";
-                setTimeout(function() { window.location.reload(); }, 2000);
+                btn.textContent = data.status === "ok" ? "Reset Paper Trading" : "Reset queued";
+                setTimeout(function() { window.location.reload(); }, 3000);
             } else {
                 toast.className = "toast toast-error";
                 toast.textContent = data.error || "Failed";
@@ -218,7 +226,11 @@ function resetPaper() {
                 btn.textContent = "Reset Paper Trading";
             }
         })
-        .catch(function() {
+        .catch(function(err) {
+            var toast = document.getElementById("reset-toast");
+            toast.className = "toast toast-error";
+            toast.textContent = "Error: " + (err && err.message ? err.message : "network error");
+            toast.style.display = "block";
             btn.disabled = false;
             btn.textContent = "Reset Paper Trading";
         });
@@ -232,19 +244,19 @@ function resetPaper() {
     <div class="settings-grid">
         <div class="form-group">
             <label>Strong Buy Threshold</label>
-            <input type="number" name="strong_buy_threshold" value="{{ c.strong_buy_threshold or 1.2 }}" class="form-input" step="0.1">
+            <input type="number" name="strong_buy_threshold" value="{{ c.get('strong_buy_threshold') if c.get('strong_buy_threshold') is not none else 1.2 }}" class="form-input" step="0.1">
         </div>
         <div class="form-group">
             <label>Buy Threshold</label>
-            <input type="number" name="buy_threshold" value="{{ c.buy_threshold or 0.4 }}" class="form-input" step="0.1">
+            <input type="number" name="buy_threshold" value="{{ c.get('buy_threshold') if c.get('buy_threshold') is not none else 0.4 }}" class="form-input" step="0.1">
         </div>
         <div class="form-group">
             <label>Sell Threshold</label>
-            <input type="number" name="sell_threshold" value="{{ c.sell_threshold or -0.4 }}" class="form-input" step="0.1">
+            <input type="number" name="sell_threshold" value="{{ c.get('sell_threshold') if c.get('sell_threshold') is not none else -0.4 }}" class="form-input" step="0.1">
         </div>
         <div class="form-group">
             <label>Strong Sell Threshold</label>
-            <input type="number" name="strong_sell_threshold" value="{{ c.strong_sell_threshold or -1.2 }}" class="form-input" step="0.1">
+            <input type="number" name="strong_sell_threshold" value="{{ c.get('strong_sell_threshold') if c.get('strong_sell_threshold') is not none else -1.2 }}" class="form-input" step="0.1">
         </div>
         <div class="form-group">
             <label>Min. Active Signals</label>
@@ -252,7 +264,7 @@ function resetPaper() {
         </div>
         <div class="form-group">
             <label>Conflict Ratio Threshold</label>
-            <input type="number" name="conflict_ratio_threshold" value="{{ c.conflict_ratio_threshold or 0.6 }}" class="form-input" step="0.05" min="0" max="1">
+            <input type="number" name="conflict_ratio_threshold" value="{{ c.get('conflict_ratio_threshold') if c.get('conflict_ratio_threshold') is not none else 0.6 }}" class="form-input" step="0.05" min="0" max="1">
         </div>
     </div>
 </div>
@@ -264,7 +276,7 @@ function resetPaper() {
     <div class="settings-grid">
         <div class="form-group">
             <label>ADX Minimum</label>
-            <input type="number" name="adx_min" value="{{ nt.adx_min or 15 }}" class="form-input" step="1" min="0" max="100">
+            <input type="number" name="adx_min" value="{{ nt.get('adx_min') if nt.get('adx_min') is not none else 15 }}" class="form-input" step="1" min="0" max="100">
         </div>
         <div class="form-group">
             <label>ATR High Percentile</label>
@@ -272,7 +284,7 @@ function resetPaper() {
         </div>
         <div class="form-group">
             <label>Min. Confidence</label>
-            <input type="number" name="min_confidence" value="{{ nt.min_confidence or 40 }}" class="form-input" step="1" min="0" max="100">
+            <input type="number" name="min_confidence" value="{{ nt.get('min_confidence') if nt.get('min_confidence') is not none else 40 }}" class="form-input" step="1" min="0" max="100">
         </div>
     </div>
 </div>
@@ -286,7 +298,7 @@ function resetPaper() {
 <form method="post" action="/settings/weights">
 <div class="card">
     <h3>Indicator Weights</h3>
-    <p class="sub-text" style="margin-bottom:14px">A higher weight = more influence on the final decision. Set to 0 to disable.</p>
+    <p class="sub-text" style="margin-bottom:14px">Higher weight = more influence on the final decision. Set to 0 to disable.</p>
     <div class="settings-grid">
         {% for name, weight in (config.indicator_weights or {}).items() %}
         <div class="form-group">
@@ -301,40 +313,40 @@ function resetPaper() {
 </div>
 </form>
 
-<!-- ─── API Keys ─── -->
-<form method="post" action="/settings/env">
-<div class="card">
+<!-- ─── API Keys (S7: rescue build — read-only) ─── -->
+<div class="card" data-testid="api-keys-readonly">
     <h3>API Keys (.env)</h3>
-    <p class="sub-text" style="margin-bottom:14px">Leave the fields unchanged to keep the current values. Masked values do not overwrite existing keys.</p>
+    <p class="sub-text" style="margin-bottom:14px">
+        <strong>Rescue mode:</strong> the dashboard cannot edit API keys. They are managed only via the on-disk
+        <code>.env</code> file; see <code>.env.example</code> for the format.
+    </p>
     <div class="settings-grid">
         <div class="form-group">
             <label>Binance API Key</label>
-            <input type="text" name="binance_api_key" value="{{ mask_key(env.get('BINANCE_API_KEY', '')) }}" class="form-input form-mono" autocomplete="off">
+            <input type="text" value="{{ mask_key(env.get('BINANCE_API_KEY', '')) }}" class="form-input form-mono" autocomplete="off" disabled readonly>
         </div>
         <div class="form-group">
             <label>Binance API Secret</label>
-            <input type="text" name="binance_api_secret" value="{{ mask_key(env.get('BINANCE_API_SECRET', '')) }}" class="form-input form-mono" autocomplete="off">
+            <input type="text" value="{{ mask_key(env.get('BINANCE_API_SECRET', '')) }}" class="form-input form-mono" autocomplete="off" disabled readonly>
         </div>
         <div class="form-group">
             <label>Testnet API Key</label>
-            <input type="text" name="binance_testnet_api_key" value="{{ mask_key(env.get('BINANCE_TESTNET_API_KEY', '')) }}" class="form-input form-mono" autocomplete="off">
+            <input type="text" value="{{ mask_key(env.get('BINANCE_TESTNET_API_KEY', '')) }}" class="form-input form-mono" autocomplete="off" disabled readonly>
         </div>
         <div class="form-group">
             <label>Testnet API Secret</label>
-            <input type="text" name="binance_testnet_api_secret" value="{{ mask_key(env.get('BINANCE_TESTNET_API_SECRET', '')) }}" class="form-input form-mono" autocomplete="off">
+            <input type="text" value="{{ mask_key(env.get('BINANCE_TESTNET_API_SECRET', '')) }}" class="form-input form-mono" autocomplete="off" disabled readonly>
         </div>
         <div class="form-group">
             <label>Use Testnet</label>
-            <select name="use_testnet" class="form-input">
-                <option value="false" {% if env.get('USE_TESTNET', 'false') != 'true' %}selected{% endif %}>false</option>
-                <option value="true" {% if env.get('USE_TESTNET', 'false') == 'true' %}selected{% endif %}>true</option>
-            </select>
+            <input type="text" value="{{ env.get('USE_TESTNET', 'false') }}" class="form-input" autocomplete="off" disabled readonly>
         </div>
     </div>
     <div class="settings-actions" style="margin-top:16px">
-        <button type="submit" class="btn btn-primary">Save API Keys</button>
+        <button type="button" class="btn btn-primary" disabled aria-disabled="true" title="Rescue build: dashboard cannot write secrets">
+            Save API Keys (disabled)
+        </button>
     </div>
 </div>
-</form>
 
 {% endblock %}
