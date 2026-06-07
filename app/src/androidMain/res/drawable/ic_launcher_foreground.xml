@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Up-trending candlestick chart silhouette -->
+    <group android:translateX="22" android:translateY="22">
+        <path
+            android:fillColor="#FF00C853"
+            android:pathData="M6,28 h6 v18 h-6 z" />
+        <path
+            android:strokeColor="#FF00C853"
+            android:strokeWidth="2"
+            android:pathData="M9,24 V46" />
+        <path
+            android:fillColor="#FF00C853"
+            android:pathData="M22,18 h6 v22 h-6 z" />
+        <path
+            android:strokeColor="#FF00C853"
+            android:strokeWidth="2"
+            android:pathData="M25,14 V44" />
+        <path
+            android:fillColor="#FF00C853"
+            android:pathData="M38,8 h6 v28 h-6 z" />
+        <path
+            android:strokeColor="#FF00C853"
+            android:strokeWidth="2"
+            android:pathData="M41,4 V40" />
+        <path
+            android:fillColor="#FFD50000"
+            android:pathData="M54,16 h6 v14 h-6 z" />
+        <path
+            android:strokeColor="#FFD50000"
+            android:strokeWidth="2"
+            android:pathData="M57,12 V34" />
+    </group>
+</vector>

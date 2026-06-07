@@ -1,0 +1,33 @@
+# Android Studio / Gradle
+.gradle/
+local.properties
+.idea/
+*.iml
+build/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Compose & Kotlin
+**/.kotlin/
+**/*.hprof
+
+# Generated
+app/release/
+app/debug/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets — never commit
+*.keystore
+!release.keystore.example
+.env
+.env.local
+
+# IDE
+*.swp
+*.swo
+keystore.properties
+*.jks

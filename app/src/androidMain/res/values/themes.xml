@@ -1,0 +1,16 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!--
+      Dive Into Crypto is dark-only — system bars must match the BgCard top-nav background
+      so the Compose DiveNavBar appears flush to the status bar. Default
+      Material3 DayNight pulls primary tints into the system bars, which paints
+      the bar purple on Pixel emulators; we explicitly pin both bars and turn
+      off light-foreground icons (we want light icons on a dark surface).
+    -->
+    <style name="Theme.DiveIntoCrypto" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="android:statusBarColor" tools:targetApi="lollipop">@color/dive_bg_card</item>
+        <item name="android:navigationBarColor" tools:targetApi="lollipop">@color/dive_bg</item>
+        <item name="android:windowLightStatusBar" tools:targetApi="m">false</item>
+        <item name="android:windowLightNavigationBar" tools:targetApi="o_mr1">false</item>
+        <item name="android:windowBackground">@color/dive_bg</item>
+    </style>
+</resources>

@@ -1,0 +1,7 @@
+<resources>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+    <!-- Dive Into Crypto dark palette — mirrors dashboard/static/style.css :root tokens. -->
+    <color name="dive_bg">#FF0F1117</color>
+    <color name="dive_bg_card">#FF1A1D27</color>
+</resources>
