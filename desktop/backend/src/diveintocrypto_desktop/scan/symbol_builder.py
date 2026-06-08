@@ -32,7 +32,7 @@ _PRIMARY_VALUE = {
     "ichimoku": "tenkan", "psar": "distance_pct", "obv": "obv_trend",
 }
 
-_DIVERGENCE_BUILD_TFS = ["1h", "2h", "4h", "6h", "12h", "1d"]  # high-weight TFs dominate forSymbol
+_DIVERGENCE_BUILD_TFS = ["4h", "12h", "1d"]  # highest-weight TFs dominate forSymbol (keeps futures/data calls bounded)
 
 
 @lru_cache(maxsize=1)
