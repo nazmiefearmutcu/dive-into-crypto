@@ -46,6 +46,28 @@ async def taker_ls(symbol: str, period: str = "5m", limit: int = 48) -> list[flo
     return await _series("takerlongshortRatio", symbol, period, limit, "buySellRatio")
 
 
+async def position_ls_timeseries(symbol: str, period: str, limit: int = 60) -> dict[str, list]:
+    """Top-trader **position** L/S with timestamps, for divergence alignment.
+
+    Returns ``{"t": [ms...], "v": [ratio...]}`` (oldest→newest).
+    """
+    if period not in RATIO_PERIODS:
+        period = "1h"
+    url = f"{FAPI_DATA}/futures/data/topLongShortPositionRatio"
+    rows: list[dict[str, Any]] = await get_json(
+        url, {"symbol": symbol, "period": period, "limit": limit}, rate_limited=True
+    )
+    ts: list[int] = []
+    vs: list[float] = []
+    for r in rows:
+        try:
+            vs.append(float(r["longShortRatio"]))
+            ts.append(int(r["timestamp"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return {"t": ts, "v": vs}
+
+
 async def fetch_ratio_series(symbol: str, period: str = "5m", limit: int = 48) -> dict[str, list[float]]:
     """Fetch all four L/S series concurrently. Keys map onto the data contract:
     ``glob`` (retail crowd), ``acc`` (top-trader accounts), ``pos`` (whale
