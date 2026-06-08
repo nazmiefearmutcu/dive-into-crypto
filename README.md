@@ -1,5 +1,11 @@
 # Dive Into Crypto
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Last commit](https://img.shields.io/github/last-commit/nazmiefearmutcu/dive-into-crypto)](https://github.com/nazmiefearmutcu/dive-into-crypto/commits)
+[![Stars](https://img.shields.io/github/stars/nazmiefearmutcu/dive-into-crypto?style=social)](https://github.com/nazmiefearmutcu/dive-into-crypto/stargazers)
+![Kotlin](https://img.shields.io/badge/Kotlin-7F52FF?logo=kotlin&logoColor=white)
+![Jetpack Compose](https://img.shields.io/badge/Jetpack%20Compose-4285F4?logo=jetpackcompose&logoColor=white)
+
 **Dive Into Crypto is a financial scanner** that watches the entire Binance USDT‑M perpetual‑futures market and tells you, per symbol, whether the evidence leans long, short, or neutral. It runs **15 technical indicators across 12 timeframes**, cross‑checks the result against **whale (top‑trader) positioning**, and collapses everything into a single confidence‑scored consensus verdict. It is a native Android app, it runs entirely **on your device**, and it reads only **public** Binance market data — no account, no API keys, no sign‑up.
 
 > ⚠️ Dive Into Crypto is an analysis and research tool, **not financial advice** and **not an automated trader**. It places no orders. Markets are risky; you are responsible for your own decisions.
