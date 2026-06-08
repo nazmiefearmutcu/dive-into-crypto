@@ -3,8 +3,13 @@ name = "diveintocrypto-desktop"
 version = "0.1.0"
 description = "Dive Into Crypto — Desktop Edition backend (Crypcodile-fed scanner service)"
 requires-python = ">=3.12"
+# crypcodile is pinned to an exact upstream commit via a PEP 508 direct reference
+# (git URL). This resolves the same for uv AND pip — it never falls through to the
+# public PyPI index, closing the dependency-confusion vector for the unregistered
+# `crypcodile` name. Bump the @<sha> to upgrade. For active Crypcodile co-development,
+# temporarily override with a local editable source via `[tool.uv.sources]`.
 dependencies = [
-  "crypcodile",
+  "crypcodile @ git+https://github.com/nazmiefearmutcu/Crypcodile.git@83b8cbab72916261b98b9b8308b8533071584a22",
   "pandas>=2.1",
   "numpy>=1.24",
   "pyyaml>=6.0",
@@ -17,9 +22,6 @@ dependencies = [
 [project.scripts]
 dive-desktop = "diveintocrypto_desktop.__main__:main"
 
-[tool.uv.sources]
-crypcodile = { path = "../../../Crypcodile", editable = true }
-
 [dependency-groups]
 dev = ["pytest>=7.4", "pytest-asyncio>=0.23", "httpx>=0.27"]
 
@@ -29,6 +31,10 @@ markers = ["live: tests that hit the live Binance API (network-gated)"]
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+# Permit the pinned git direct reference for `crypcodile` (see dependencies note).
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/diveintocrypto_desktop"]

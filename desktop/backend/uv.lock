@@ -214,7 +214,7 @@ wheels = [
 [[package]]
 name = "crypcodile"
 version = "0.0.1"
-source = { editable = "../../../Crypcodile" }
+source = { git = "https://github.com/nazmiefearmutcu/Crypcodile.git?rev=83b8cbab72916261b98b9b8308b8533071584a22#83b8cbab72916261b98b9b8308b8533071584a22" }
 dependencies = [
     { name = "aiohttp" },
     { name = "duckdb" },
@@ -225,29 +225,6 @@ dependencies = [
     { name = "rich" },
     { name = "typer" },
     { name = "websockets" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "aiohttp", specifier = ">=3.9" },
-    { name = "duckdb", specifier = ">=1.0" },
-    { name = "mmh3", specifier = ">=5.2.1" },
-    { name = "msgspec", specifier = ">=0.18" },
-    { name = "polars", specifier = ">=1.0" },
-    { name = "pyarrow", specifier = ">=16" },
-    { name = "rich", specifier = ">=13" },
-    { name = "typer", specifier = ">=0.12" },
-    { name = "websockets", specifier = ">=12" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "mypy", specifier = ">=1.11" },
-    { name = "pytest", specifier = ">=8" },
-    { name = "pytest-asyncio", specifier = ">=0.23" },
-    { name = "pytest-cov", specifier = ">=5" },
-    { name = "pytest-timeout", specifier = ">=2" },
-    { name = "ruff", specifier = ">=0.6" },
 ]
 
 [[package]]
@@ -276,7 +253,7 @@ dev = [
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.9" },
     { name = "aiolimiter", specifier = ">=1.1" },
-    { name = "crypcodile", editable = "../../../Crypcodile" },
+    { name = "crypcodile", git = "https://github.com/nazmiefearmutcu/Crypcodile.git?rev=83b8cbab72916261b98b9b8308b8533071584a22" },
     { name = "fastapi", specifier = ">=0.110" },
     { name = "numpy", specifier = ">=1.24" },
     { name = "pandas", specifier = ">=2.1" },
