@@ -76,7 +76,7 @@ class DeribitSymbolsTest {
         assertEquals("ETH", p.underlying)
         assertEquals(3000.0, p.strike)
         assertEquals(OptType.PUT, p.optType)
-        assertEquals(1781222400L * 1_000_000_000L, p.expiryNs) // 2026-06-08 00:00 UTC
+        assertEquals(1780876800L * 1_000_000_000L, p.expiryNs) // 2026-06-08 00:00 UTC
     }
 
     @Test fun returnsNullForNonOption() {
