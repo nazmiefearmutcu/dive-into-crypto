@@ -98,8 +98,10 @@ async def scan(size: int = 10, universe_limit: int = 30) -> dict:
     rows = [r for r in rows if r is not None]
     rows.sort(key=lambda r: r["netNss"], reverse=True)
 
-    # Divergence only for the top candidates (rate-limit bound).
-    candidates = rows[:DIVERGENCE_CANDIDATES]
+    # Divergence only for the top candidates. Each candidate makes 3 rate-limited
+    # futures/data calls; cap at 13 (13*3=39 ≤ the 40/60s budget) so a live scan
+    # stays responsive instead of stalling on the limiter.
+    candidates = rows[: min(DIVERGENCE_CANDIDATES, 13)]
     div_sem = asyncio.Semaphore(4)
     await asyncio.gather(*(_attach_divergence(r, div_sem) for r in candidates))
 

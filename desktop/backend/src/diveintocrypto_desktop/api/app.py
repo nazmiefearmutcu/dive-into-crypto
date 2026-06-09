@@ -22,7 +22,7 @@ from diveintocrypto_desktop.data.http import close_session
 from diveintocrypto_desktop.scan import scanner
 from diveintocrypto_desktop.scan import symbol_builder as sb
 
-_UI_DIST = Path(__file__).resolve().parents[3] / "ui" / "dist"
+_UI_DIST = Path(__file__).resolve().parents[4] / "ui" / "dist"
 
 # Real request log (most-recent-first) for the Network Log screen.
 _LOG: deque[dict] = deque(maxlen=200)
