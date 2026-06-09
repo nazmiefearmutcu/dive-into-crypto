@@ -15,7 +15,7 @@ object VolSurface {
     )
 
     fun ivSurface(chain: List<OptionsChain>, atNs: Long, rate: Double = 0.0): List<SurfacePoint> {
-        val visible = if (atNs <= 0L) chain else chain.filter { it.localTs <= atNs }
+        val visible = chain.filter { it.localTs <= atNs }
         if (visible.isEmpty()) return emptyList()
         val latest = visible
             .groupBy { Triple(it.strike, it.expiry, it.optType) }
@@ -51,8 +51,7 @@ object VolSurface {
     fun volSkew(chain: List<OptionsChain>, expiryNs: Long, atNs: Long, rate: Double = 0.0): List<SkewPoint> {
         val surface = ivSurface(chain, atNs, rate).filter { it.expiry == expiryNs }
         if (surface.isEmpty()) return emptyList()
-        val up = (if (atNs <= 0L) chain else chain.filter { it.localTs <= atNs })
-            .filter { it.expiry == expiryNs }
+        val up = chain.filter { it.localTs <= atNs && it.expiry == expiryNs }
             .maxByOrNull { it.localTs }?.underlyingPrice
         val t = (expiryNs - atNs) / NS_PER_YEAR
         return surface.sortedBy { it.strike }.map { s ->
@@ -86,8 +85,7 @@ object VolSurface {
     fun termStructure(chain: List<OptionsChain>, atNs: Long, rate: Double = 0.0): List<TermPoint> {
         val surface = ivSurface(chain, atNs, rate)
         if (surface.isEmpty()) return emptyList()
-        val up = (if (atNs <= 0L) chain else chain.filter { it.localTs <= atNs })
-            .maxByOrNull { it.localTs }?.underlyingPrice
+        val up = chain.filter { it.localTs <= atNs }.maxByOrNull { it.localTs }?.underlyingPrice
         val expiries = surface.map { it.expiry }.distinct().sorted()
         return expiries.mapNotNull { exp ->
             val rows = surface.filter { it.expiry == exp }

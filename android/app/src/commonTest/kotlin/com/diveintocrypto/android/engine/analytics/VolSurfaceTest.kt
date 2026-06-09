@@ -42,7 +42,7 @@ class VolSurfaceTest {
             opt(100.0, E1, OptType.CALL, ts = 10, markIv = 0.60),
             opt(110.0, E1, OptType.CALL, ts = 10, markIv = 0.65),
         )
-        val skew = VolSurface.volSkew(chain, expiryNs = E1, atNs = 0L)
+        val skew = VolSurface.volSkew(chain, expiryNs = E1, atNs = 100L)
         assertEquals(3, skew.size)
         assertTrue(skew.all { it.delta != null })
         val (rr, bf) = VolSurface.riskReversalButterfly(skew, targetDelta = 0.25)
@@ -56,7 +56,7 @@ class VolSurfaceTest {
             opt(105.0, E1, OptType.CALL, ts = 10, markIv = 0.62),
             opt(100.0, E2, OptType.CALL, ts = 10, markIv = 0.55),
         )
-        val ts = VolSurface.termStructure(chain, atNs = 0)
+        val ts = VolSurface.termStructure(chain, atNs = 100)
         assertEquals(listOf(E1, E2), ts.map { it.expiry })
         assertEquals(100.0, ts[0].atmStrike, 1e-12)
         assertEquals(0.60, ts[0].atmIv!!, 1e-12)
