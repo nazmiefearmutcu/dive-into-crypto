@@ -85,19 +85,15 @@ const CHART_SWATCHES = [
 ];
 
 function GorunumScreen({ ctx }) {
-  const families = ["NOVA", "LEDGER", "TERMINAL"];
-  const famLabel = { NOVA: "Nova · Fütüristik", LEDGER: "Ledger · Klasik", TERMINAL: "Terminal · Gece" };
   const cur = SGS_PRESET_MAP[ctx.presetId];
-  const [fam, setFam] = React.useState(cur.family);
+  const fam = "TERMINAL";  // terminal-only edition
   const t = ctx.t, set = ctx.setAxis;
 
   return (
     <div className="sgs-screen">
       <ScreenTitle title="Görünüm" sub="Uygulamayı tamamen kendine göre ayarla" />
 
-      {/* family tabs */}
-      <Seg full options={families.map((f) => ({ v: f, l: f === "NOVA" ? "Nova" : f === "LEDGER" ? "Ledger" : "Terminal" }))} value={fam} onChange={setFam} />
-      <div style={{ color: "var(--dim)", fontSize: "calc(10.5px * var(--fs))", margin: "6px 2px var(--gap)" }}>{famLabel[fam]}</div>
+      <div style={{ color: "var(--dim)", fontSize: "calc(10.5px * var(--fs))", margin: "2px 2px var(--gap)" }}>Terminal temaları · monospace · CRT estetiği</div>
 
       {/* preset cards for the family */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: "var(--gap)", marginBottom: "var(--gap)" }}>
@@ -188,12 +184,12 @@ function AyarlarScreen({ ctx }) {
 
   return (
     <div className="sgs-screen">
-      <ScreenTitle title="Ayarlar" sub="Such A Good Scanner" />
+      <ScreenTitle title="Ayarlar" sub="Dive Into Crypto · Desktop" />
 
       <div className="sgs-about-hero">
         <SGSLogo size={30} glow />
         <div style={{ marginTop: 10 }}>
-          <div style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: "calc(17px * var(--fs))", color: "var(--text)" }}>Such A Good Scanner</div>
+          <div style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: "calc(17px * var(--fs))", color: "var(--text)" }}>Dive Into Crypto</div>
           <div style={{ color: "var(--muted)", fontSize: "calc(11px * var(--fs))", marginTop: 2 }}>Binance USDT-M Futures · konsensüs tarayıcı</div>
         </div>
       </div>
@@ -240,7 +236,7 @@ function AyarlarScreen({ ctx }) {
       </Card>
 
       <Card title="HAKKINDA" pad={false}>
-        {[["Uygulama", "SGS · iOS & Android"], ["Versiyon", "2.0.0 (210)"], ["Veri kaynağı", "Binance USDT-M Futures"], ["İndikatör", "15 · konsensüs motoru"], ["Zaman dilimi", "12"], ["Tema", "9 hazır + tam özelleştirme"]].map((r, i) => (
+        {[["Uygulama", "Dive Into Crypto · Desktop"], ["Versiyon", "0.1.0"], ["Veri kaynağı", "Binance USDT-M · Crypcodile"], ["İndikatör", "15 · konsensüs motoru"], ["Zaman dilimi", "12"], ["Tema", "3 terminal teması"]].map((r, i) => (
           <div key={r[0]} className="sgs-about-row" style={{ borderTop: i ? "1px solid var(--border)" : "none" }}>
             <span style={{ color: "var(--muted)", fontSize: "calc(12px * var(--fs))" }}>{r[0]}</span>
             <span style={{ fontFamily: "var(--font-mono)", color: "var(--text)", fontSize: "calc(12px * var(--fs))", fontWeight: 600 }}>{r[1]}</span>

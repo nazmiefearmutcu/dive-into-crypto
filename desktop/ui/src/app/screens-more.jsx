@@ -79,7 +79,7 @@ function LiderScreen({ ctx }) {
               <div style={{ fontFamily: "var(--font-mono)", fontWeight: 800, fontSize: "calc(13px * var(--fs))", color: "var(--text)" }}>{d.s.replace("USDT", "")}</div>
               <div style={{ color: "var(--muted)", fontSize: "calc(10.5px * var(--fs))" }}>{d.name}</div>
             </div>
-            <div style={{ width: 60, flexShrink: 0 }}><Sparkline values={d.candles.slice(-24).map((c) => c.c)} color={d.ch >= 0 ? "var(--up)" : "var(--down)"} height={28} /></div>
+            <div style={{ width: 60, flexShrink: 0 }}>{d.candles && d.candles.length > 1 ? <Sparkline values={d.candles.slice(-24).map((c) => c.c)} color={d.ch >= 0 ? "var(--up)" : "var(--down)"} height={28} /> : null}</div>
             <div style={{ textAlign: "right", flexShrink: 0, minWidth: 70 }}>
               <div style={{ fontFamily: "var(--font-mono)", fontWeight: 700, fontSize: "calc(12px * var(--fs))", color: "var(--text)" }}>${sgsFmtPrice(d.price)}</div>
               <div style={{
@@ -114,9 +114,9 @@ function LogsScreen() {
       </Card>
       <Card title="OTURUM">
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: "var(--pad)" }}>
-          <Stat label="İSTEK" value="1.284" dotColor="var(--accent)" />
-          <Stat label="HATA" value="3" valueColor="var(--down)" dotColor="var(--down)" />
-          <Stat label="AĞIRLIK" value="480/2400" dotColor="var(--warn)" />
+          <Stat label="İSTEK" value={String(SGS_LOGS.length)} dotColor="var(--accent)" />
+          <Stat label="HATA" value={String(SGS_LOGS.filter((l) => l.s >= 400).length)} valueColor="var(--down)" dotColor="var(--down)" />
+          <Stat label="SON GECİKME" value={(SGS_LOGS[0] ? SGS_LOGS[0].ms : 0) + "ms"} dotColor="var(--warn)" />
         </div>
       </Card>
     </div>

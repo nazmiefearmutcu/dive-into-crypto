@@ -38,7 +38,7 @@ function SGSLogo({ size = 26, showWord = true, accent = "var(--accent)", accent2
           fontSize: size * 0.84, letterSpacing: size * 0.04, color: "var(--text)",
           lineHeight: 1, display: "inline-flex", alignItems: "baseline",
         }}>
-          SGS
+          DIC
         </span>
       )}
     </div>
