@@ -33,7 +33,7 @@ keystore.properties
 *.jks
 
 # ── Desktop edition ──
-desktop/ui/dist/
+# NOTE: desktop/ui/dist/ IS committed (prebuilt bundle) so the app runs with no Node.
 desktop/ui/node_modules/
 desktop/backend/.venv/
 desktop/backend/**/__pycache__/
