@@ -10,9 +10,15 @@ import com.diveintocrypto.android.data.binance.Ticker24h
 import com.diveintocrypto.android.domain.model.Candle
 import com.diveintocrypto.android.engine.exchanges.binance.BinanceConnector
 import com.diveintocrypto.android.engine.exchanges.binance.toOhlcv
+import com.diveintocrypto.android.engine.exchanges.deribit.DeribitConnector
+import com.diveintocrypto.android.engine.schema.Channel
+import com.diveintocrypto.android.engine.schema.DerivativeTicker
 import com.diveintocrypto.android.engine.schema.OHLCV
+import com.diveintocrypto.android.engine.schema.OptionsChain
+import com.diveintocrypto.android.engine.schema.Record
 import com.diveintocrypto.android.platform.nowMillis
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.map
 
 /**
@@ -26,6 +32,7 @@ import kotlinx.coroutines.flow.map
 class MarketDataEngine(
     private val binance: BinanceConnector,
     private val settingsStore: SettingsStore,
+    val deribit: DeribitConnector = DeribitConnector(),
 ) {
     suspend fun history(symbol: String, interval: String, limit: Int = 300): List<Candle> =
         binance.spotClient().klines(symbol = symbol, interval = interval, limit = limit)
@@ -63,4 +70,17 @@ class MarketDataEngine(
         return binance.wsClient().klineStream(symbol = symbol, interval = interval, customBaseUrl = wsUrl)
             .map { it.candle.toOhlcv(symbol, interval, nowMillis()) }
     }
+
+    // ── Deribit deep-data surface ──
+    /** Raw canonical Deribit record stream for the given channels/symbols. */
+    fun deribitRecords(channels: Set<Channel>, symbols: Set<String>): Flow<Record> =
+        deribit.stream(channels, symbols)
+
+    /** Live option-chain ticks (OptionsChain) for the given option instrument symbols. */
+    fun optionChainStream(symbols: Set<String>): Flow<OptionsChain> =
+        deribit.stream(setOf(Channel.OPTIONS_CHAIN), symbols).filterIsInstance<OptionsChain>()
+
+    /** Live derivative tickers (perp/future) for the given symbols. */
+    fun derivativeTickerStream(symbols: Set<String>): Flow<DerivativeTicker> =
+        deribit.stream(setOf(Channel.DERIVATIVE_TICKER), symbols).filterIsInstance<DerivativeTicker>()
 }
