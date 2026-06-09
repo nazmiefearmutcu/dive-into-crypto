@@ -1,0 +1,238 @@
+/* Extracted from the SGS prototype <style> (themed .sgs-* rules). Desktop shell appended below. */
+
+* { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; }
+  body {
+    background: #0a0b10;
+    background-image: radial-gradient(120% 80% at 50% -10%, #15171f, #08090d 60%);
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+    color: #e7e9f0; overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+  #root { height: 100%; }
+
+  /* ───── studio chrome (NOT themed — neutral backdrop) ───── */
+  .studio { height: 100%; display: flex; flex-direction: column; }
+  .studio-head {
+    display: flex; align-items: center; gap: 16px; padding: 14px 22px;
+    border-bottom: 1px solid rgba(255,255,255,0.07); flex-shrink: 0; flex-wrap: wrap;
+  }
+  .studio-brand { display: flex; align-items: center; gap: 10px; }
+  .studio-brand .nm { font-weight: 700; font-size: 15px; letter-spacing: 0.3px; color: #fff; }
+  .studio-brand .sub { font-size: 11px; color: #7b8092; font-family: 'Space Mono', monospace; }
+  .preset-rail { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
+  .preset-fam { display: flex; flex-direction: column; gap: 4px; }
+  .preset-fam .fam-name { font-size: 9px; letter-spacing: 1.4px; color: #6b7080; font-family: 'Space Mono', monospace; text-transform: uppercase; padding-left: 2px; }
+  .preset-fam .fam-btns { display: flex; gap: 5px; }
+  .preset-btn {
+    display: flex; align-items: center; gap: 6px; cursor: pointer;
+    border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.03);
+    color: #aeb3c2; border-radius: 8px; padding: 5px 9px; font-size: 11px; font-weight: 600;
+    font-family: 'Space Grotesk', sans-serif; transition: all .15s;
+  }
+  .preset-btn:hover { background: rgba(255,255,255,0.07); }
+  .preset-btn[data-active="true"] { border-color: var(--pb-accent); color: #fff; background: color-mix(in srgb, var(--pb-accent) 18%, transparent); }
+  .preset-btn .sw { width: 12px; height: 12px; border-radius: 4px; flex-shrink: 0; }
+
+  .stage { flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; position: relative; }
+  .devices { display: flex; gap: 44px; align-items: flex-start; transform-origin: top center; }
+  .device-col { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+  .device-label { font-family: 'Space Mono', monospace; font-size: 11px; color: #7b8092; letter-spacing: 0.5px; display: flex; align-items: center; gap: 7px; }
+  .device-label b { color: #cfd3df; font-weight: 700; }
+  .hint { position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%); font-family: 'Space Mono', monospace; font-size: 11px; color: #5a5f70; text-align: center; }
+  .hint b { color: #8b90a2; }
+
+  /* ════════════ THEMED APP (inside each device) ════════════ */
+  .sgs-app {
+    height: 100%; position: relative; display: flex; flex-direction: column;
+    background: var(--bg); color: var(--text); font-family: var(--font);
+    overflow: hidden; isolation: isolate;
+  }
+  .sgs-app-bg { position: absolute; inset: 0; z-index: 0; background: var(--mesh), var(--bg); background-color: var(--bg); }
+  .sgs-scanlines {
+    position: absolute; inset: 0; z-index: 1; pointer-events: none; opacity: 0.5;
+    background: repeating-linear-gradient(0deg, rgba(0,0,0,0) 0px, rgba(0,0,0,0) 2px, rgba(0,0,0,0.22) 3px, rgba(0,0,0,0) 4px);
+  }
+  .sgs-app[data-mode="light"] .sgs-scanlines { display: none; }
+
+  .sgs-topbar {
+    position: relative; z-index: 6; display: flex; align-items: center; gap: 10px;
+    padding-left: 16px; padding-right: 12px; padding-bottom: 11px;
+    background: color-mix(in srgb, var(--elev) 80%, transparent);
+    backdrop-filter: var(--card-blur); -webkit-backdrop-filter: var(--card-blur);
+    border-bottom: 1px solid var(--border); flex-shrink: 0;
+  }
+  .sgs-topbar-sep { width: 1px; height: 18px; background: var(--border); }
+  .sgs-topbar-title { font-family: var(--font-mono); font-weight: 700; font-size: calc(12px * var(--fs)); letter-spacing: 1.4px; color: var(--muted); text-transform: uppercase; }
+  .sgs-icon-btn {
+    width: 34px; height: 34px; display: flex; align-items: center; justify-content: center;
+    border: 1px solid var(--border); background: var(--elev2); color: var(--muted);
+    border-radius: var(--radius-sm); cursor: pointer; flex-shrink: 0;
+  }
+  .sgs-icon-btn:active { background: var(--accent-soft); color: var(--accent); }
+
+  .sgs-main { flex: 1; overflow-y: auto; overflow-x: hidden; position: relative; z-index: 2; -webkit-overflow-scrolling: touch; }
+  .sgs-main::-webkit-scrollbar { width: 0; }
+  .sgs-screen { display: flex; flex-direction: column; gap: var(--gap); padding: var(--pad); }
+
+  .sgs-card {
+    background: var(--elev); border: 1px solid var(--border); border-radius: var(--radius);
+    box-shadow: var(--shadow); overflow: hidden; position: relative;
+  }
+  .sgs-glass { backdrop-filter: var(--card-blur); -webkit-backdrop-filter: var(--card-blur); }
+  .sgs-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: calc(var(--pad) * 0.85) var(--pad) 0; }
+  .sgs-card-title { font-family: var(--font-mono); font-weight: 700; font-size: calc(10.5px * var(--fs)); letter-spacing: 1.2px; color: var(--muted); text-transform: uppercase; }
+  .sgs-label { font-family: var(--font-mono); font-weight: 700; font-size: calc(9.5px * var(--fs)); letter-spacing: 1px; color: var(--dim); text-transform: uppercase; }
+
+  .sgs-hero {
+    background: var(--elev); border: 1px solid var(--border); border-radius: var(--radius);
+    box-shadow: var(--shadow); padding: var(--pad);
+    backdrop-filter: var(--card-blur); -webkit-backdrop-filter: var(--card-blur);
+  }
+
+  .sgs-hscroll { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; }
+  .sgs-hscroll::-webkit-scrollbar { height: 0; }
+  .sgs-chip {
+    flex-shrink: 0; cursor: pointer; border: 1px solid var(--border); border-radius: 99px;
+    padding: 5px 12px; font-family: var(--font-mono); font-size: calc(11px * var(--fs));
+    white-space: nowrap; transition: all .12s;
+  }
+  .sgs-seg { background: var(--elev2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 2px; gap: 2px; }
+  .sgs-seg-btn {
+    border: none; border-radius: calc(var(--radius-sm) - 1px); cursor: pointer; padding: 4px 9px;
+    font-family: var(--font-mono); font-size: calc(10.5px * var(--fs)); white-space: nowrap; transition: all .12s;
+  }
+
+  .sgs-table-head { display: flex; align-items: center; gap: 6px; padding: 9px var(--pad); background: var(--elev2); font-family: var(--font-mono); font-size: calc(9px * var(--fs)); letter-spacing: 0.8px; color: var(--dim); text-transform: uppercase; }
+  .sgs-table-row { display: flex; align-items: center; gap: 6px; padding: 9px var(--pad); }
+  .sgs-log-row { display: flex; align-items: center; gap: 9px; padding: 7px var(--pad); }
+
+  .sgs-result {
+    display: flex; align-items: center; gap: 10px; width: 100%; cursor: pointer; text-align: left;
+    background: var(--elev); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: calc(var(--pad) * 0.8) var(--pad); color: inherit; transition: all .12s;
+    backdrop-filter: var(--card-blur); -webkit-backdrop-filter: var(--card-blur);
+  }
+  .sgs-result:active { border-color: var(--accent); background: var(--elev2); }
+
+  .sgs-scan-hero {
+    background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 14%, var(--elev)), var(--elev));
+    border: 1px solid var(--border-strong); border-radius: var(--radius); padding: var(--pad);
+    box-shadow: var(--shadow);
+  }
+  .sgs-primary-btn {
+    display: flex; align-items: center; gap: 6px; cursor: pointer;
+    background: var(--accent); color: var(--chip-fg); border: none; border-radius: var(--radius-sm);
+    padding: 8px 16px; font-family: var(--font-mono); font-weight: 700; font-size: calc(12px * var(--fs));
+    letter-spacing: 0.5px; box-shadow: 0 0 calc(20px * var(--glow)) var(--accent-glow);
+  }
+  .sgs-primary-btn:disabled { opacity: 0.7; }
+
+  .sgs-bottomnav {
+    position: relative; z-index: 6; display: flex; justify-content: space-around; align-items: center;
+    padding-top: 8px; background: color-mix(in srgb, var(--elev) 88%, transparent);
+    backdrop-filter: var(--card-blur); -webkit-backdrop-filter: var(--card-blur);
+    border-top: 1px solid var(--border); flex-shrink: 0;
+  }
+  .sgs-navcell { display: flex; flex-direction: column; align-items: center; gap: 3px; background: none; border: none; cursor: pointer; padding: 4px 6px; flex: 1; }
+  .sgs-navcell-icon { display: flex; align-items: center; justify-content: center; padding: 3px 14px; border-radius: 99px; transition: all .15s; }
+
+  .sgs-sheet-scrim { position: absolute; inset: 0; z-index: 30; background: rgba(0,0,0,0.5); display: flex; align-items: flex-end; }
+  .sgs-sheet { width: 100%; background: var(--elev); border-top-left-radius: var(--radius-lg); border-top-right-radius: var(--radius-lg); border-top: 1px solid var(--border-strong); padding: 10px var(--pad) 18px; }
+  .sgs-sheet-grab { width: 36px; height: 4px; border-radius: 2px; background: var(--border-strong); margin: 0 auto 12px; }
+  .sgs-sheet-item { display: flex; align-items: center; gap: 10px; cursor: pointer; background: var(--elev2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 13px var(--pad); }
+
+  /* studio (in-app) controls */
+  .sgs-preset-card { cursor: pointer; background: var(--elev2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 7px; text-align: left; }
+  .sgs-range { -webkit-appearance: none; appearance: none; flex: 1; height: 4px; border-radius: 4px; background: var(--elev2); outline: none; }
+  .sgs-range::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: 99px; background: var(--accent); cursor: pointer; border: 2px solid var(--bg); }
+  .sgs-range::-moz-range-thumb { width: 16px; height: 16px; border-radius: 99px; background: var(--accent); cursor: pointer; border: 2px solid var(--bg); }
+  .sgs-ghost-btn { display: flex; align-items: center; justify-content: center; gap: 7px; width: 100%; cursor: pointer; background: var(--elev2); border: 1px solid var(--border); color: var(--muted); border-radius: var(--radius); padding: 12px; font-family: var(--font-mono); font-size: calc(12px * var(--fs)); font-weight: 600; }
+  .sgs-nav-link { display: flex; align-items: center; gap: 11px; width: 100%; cursor: pointer; background: var(--elev); border: 1px solid var(--border); border-radius: var(--radius); padding: 13px var(--pad); box-shadow: var(--shadow); }
+  .sgs-about-hero { background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 12%, var(--elev)), var(--elev)); border: 1px solid var(--border-strong); border-radius: var(--radius); padding: var(--pad); box-shadow: var(--shadow); }
+  .sgs-about-row { display: flex; align-items: center; justify-content: space-between; padding: 11px var(--pad); }
+  .sgs-input { display: flex; align-items: center; gap: 8px; background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 9px var(--pad); }
+  .sgs-input input { flex: 1; background: none; border: none; outline: none; color: var(--text); font-family: var(--font-mono); font-size: calc(12.5px * var(--fs)); }
+  .sgs-input input::placeholder { color: var(--dim); }
+  .sgs-match { display: flex; align-items: center; justify-content: space-between; width: 100%; cursor: pointer; background: none; border: none; border-top: 1px solid var(--border); padding: 10px var(--pad); margin-top: 4px; }
+  .sgs-fav-chip { display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0; background: var(--elev2); border: 1px solid var(--border); border-radius: 99px; padding: 4px 6px 4px 11px; font-family: var(--font-mono); font-size: calc(11px * var(--fs)); color: var(--text); }
+  .sgs-step { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; cursor: pointer; background: var(--elev2); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); }
+
+  .sgs-pulse { animation: sgsPulse 1.6s ease-in-out infinite; }
+  @keyframes sgsPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+  .sgs-app[style*="--motion: 0"] .sgs-pulse { animation: none; }
+
+/* ════════════════════════ DESKTOP SHELL ════════════════════════ */
+html, body, #root { height: 100%; }
+body { overflow: hidden; background: #04070a; }
+
+.dive-app {
+  position: relative; height: 100vh; width: 100vw; overflow: hidden;
+  display: grid; grid-template-columns: 232px 1fr;
+  background: var(--bg); color: var(--text); font-family: var(--font);
+  isolation: isolate;
+}
+
+/* sidebar */
+.dive-sidebar {
+  position: relative; z-index: 3; display: flex; flex-direction: column;
+  border-right: 1px solid var(--border);
+  background: color-mix(in srgb, var(--elev) 70%, transparent);
+  backdrop-filter: var(--card-blur); -webkit-backdrop-filter: var(--card-blur);
+  padding: 16px 12px; gap: 6px; overflow-y: auto;
+}
+.dive-brand { display: flex; align-items: center; gap: 10px; padding: 4px 8px 14px; }
+.dive-brand .nm { font-family: var(--font-display); font-weight: 800; font-size: calc(15px * var(--fs)); color: var(--text); letter-spacing: 0.2px; line-height: 1.1; }
+.dive-brand .sub { font-family: var(--font-mono); font-size: calc(9px * var(--fs)); color: var(--dim); letter-spacing: 0.6px; text-transform: uppercase; }
+.dive-nav-item {
+  display: flex; align-items: center; gap: 11px; width: 100%; cursor: pointer; text-align: left;
+  background: none; border: 1px solid transparent; border-radius: var(--radius-sm);
+  padding: 9px 11px; color: var(--muted); font-family: var(--font); font-size: calc(13px * var(--fs)); font-weight: 600;
+  transition: all .12s;
+}
+.dive-nav-item:hover { background: var(--elev2); color: var(--text); }
+.dive-nav-item[data-active="true"] { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent); }
+.dive-nav-item .ic { display: flex; flex-shrink: 0; }
+.dive-sidebar-foot { margin-top: auto; padding: 10px 8px 2px; border-top: 1px solid var(--border); }
+.dive-sidebar-foot .row { display: flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: calc(9.5px * var(--fs)); color: var(--dim); }
+
+/* main column */
+.dive-main-col { position: relative; z-index: 2; display: flex; flex-direction: column; min-width: 0; height: 100vh; }
+.dive-topbar {
+  display: flex; align-items: center; gap: 12px; padding: 12px 18px; flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--elev) 80%, transparent);
+  backdrop-filter: var(--card-blur); -webkit-backdrop-filter: var(--card-blur);
+}
+.dive-topbar .title { font-family: var(--font-mono); font-weight: 700; font-size: calc(13px * var(--fs)); letter-spacing: 1.2px; color: var(--muted); text-transform: uppercase; }
+.dive-search { display: flex; align-items: center; gap: 7px; background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 6px 11px; min-width: 180px; }
+.dive-search input { background: none; border: none; outline: none; color: var(--text); font-family: var(--font-mono); font-size: calc(12px * var(--fs)); width: 100%; }
+.dive-search input::placeholder { color: var(--dim); }
+.dive-theme-dots { display: flex; gap: 6px; }
+.dive-theme-dot { width: 22px; height: 22px; border-radius: 99px; cursor: pointer; border: 2px solid var(--border); padding: 0; }
+.dive-theme-dot[data-active="true"] { border-color: var(--text); box-shadow: 0 0 0 2px var(--bg); }
+
+.dive-content { flex: 1; overflow-y: auto; overflow-x: hidden; padding: var(--pad); position: relative; z-index: 2; }
+.dive-content::-webkit-scrollbar { width: 8px; }
+.dive-content::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 8px; }
+
+/* multi-column flow: turn the single-column screen into a responsive desktop grid */
+.dive-content .sgs-screen {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(370px, 1fr));
+  gap: var(--gap); align-items: start; max-width: 1480px; margin: 0 auto; padding: 4px;
+}
+.dive-content .sgs-screen > div:first-child,   /* ScreenTitle */
+.dive-content .sgs-screen > .sgs-hscroll,
+.dive-content .sgs-screen > .sgs-scan-hero,
+.dive-content .sgs-screen > .sgs-about-hero,
+.dive-content .sgs-screen > .sgs-ghost-btn { grid-column: 1 / -1; }
+/* ranked tables read best as a single comfortable column */
+.dive-content[data-route="tarama"] .sgs-screen,
+.dive-content[data-route="logs"] .sgs-screen { display: flex; flex-direction: column; max-width: 920px; }
+
+/* states */
+.dive-state { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; height: 100%; color: var(--muted); font-family: var(--font-mono); font-size: calc(13px * var(--fs)); text-align: center; padding: 24px; }
+.dive-spinner { width: 26px; height: 26px; border: 3px solid var(--elev2); border-top-color: var(--accent); border-radius: 99px; animation: dive-spin 0.8s linear infinite; }
+@keyframes dive-spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 720px) { .dive-app { grid-template-columns: 64px 1fr; } .dive-brand .nm, .dive-brand .sub, .dive-nav-item span:not(.ic), .dive-sidebar-foot { display: none; } }

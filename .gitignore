@@ -13,8 +13,8 @@ captures/
 **/*.hprof
 
 # Generated
-app/release/
-app/debug/
+**/app/release/
+**/app/debug/
 
 # OS
 .DS_Store
@@ -31,3 +31,11 @@ Thumbs.db
 *.swo
 keystore.properties
 *.jks
+
+# ── Desktop edition ──
+# NOTE: desktop/ui/dist/ IS committed (prebuilt bundle) so the app runs with no Node.
+desktop/ui/node_modules/
+desktop/backend/.venv/
+desktop/backend/**/__pycache__/
+desktop/**/*.pyc
+desktop/backend/data/

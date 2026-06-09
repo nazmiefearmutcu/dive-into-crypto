@@ -1,0 +1,150 @@
+{
+  "rsi": {
+    "signal": "NEUTRAL",
+    "score": 0,
+    "reason": "RSI=51.2 neutral zone",
+    "raw_values": {
+      "rsi": 51.19
+    }
+  },
+  "macd": {
+    "signal": "BUY",
+    "score": 1,
+    "reason": "MACD bullish crossover",
+    "raw_values": {
+      "macd": 11.7664,
+      "signal": 0.49,
+      "histogram": 11.2764
+    }
+  },
+  "bollinger": {
+    "signal": "NEUTRAL",
+    "score": 0,
+    "reason": "Bollinger squeeze detected - awaiting breakout (pos=0.58)",
+    "raw_values": {
+      "upper": 78281.58,
+      "lower": 76890.13,
+      "sma": 77585.85,
+      "band_width": 0.0179,
+      "position": 0.5806
+    }
+  },
+  "ema_cross": {
+    "signal": "BUY",
+    "score": 1,
+    "reason": "EMA bullish crossover",
+    "raw_values": {
+      "ema_short": 77514.08,
+      "ema_long": 77504.34,
+      "divergence_pct": 0.0001,
+      "short_slope": 0.000594
+    }
+  },
+  "stochastic": {
+    "signal": "NEUTRAL",
+    "score": 0,
+    "reason": "Stochastic neutral K=66.1 D=58.9",
+    "raw_values": {
+      "k": 66.1,
+      "d": 58.94
+    }
+  },
+  "adx_di": {
+    "signal": "BUY",
+    "score": 1,
+    "reason": "ADX=20.0 bullish trend (+DI>-DI)",
+    "raw_values": {
+      "adx": 19.96,
+      "plus_di": 20.19,
+      "minus_di": 18.92
+    }
+  },
+  "atr_filter": {
+    "signal": "NEUTRAL",
+    "score": 0,
+    "reason": "ATR=440.30 (0.57%) normal volatility",
+    "raw_values": {
+      "atr": 440.305,
+      "atr_pct": 0.5667,
+      "atr_ratio": 1.2496,
+      "volatility": "NORMAL"
+    }
+  },
+  "cci": {
+    "signal": "NEUTRAL",
+    "score": 0,
+    "reason": "CCI=26.9 neutral range",
+    "raw_values": {
+      "cci": 26.89
+    }
+  },
+  "ichimoku": {
+    "signal": "BUY",
+    "score": 1,
+    "reason": "Ichimoku: price above cloud (bullish), bullish cloud",
+    "raw_values": {
+      "tenkan": 77408.82,
+      "kijun": 77459.74,
+      "senkou_a": 77278.61,
+      "senkou_b": 76952.02,
+      "cloud_top": 77278.61,
+      "cloud_bottom": 76952.02
+    }
+  },
+  "mfi": {
+    "signal": "NEUTRAL",
+    "score": 0,
+    "reason": "MFI=47.3 neutral money flow",
+    "raw_values": {
+      "mfi": 47.26
+    }
+  },
+  "obv": {
+    "signal": "SELL",
+    "score": -1,
+    "reason": "OBV below SMA, volume supports downward move",
+    "raw_values": {
+      "obv": -3243.18,
+      "obv_sma": -3055.89,
+      "price_change_pct": 0.65,
+      "obv_trend": "DOWN"
+    }
+  },
+  "psar": {
+    "signal": "BUY",
+    "score": 1,
+    "reason": "PSAR confirms uptrend, SAR=76800.55",
+    "raw_values": {
+      "psar": 76800.548,
+      "trend": "UP",
+      "distance_pct": 1.1551
+    }
+  },
+  "roc": {
+    "signal": "NEUTRAL",
+    "score": 0,
+    "reason": "ROC=-0.29% weak/flat momentum",
+    "raw_values": {
+      "roc": -0.29,
+      "roc_prev": -0.25
+    }
+  },
+  "sma_cross": {
+    "signal": "SELL",
+    "score": -1,
+    "reason": "SMA bearish alignment, divergence=-0.000",
+    "raw_values": {
+      "sma_short": 77368.8,
+      "sma_long": 77391.71,
+      "divergence_pct": -0.0003
+    }
+  },
+  "williams_r": {
+    "signal": "NEUTRAL",
+    "score": 0,
+    "reason": "Williams %R=-33.9 neutral",
+    "raw_values": {
+      "williams_r": -33.9
+    }
+  }
+}
