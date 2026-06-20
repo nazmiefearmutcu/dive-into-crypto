@@ -36,6 +36,13 @@ keystore.properties
 # NOTE: desktop/ui/dist/ IS committed (prebuilt bundle) so the app runs with no Node.
 desktop/ui/node_modules/
 desktop/backend/.venv/
-desktop/backend/**/__pycache__/
-desktop/**/*.pyc
 desktop/backend/data/
+
+# Python cache files
+**/__pycache__/
+**/*.pyc
+*.pyc
+
+# Agents
+.agents/
+

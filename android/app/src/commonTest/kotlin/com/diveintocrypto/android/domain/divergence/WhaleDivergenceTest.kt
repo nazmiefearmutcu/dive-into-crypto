@@ -281,4 +281,26 @@ class WhaleDivergenceTest {
         val sBig = abs(WhaleDivergence.perTf(price, big, tfWeight = 95).score)
         assertTrue(sBig > sSmall + 5.0, "a heavy sell should score noticeably higher than a light sell ($sSmall vs $sBig)")
     }
+
+    @Test
+    fun testZlemaCorrectnessAndParity() {
+        val input = doubleArrayOf(10.0, 12.0, 15.0, 14.0, 16.0, 18.0, 20.0, 19.0, 21.0, 23.0)
+        val expected = doubleArrayOf(
+            10.0,
+            11.333333333333334,
+            14.222222222222221,
+            14.814814814814815,
+            15.54320987654321,
+            17.695473251028807,
+            19.79698216735254,
+            19.864654778235025,
+            20.57643651882335,
+            22.717624345882236
+        )
+        val result = WhaleDivergence.zlema(input, 5)
+        assertEquals(expected.size, result.size)
+        for (i in expected.indices) {
+            assertEquals(expected[i], result[i], 1e-9)
+        }
+    }
 }

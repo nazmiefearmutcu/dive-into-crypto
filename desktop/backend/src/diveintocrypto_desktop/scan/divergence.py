@@ -82,19 +82,18 @@ def _sanitize(x: list[float], n: int) -> list[float] | None:
     return out
 
 
-def _sma_centered(x: list[float], w: int) -> list[float]:
+def _zlema(x: list[float], w: int) -> list[float]:
     if w <= 1:
         return list(x)
-    half = w // 2
+    if not x:
+        return []
+    lag = (w - 1) // 2
+    alpha = 2.0 / (w + 1.0)
     out = [0.0] * len(x)
-    for i in range(len(x)):
-        s = 0.0
-        cnt = 0
-        for k in range(i - half, i + half + 1):
-            if 0 <= k < len(x):
-                s += x[k]
-                cnt += 1
-        out[i] = s / cnt
+    out[0] = x[0]
+    for i in range(1, len(x)):
+        x_prime = 2.0 * x[i] - x[max(0, i - lag)]
+        out[i] = alpha * x_prime + (1.0 - alpha) * out[i - 1]
     return out
 
 
@@ -106,8 +105,8 @@ def per_tf(price: list[float], whale_ls: list[float], tf_weight: int, params: Pa
     ls = _sanitize(whale_ls, n)
     if p is None or ls is None:
         return NONE_TF
-    s_price = _sma_centered(p, params.smooth)
-    s_whale = _sma_centered(ls, params.smooth)
+    s_price = _zlema(p, params.smooth)
+    s_whale = _zlema(ls, params.smooth)
 
     w = min(n, params.trend_window)
     s = max(0, min(n - w, n - 1))
