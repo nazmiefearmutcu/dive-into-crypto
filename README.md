@@ -99,6 +99,34 @@ back‑filled by the next clean survivor. The 12 timeframes are
 
 ---
 
+## Algorithmic & Architectural Optimizations
+
+A comprehensive optimization and mathematical alignment sweep was performed on the codebase:
+
+1. **Zero-Lag EMA (ZLEMA) Integration**: Replaced centered moving averages (`smaCentered` / `_sma_centered`) with Sıfır Gecikmeli EMA (ZLEMA) on both platforms to eliminate boundary delay and look-ahead "repainting" biases in real-time calculations.
+2. **Bessel's Correction**: Updated sample variance/standard deviation calculations in the consensus engine to divide by $N-1$ instead of $N$.
+3. **$O(N + M)$ Data Alignment**: Replaced quadratic scans in the alignment logic of the Kotlin consensus engine and ViewModels with a linear-time Two-Pointer sweep algorithm.
+4. **GC Allocation Tuning**: Optimized Turkish/English keyword translation swaps in `ConsensusEngine.kt` to use a single-pass Regex map, replacing 84 consecutive immutable `String` allocations.
+5. **WebSocket & Caching**: Added Binance WS Kline subscription integration and 30-second TTL local caches to mitigate rate limits (HTTP 429/418).
+6. **Secure Signing Configuration**: Enabled fallback release configuration loading from Environment Variables (`STORE_PASSWORD`, etc.) to prevent plaintext credentials leakage.
+
+### Verifying Parity & Correctness
+
+A comprehensive E2E test suite has been introduced at the root of the repository.
+
+To run the full E2E test suite (95 tests covering ZLEMA math, alignment speed, memory optimizations, and parity):
+```bash
+# Set up dependencies for testing
+cd desktop/backend
+uv pip install pytest httpx pytest-asyncio websockets
+
+# Run E2E tests from the root directory
+cd ../..
+uv run pytest tests/
+```
+
+---
+
 ## Data sources
 
 Public Binance USDT‑M Futures endpoints only — no authentication.
