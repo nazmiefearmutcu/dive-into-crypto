@@ -58,7 +58,7 @@ object WhaleDivergence {
      */
     data class Params(
         val minBars: Int = 20,            // fewer candles than this → not meaningful → 0
-        val smooth: Int = 1,              // smaCentered damping off (preserves trend magnitude)
+        val smooth: Int = 1,              // ZLEMA damping off (preserves trend magnitude)
         val trendWindow: Int = 36,        // window (candles) over which price/whale trend is measured — sweep best
         val minPriceMove: Double = 0.008, // lower bound on meaningful |price Δ| (SENSITIVE — don't miss real divergence)
         val minWhaleMove: Double = 0.015, // lower bound on meaningful |whale L/S Δ|
@@ -131,8 +131,8 @@ object WhaleDivergence {
         // Sanitize: forward-fill NaN/Inf; if more than 20% is corrupt → 0.
         val p = sanitize(price, n) ?: return TfResult.NONE
         val ls = sanitize(whaleLS, n) ?: return TfResult.NONE
-        val sPrice = smaCentered(p, params.smooth)
-        val sWhale = smaCentered(ls, params.smooth)
+        val sPrice = zlema(p, params.smooth)
+        val sWhale = zlema(ls, params.smooth)
 
         // Net trend over the window (start → end).
         val w = minOf(n, params.trendWindow)
@@ -240,18 +240,18 @@ object WhaleDivergence {
         return out
     }
 
-    /** Centered SMA (window w, odd); clipped to the available neighbors at the edges. */
-    private fun smaCentered(x: DoubleArray, w: Int): DoubleArray {
+    /** Zero-Lag EMA (ZLEMA) */
+    internal fun zlema(x: DoubleArray, w: Int): DoubleArray {
         if (w <= 1) return x.copyOf()
-        val half = w / 2
+        val lag = (w - 1) / 2
+        val alpha = 2.0 / (w + 1.0)
         val out = DoubleArray(x.size)
+        if (x.isEmpty()) return out
+        out[0] = x[0]
         for (i in x.indices) {
-            var sum = 0.0
-            var cnt = 0
-            for (k in (i - half)..(i + half)) {
-                if (k in x.indices) { sum += x[k]; cnt++ }
-            }
-            out[i] = sum / cnt
+            if (i == 0) continue
+            val xPrime = 2.0 * x[i] - x[maxOf(0, i - lag)]
+            out[i] = alpha * xPrime + (1.0 - alpha) * out[i - 1]
         }
         return out
     }

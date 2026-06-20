@@ -121,3 +121,24 @@ def test_zero_period_and_empty_safe():
     times = [i * P for i in range(5)]
     price, _, matched = dv.align(times, [1.0] * 5, [], [], P)
     assert len(price) == 0 and matched == 0
+
+
+def test_zlema_correctness_and_parity():
+    input_vals = [10.0, 12.0, 15.0, 14.0, 16.0, 18.0, 20.0, 19.0, 21.0, 23.0]
+    expected = [
+        10.0,
+        11.333333333333334,
+        14.222222222222221,
+        14.814814814814815,
+        15.54320987654321,
+        17.695473251028807,
+        19.79698216735254,
+        19.864654778235025,
+        20.57643651882335,
+        22.717624345882236
+    ]
+    result = dv._zlema(input_vals, 5)
+    assert len(result) == len(expected)
+    for r, e in zip(result, expected):
+        assert abs(r - e) < 1e-9
+

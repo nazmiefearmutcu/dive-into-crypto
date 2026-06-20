@@ -56,20 +56,35 @@ android {
     namespace = "com.diveintocrypto.android"
     compileSdk = 35
 
-    // Release signing is driven by a local, git-ignored keystore.properties.
-    // Absent that file (e.g. a clean checkout by another developer), the release
-    // build is simply left unsigned instead of failing.
+    // Release signing is driven by environment variables first, then a local git-ignored keystore.properties.
+    // Absent either, the release build is simply left unsigned instead of failing.
+    val envStoreFile = System.getenv("STORE_FILE")
+    val envStorePassword = System.getenv("STORE_PASSWORD")
+    val envKeyAlias = System.getenv("KEY_ALIAS")
+    val envKeyPassword = System.getenv("KEY_PASSWORD")
+
     val keystorePropsFile = rootProject.file("keystore.properties")
     val keystoreProps = Properties().apply {
         if (keystorePropsFile.exists()) keystorePropsFile.inputStream().use { load(it) }
     }
+
+    val finalStoreFile = envStoreFile ?: keystoreProps.getProperty("storeFile")
+    val finalStorePassword = envStorePassword ?: keystoreProps.getProperty("storePassword")
+    val finalKeyAlias = envKeyAlias ?: keystoreProps.getProperty("keyAlias")
+    val finalKeyPassword = envKeyPassword ?: keystoreProps.getProperty("keyPassword")
+
+    val hasSigningConfig = !finalStoreFile.isNullOrBlank() &&
+            !finalStorePassword.isNullOrBlank() &&
+            !finalKeyAlias.isNullOrBlank() &&
+            !finalKeyPassword.isNullOrBlank()
+
     signingConfigs {
-        if (keystorePropsFile.exists()) {
+        if (hasSigningConfig) {
             create("release") {
-                storeFile = rootProject.file(keystoreProps.getProperty("storeFile"))
-                storePassword = keystoreProps.getProperty("storePassword")
-                keyAlias = keystoreProps.getProperty("keyAlias")
-                keyPassword = keystoreProps.getProperty("keyPassword")
+                storeFile = rootProject.file(finalStoreFile!!)
+                storePassword = finalStorePassword
+                keyAlias = finalKeyAlias
+                keyPassword = finalKeyPassword
             }
         }
     }
@@ -97,7 +112,7 @@ android {
         getByName("release") {
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            if (keystorePropsFile.exists()) signingConfig = signingConfigs.getByName("release")
+            if (hasSigningConfig) signingConfig = signingConfigs.getByName("release")
         }
     }
 

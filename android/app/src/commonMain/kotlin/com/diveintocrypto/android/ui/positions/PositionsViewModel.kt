@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 import kotlin.random.Random
 
 /**
@@ -455,79 +456,215 @@ class PositionsViewModel(private val container: AppContainer) : ViewModel() {
         val alignedGlobal = ArrayList<LongShortRatioPoint>(candles.size)
         val alignedFunding = ArrayList<FundingRatePoint>(candles.size)
 
-        val existingOi = currentState?.openInterest?.associateBy { it.timestamp } ?: emptyMap()
-        val existingAcc = currentState?.accountRatio?.associateBy { it.timestamp } ?: emptyMap()
-        val existingPos = currentState?.positionRatio?.associateBy { it.timestamp } ?: emptyMap()
-        val existingTaker = currentState?.takerRatio?.associateBy { it.timestamp } ?: emptyMap()
-        val existingGlobal = currentState?.globalRatio?.associateBy { it.timestamp } ?: emptyMap()
-        val existingFunding = currentState?.fundingRate?.associateBy { it.timestamp } ?: emptyMap()
+        var oiIdx = 0
+        var accIdx = 0
+        var posIdx = 0
+        var takerIdx = 0
+        var globalIdx = 0
+        var fundingIdx = 0
+
+        var existingOiIdx = 0
+        var existingAccIdx = 0
+        var existingPosIdx = 0
+        var existingTakerIdx = 0
+        var existingGlobalIdx = 0
+        var existingFundingIdx = 0
+
+        val existingOi = currentState?.openInterest ?: emptyList()
+        val existingAcc = currentState?.accountRatio ?: emptyList()
+        val existingPos = currentState?.positionRatio ?: emptyList()
+        val existingTaker = currentState?.takerRatio ?: emptyList()
+        val existingGlobal = currentState?.globalRatio ?: emptyList()
+        val existingFunding = currentState?.fundingRate ?: emptyList()
 
         for (candle in candles) {
             val t = candle.openTime
 
-            val oiPoint = when {
-                rawOi.any { it.timestamp == t } -> rawOi.first { it.timestamp == t }
-                existingOi.containsKey(t) -> existingOi[t]!!
-                else -> {
-                    val p = rawOi.minByOrNull { kotlin.math.abs(it.timestamp - t) }
-                        ?: OpenInterestPoint(t, 0.0, 0.0)
+            // 1. Open Interest
+            while (oiIdx < rawOi.size && rawOi[oiIdx].timestamp < t) {
+                oiIdx++
+            }
+            val exactRawOi = if (oiIdx < rawOi.size && rawOi[oiIdx].timestamp == t) rawOi[oiIdx] else null
+
+            val oiPoint = if (exactRawOi != null) {
+                exactRawOi
+            } else {
+                while (existingOiIdx < existingOi.size && existingOi[existingOiIdx].timestamp < t) {
+                    existingOiIdx++
+                }
+                val exactExistingOi = if (existingOiIdx < existingOi.size && existingOi[existingOiIdx].timestamp == t) existingOi[existingOiIdx] else null
+                
+                if (exactExistingOi != null) {
+                    exactExistingOi
+                } else {
+                    val p = if (rawOi.isEmpty()) {
+                        OpenInterestPoint(t, 0.0, 0.0)
+                    } else if (oiIdx == rawOi.size) {
+                        rawOi.last()
+                    } else if (oiIdx == 0) {
+                        rawOi.first()
+                    } else {
+                        val next = rawOi[oiIdx]
+                        val prev = rawOi[oiIdx - 1]
+                        if (abs(next.timestamp - t) < abs(prev.timestamp - t)) next else prev
+                    }
                     p.copy(timestamp = t)
                 }
             }
             alignedOi.add(oiPoint)
 
-            val accPoint = when {
-                rawAcc.any { it.timestamp == t } -> rawAcc.first { it.timestamp == t }
-                existingAcc.containsKey(t) -> existingAcc[t]!!
-                else -> {
-                    val p = rawAcc.minByOrNull { kotlin.math.abs(it.timestamp - t) }
-                        ?: LongShortRatioPoint(t, 0.5, 0.5, 1.0)
+            // 2. Account Ratio
+            while (accIdx < rawAcc.size && rawAcc[accIdx].timestamp < t) {
+                accIdx++
+            }
+            val exactRawAcc = if (accIdx < rawAcc.size && rawAcc[accIdx].timestamp == t) rawAcc[accIdx] else null
+
+            val accPoint = if (exactRawAcc != null) {
+                exactRawAcc
+            } else {
+                while (existingAccIdx < existingAcc.size && existingAcc[existingAccIdx].timestamp < t) {
+                    existingAccIdx++
+                }
+                val exactExistingAcc = if (existingAccIdx < existingAcc.size && existingAcc[existingAccIdx].timestamp == t) existingAcc[existingAccIdx] else null
+                
+                if (exactExistingAcc != null) {
+                    exactExistingAcc
+                } else {
+                    val p = if (rawAcc.isEmpty()) {
+                        LongShortRatioPoint(t, 0.5, 0.5, 1.0)
+                    } else if (accIdx == rawAcc.size) {
+                        rawAcc.last()
+                    } else if (accIdx == 0) {
+                        rawAcc.first()
+                    } else {
+                        val next = rawAcc[accIdx]
+                        val prev = rawAcc[accIdx - 1]
+                        if (abs(next.timestamp - t) < abs(prev.timestamp - t)) next else prev
+                    }
                     p.copy(timestamp = t)
                 }
             }
             alignedAcc.add(accPoint)
 
-            val posPoint = when {
-                rawPos.any { it.timestamp == t } -> rawPos.first { it.timestamp == t }
-                existingPos.containsKey(t) -> existingPos[t]!!
-                else -> {
-                    val p = rawPos.minByOrNull { kotlin.math.abs(it.timestamp - t) }
-                        ?: LongShortRatioPoint(t, 0.5, 0.5, 1.0)
+            // 3. Position Ratio
+            while (posIdx < rawPos.size && rawPos[posIdx].timestamp < t) {
+                posIdx++
+            }
+            val exactRawPos = if (posIdx < rawPos.size && rawPos[posIdx].timestamp == t) rawPos[posIdx] else null
+
+            val posPoint = if (exactRawPos != null) {
+                exactRawPos
+            } else {
+                while (existingPosIdx < existingPos.size && existingPos[existingPosIdx].timestamp < t) {
+                    existingPosIdx++
+                }
+                val exactExistingPos = if (existingPosIdx < existingPos.size && existingPos[existingPosIdx].timestamp == t) existingPos[existingPosIdx] else null
+                
+                if (exactExistingPos != null) {
+                    exactExistingPos
+                } else {
+                    val p = if (rawPos.isEmpty()) {
+                        LongShortRatioPoint(t, 0.5, 0.5, 1.0)
+                    } else if (posIdx == rawPos.size) {
+                        rawPos.last()
+                    } else if (posIdx == 0) {
+                        rawPos.first()
+                    } else {
+                        val next = rawPos[posIdx]
+                        val prev = rawPos[posIdx - 1]
+                        if (abs(next.timestamp - t) < abs(prev.timestamp - t)) next else prev
+                    }
                     p.copy(timestamp = t)
                 }
             }
             alignedPos.add(posPoint)
 
-            val takerPoint = when {
-                rawTaker.any { it.timestamp == t } -> rawTaker.first { it.timestamp == t }
-                existingTaker.containsKey(t) -> existingTaker[t]!!
-                else -> {
-                    val p = rawTaker.minByOrNull { kotlin.math.abs(it.timestamp - t) }
-                        ?: TakerLongShortRatioPoint(t, 1.0, 0.0, 0.0)
+            // 4. Taker Ratio
+            while (takerIdx < rawTaker.size && rawTaker[takerIdx].timestamp < t) {
+                takerIdx++
+            }
+            val exactRawTaker = if (takerIdx < rawTaker.size && rawTaker[takerIdx].timestamp == t) rawTaker[takerIdx] else null
+
+            val takerPoint = if (exactRawTaker != null) {
+                exactRawTaker
+            } else {
+                while (existingTakerIdx < existingTaker.size && existingTaker[existingTakerIdx].timestamp < t) {
+                    existingTakerIdx++
+                }
+                val exactExistingTaker = if (existingTakerIdx < existingTaker.size && existingTaker[existingTakerIdx].timestamp == t) existingTaker[existingTakerIdx] else null
+                
+                if (exactExistingTaker != null) {
+                    exactExistingTaker
+                } else {
+                    val p = if (rawTaker.isEmpty()) {
+                        TakerLongShortRatioPoint(t, 1.0, 0.0, 0.0)
+                    } else if (takerIdx == rawTaker.size) {
+                        rawTaker.last()
+                    } else if (takerIdx == 0) {
+                        rawTaker.first()
+                    } else {
+                        val next = rawTaker[takerIdx]
+                        val prev = rawTaker[takerIdx - 1]
+                        if (abs(next.timestamp - t) < abs(prev.timestamp - t)) next else prev
+                    }
                     p.copy(timestamp = t)
                 }
             }
             alignedTaker.add(takerPoint)
 
-            val globalPoint = when {
-                rawGlobal.any { it.timestamp == t } -> rawGlobal.first { it.timestamp == t }
-                existingGlobal.containsKey(t) -> existingGlobal[t]!!
-                else -> {
-                    val p = rawGlobal.minByOrNull { kotlin.math.abs(it.timestamp - t) }
-                        ?: LongShortRatioPoint(t, 0.5, 0.5, 1.0)
+            // 5. Global Ratio
+            while (globalIdx < rawGlobal.size && rawGlobal[globalIdx].timestamp < t) {
+                globalIdx++
+            }
+            val exactRawGlobal = if (globalIdx < rawGlobal.size && rawGlobal[globalIdx].timestamp == t) rawGlobal[globalIdx] else null
+
+            val globalPoint = if (exactRawGlobal != null) {
+                exactRawGlobal
+            } else {
+                while (existingGlobalIdx < existingGlobal.size && existingGlobal[existingGlobalIdx].timestamp < t) {
+                    existingGlobalIdx++
+                }
+                val exactExistingGlobal = if (existingGlobalIdx < existingGlobal.size && existingGlobal[existingGlobalIdx].timestamp == t) existingGlobal[existingGlobalIdx] else null
+                
+                if (exactExistingGlobal != null) {
+                    exactExistingGlobal
+                } else {
+                    val p = if (rawGlobal.isEmpty()) {
+                        LongShortRatioPoint(t, 0.5, 0.5, 1.0)
+                    } else if (globalIdx == rawGlobal.size) {
+                        rawGlobal.last()
+                    } else if (globalIdx == 0) {
+                        rawGlobal.first()
+                    } else {
+                        val next = rawGlobal[globalIdx]
+                        val prev = rawGlobal[globalIdx - 1]
+                        if (abs(next.timestamp - t) < abs(prev.timestamp - t)) next else prev
+                    }
                     p.copy(timestamp = t)
                 }
             }
             alignedGlobal.add(globalPoint)
 
-            val fundingPoint = when {
-                existingFunding.containsKey(t) -> existingFunding[t]!!
-                else -> {
-                    val p = rawFunding.filter { it.timestamp <= t }.maxByOrNull { it.timestamp }
-                        ?: rawFunding.minByOrNull { kotlin.math.abs(it.timestamp - t) }
-                        ?: FundingRatePoint(t, 0.0)
-                    p.copy(timestamp = t)
+            // 6. Funding Rate
+            while (existingFundingIdx < existingFunding.size && existingFunding[existingFundingIdx].timestamp < t) {
+                existingFundingIdx++
+            }
+            val exactExistingFunding = if (existingFundingIdx < existingFunding.size && existingFunding[existingFundingIdx].timestamp == t) existingFunding[existingFundingIdx] else null
+
+            val fundingPoint = if (exactExistingFunding != null) {
+                exactExistingFunding
+            } else {
+                while (fundingIdx < rawFunding.size && rawFunding[fundingIdx].timestamp <= t) {
+                    fundingIdx++
                 }
+                val p = if (rawFunding.isEmpty()) {
+                    FundingRatePoint(t, 0.0)
+                } else if (fundingIdx > 0) {
+                    rawFunding[fundingIdx - 1]
+                } else {
+                    rawFunding[0]
+                }
+                p.copy(timestamp = t)
             }
             alignedFunding.add(fundingPoint)
         }

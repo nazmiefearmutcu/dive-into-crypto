@@ -188,4 +188,34 @@ class ConsensusEngineTest {
         assertTrue(lastOut.reason.contains("Classic deleveraging washout, most consistent with short covering and bullish follow-through"))
         assertTrue(lastOut.reason.contains("Bullish now, but exhaustion risk rises late in the move"))
     }
+
+    @Test
+    fun `test consensus engine with small histories size 1 2 5`() {
+        val sizes = listOf(1, 2, 5)
+        for (size in sizes) {
+            val candles = makeCandles(size, 1000.0, -10.0)
+            val oi = makeOi(size, 1000.0, 100.0)
+            val acc = makeLongShort(size, 1.0, 0.1)
+            val global = makeLongShort(size, 1.0, 0.1)
+            val pos = makeLongShort(size, 2.0, -0.05)
+            val taker = makeTaker(size, 0.9, -0.01)
+            val funding = makeFunding(size, 0.0001)
+
+            val out = engine.evaluateMultimodal(
+                candles = candles,
+                rawOi = oi,
+                rawAcc = acc,
+                rawPos = pos,
+                rawGlobal = global,
+                rawTaker = taker,
+                rawFunding = funding
+            )
+            assertEquals(size, out.size)
+            for (res in out) {
+                assertFalse(res.weightedScore.isNaN(), "Score should not be NaN for size $size")
+                assertFalse(res.weightedScore.isInfinite(), "Score should not be Infinite for size $size")
+                assertTrue(res.confidence in 0..100, "Confidence ${res.confidence} should be in [0, 100]")
+            }
+        }
+    }
 }

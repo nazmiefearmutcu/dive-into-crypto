@@ -1,11 +1,12 @@
 package com.diveintocrypto.android
 
 import com.diveintocrypto.android.data.KeyValueStore
-import com.diveintocrypto.android.data.MarketDataRepository
 import com.diveintocrypto.android.data.SettingsStore
 import com.diveintocrypto.android.data.binance.BinanceFuturesClient
 import com.diveintocrypto.android.data.binance.BinanceSpotClient
 import com.diveintocrypto.android.data.binance.BinanceWsClient
+import com.diveintocrypto.android.engine.MarketDataEngine
+import com.diveintocrypto.android.engine.exchanges.binance.BinanceConnector
 import com.diveintocrypto.android.domain.consensus.ConsensusConfig
 import com.diveintocrypto.android.domain.consensus.ConsensusEngine
 import com.diveintocrypto.android.domain.indicator.AdxDiIndicator
@@ -66,11 +67,13 @@ class AppContainer(kv: KeyValueStore) {
     val activeSymbol = kotlinx.coroutines.flow.MutableStateFlow("BTCUSDT")
     val activeTimeframe = kotlinx.coroutines.flow.MutableStateFlow("1h")
 
-    val repository: MarketDataRepository by lazy {
-        MarketDataRepository(
-            rest = BinanceSpotClient(),
-            futures = BinanceFuturesClient(),
-            ws = BinanceWsClient(),
+    val repository: MarketDataEngine by lazy {
+        MarketDataEngine(
+            binance = BinanceConnector(
+                spot = BinanceSpotClient(),
+                futures = BinanceFuturesClient(),
+                ws = BinanceWsClient(),
+            ),
             settingsStore = settingsStore,
         )
     }

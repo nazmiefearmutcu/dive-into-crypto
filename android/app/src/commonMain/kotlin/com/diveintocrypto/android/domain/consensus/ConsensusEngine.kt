@@ -182,42 +182,62 @@ class ConsensusEngine(private val settingsStore: SettingsStore? = null) {
         val alignedGlobal = ArrayList<LongShortRatioPoint>(candles.size)
         val alignedFunding = ArrayList<FundingRatePoint>(candles.size)
 
+        val oiAligner = Aligner(rawOi) { it.timestamp }
+        val accAligner = Aligner(rawAcc) { it.timestamp }
+        val posAligner = Aligner(rawPos) { it.timestamp }
+        val takerAligner = Aligner(rawTaker) { it.timestamp }
+        val globalAligner = Aligner(rawGlobal) { it.timestamp }
+        val fundingAligner = Aligner(rawFunding) { it.timestamp }
+
         for (candle in candles) {
             val t = candle.openTime
 
-            val oiPoint = rawOi.firstOrNull { it.timestamp == t }
-                ?: rawOi.minByOrNull { abs(it.timestamp - t) }
-                ?: OpenInterestPoint(t, 0.0, 0.0)
-            alignedOi.add(oiPoint.copy(timestamp = t))
+            val oiPoint = oiAligner.findClosest(t, OpenInterestPoint(t, 0.0, 0.0))
+            if (oiPoint.timestamp == t) {
+                alignedOi.add(oiPoint)
+            } else {
+                alignedOi.add(oiPoint.copy(timestamp = t))
+            }
 
-            val accPoint = rawAcc.firstOrNull { it.timestamp == t }
-                ?: rawAcc.minByOrNull { abs(it.timestamp - t) }
-                ?: LongShortRatioPoint(t, 0.5, 0.5, 1.0)
-            alignedAcc.add(accPoint.copy(timestamp = t))
+            val accPoint = accAligner.findClosest(t, LongShortRatioPoint(t, 0.5, 0.5, 1.0))
+            if (accPoint.timestamp == t) {
+                alignedAcc.add(accPoint)
+            } else {
+                alignedAcc.add(accPoint.copy(timestamp = t))
+            }
 
-            val posPoint = rawPos.firstOrNull { it.timestamp == t }
-                ?: rawPos.minByOrNull { abs(it.timestamp - t) }
-                ?: LongShortRatioPoint(t, 0.5, 0.5, 1.0)
-            alignedPos.add(posPoint.copy(timestamp = t))
+            val posPoint = posAligner.findClosest(t, LongShortRatioPoint(t, 0.5, 0.5, 1.0))
+            if (posPoint.timestamp == t) {
+                alignedPos.add(posPoint)
+            } else {
+                alignedPos.add(posPoint.copy(timestamp = t))
+            }
 
-            val takerPoint = rawTaker.firstOrNull { it.timestamp == t }
-                ?: rawTaker.minByOrNull { abs(it.timestamp - t) }
-                ?: TakerLongShortRatioPoint(t, 1.0, 0.0, 0.0)
-            alignedTaker.add(takerPoint.copy(timestamp = t))
+            val takerPoint = takerAligner.findClosest(t, TakerLongShortRatioPoint(t, 1.0, 0.0, 0.0))
+            if (takerPoint.timestamp == t) {
+                alignedTaker.add(takerPoint)
+            } else {
+                alignedTaker.add(takerPoint.copy(timestamp = t))
+            }
 
-            val globalPoint = rawGlobal.firstOrNull { it.timestamp == t }
-                ?: rawGlobal.minByOrNull { abs(it.timestamp - t) }
-                ?: LongShortRatioPoint(t, 0.5, 0.5, 1.0)
-            alignedGlobal.add(globalPoint.copy(timestamp = t))
+            val globalPoint = globalAligner.findClosest(t, LongShortRatioPoint(t, 0.5, 0.5, 1.0))
+            if (globalPoint.timestamp == t) {
+                alignedGlobal.add(globalPoint)
+            } else {
+                alignedGlobal.add(globalPoint.copy(timestamp = t))
+            }
 
-            val fundingPoint = rawFunding.filter { it.timestamp <= t }.maxByOrNull { it.timestamp }
-                ?: rawFunding.minByOrNull { abs(it.timestamp - t) }
-                ?: FundingRatePoint(t, 0.0)
-            alignedFunding.add(fundingPoint.copy(timestamp = t))
+            val fundingPoint = fundingAligner.findLastBeforeOrClosest(t, FundingRatePoint(t, 0.0))
+            if (fundingPoint.timestamp == t) {
+                alignedFunding.add(fundingPoint)
+            } else {
+                alignedFunding.add(fundingPoint.copy(timestamp = t))
+            }
         }
 
         return AlignedData(alignedOi, alignedAcc, alignedPos, alignedTaker, alignedGlobal, alignedFunding)
     }
+
 
     private fun getDownPriceBaseScore(x: String, y: String, z: String): Triple<String, String, Double> {
         return when (x) {
@@ -299,7 +319,7 @@ class ConsensusEngine(private val settingsStore: SettingsStore? = null) {
                 }
             }
             val mean = if (windowReturns.isNotEmpty()) windowReturns.average() else 0.0
-            val variance = if (windowReturns.isNotEmpty()) windowReturns.map { (it - mean) * (it - mean) }.sum() / windowReturns.size else 0.0
+            val variance = if (windowReturns.size > 1) windowReturns.map { (it - mean) * (it - mean) }.sum() / (windowReturns.size - 1) else 0.0
             val stdDev = sqrt(variance)
             val stdDevRegularized = stdDev.coerceAtLeast(0.002)
             val volNormalizedReturn = ret / stdDevRegularized
@@ -327,9 +347,9 @@ class ConsensusEngine(private val settingsStore: SettingsStore? = null) {
                 }
             }
             val oiMean = if (oiHistory.isNotEmpty()) oiHistory.average() else 0.0
-            val oiVar = if (oiHistory.isNotEmpty()) oiHistory.map { (it - oiMean) * (it - oiMean) }.sum() / oiHistory.size else 0.0
-            val oiStdDev = sqrt(oiVar).coerceAtLeast(0.005)
-            val oizScore = (oiPct - oiMean) / oiStdDev
+            val oiVar = if (oiHistory.size > 1) oiHistory.map { (it - oiMean) * (it - oiMean) }.sum() / (oiHistory.size - 1) else 0.0
+            val oiStdDev = if (oiHistory.size > 1) sqrt(oiVar).coerceAtLeast(0.005) else 0.0
+            val oizScore = if (oiStdDev > 0.0) (oiPct - oiMean) / oiStdDev else 0.0
 
             val xState = when {
                 oizScore <= -0.35 -> "DOWN"
@@ -343,16 +363,16 @@ class ConsensusEngine(private val settingsStore: SettingsStore? = null) {
             val fundingHistory = aligned.funding.subList(yStart, i + 1).map { it.fundingRate }
 
             val accMean = accHistory.average()
-            val accStd = sqrt(accHistory.map { (it - accMean) * (it - accMean) }.sum() / accHistory.size).coerceAtLeast(0.02)
-            val accZ = (aligned.acc[i].longShortRatio - accMean) / accStd
+            val accStd = if (accHistory.size > 1) sqrt(accHistory.map { (it - accMean) * (it - accMean) }.sum() / (accHistory.size - 1)).coerceAtLeast(0.02) else 0.0
+            val accZ = if (accStd > 0.0) (aligned.acc[i].longShortRatio - accMean) / accStd else 0.0
 
             val globalMean = globalHistory.average()
-            val globalStd = sqrt(globalHistory.map { (it - globalMean) * (it - globalMean) }.sum() / globalHistory.size).coerceAtLeast(0.02)
-            val globalZ = (aligned.global[i].longShortRatio - globalMean) / globalStd
+            val globalStd = if (globalHistory.size > 1) sqrt(globalHistory.map { (it - globalMean) * (it - globalMean) }.sum() / (globalHistory.size - 1)).coerceAtLeast(0.02) else 0.0
+            val globalZ = if (globalStd > 0.0) (aligned.global[i].longShortRatio - globalMean) / globalStd else 0.0
 
             val fundingMean = fundingHistory.average()
-            val fundingStd = sqrt(fundingHistory.map { (it - fundingMean) * (it - fundingMean) }.sum() / fundingHistory.size).coerceAtLeast(0.0001)
-            val fundingZ = (aligned.funding[i].fundingRate - fundingMean) / fundingStd
+            val fundingStd = if (fundingHistory.size > 1) sqrt(fundingHistory.map { (it - fundingMean) * (it - fundingMean) }.sum() / (fundingHistory.size - 1)).coerceAtLeast(0.0001) else 0.0
+            val fundingZ = if (fundingStd > 0.0) (aligned.funding[i].fundingRate - fundingMean) / fundingStd else 0.0
 
             val yCombinedZ = (accZ + globalZ + fundingZ) / 3.0
             val yState = when {
@@ -373,8 +393,8 @@ class ConsensusEngine(private val settingsStore: SettingsStore? = null) {
                 if (b + s > 0.0) (b - s) / (b + s) else 0.0
             }
             val netTakerMean = netTakerHistory.average()
-            val netTakerStd = sqrt(netTakerHistory.map { (it - netTakerMean) * (it - netTakerMean) }.sum() / netTakerHistory.size).coerceAtLeast(0.05)
-            val netTakerZ = (netTakerPct - netTakerMean) / netTakerStd
+            val netTakerStd = if (netTakerHistory.size > 1) sqrt(netTakerHistory.map { (it - netTakerMean) * (it - netTakerMean) }.sum() / (netTakerHistory.size - 1)).coerceAtLeast(0.05) else 0.0
+            val netTakerZ = if (netTakerStd > 0.0) (netTakerPct - netTakerMean) / netTakerStd else 0.0
 
             val takerRatio = aligned.taker.getOrNull(i)?.buySellRatio ?: 1.0
             val takerRatioScore = takerRatio - 1.0
@@ -388,8 +408,8 @@ class ConsensusEngine(private val settingsStore: SettingsStore? = null) {
 
             val whaleHistory = aligned.pos.subList(yStart, i + 1).map { it.longShortRatio }
             val whaleMean = whaleHistory.average()
-            val whaleStd = sqrt(whaleHistory.map { (it - whaleMean) * (it - whaleMean) }.sum() / whaleHistory.size).coerceAtLeast(0.02)
-            val whaleZ = (aligned.pos[i].longShortRatio - whaleMean) / whaleStd
+            val whaleStd = if (whaleHistory.size > 1) sqrt(whaleHistory.map { (it - whaleMean) * (it - whaleMean) }.sum() / (whaleHistory.size - 1)).coerceAtLeast(0.02) else 0.0
+            val whaleZ = if (whaleStd > 0.0) (aligned.pos[i].longShortRatio - whaleMean) / whaleStd else 0.0
 
             val lookupY = if (priceState == "UP") {
                 if (yState == "UP") "DOWN" else if (yState == "DOWN") "UP" else "FLAT"
@@ -498,88 +518,93 @@ class ConsensusEngine(private val settingsStore: SettingsStore? = null) {
         return outputList
     }
 
-    private fun swapKeywords(text: String): String {
-        return text
-            // First step: Compound terms to placeholders
-            .replace("long liquidation", "__P_LL__")
-            .replace("short covering", "__P_SC__")
-            .replace("long-liquidation", "__P_LL_H__")
-            .replace("short-covering", "__P_SC_H__")
-            .replace("long-squeeze", "__P_LS__")
-            .replace("short-squeeze", "__P_SS__")
-            .replace("bear-trap", "__P_BT__")
-            .replace("bear trap", "__P_BT2__")
-            .replace("bull-trap", "__P_UT__")
-            .replace("bull trap", "__P_UT2__")
-            
-            // Second step: Individual words to placeholders
-            .replace("bearish", "__P_BULLISH__")
-            .replace("Bearish", "__P_BULLISH_CAP__")
-            .replace("bullish", "__P_BEARISH__")
-            .replace("Bullish", "__P_BEARISH_CAP__")
-            .replace("bear", "__P_BULL__")
-            .replace("Bear", "__P_BULL_CAP__")
-            .replace("bull", "__P_BEAR__")
-            .replace("Bull", "__P_BEAR_CAP__")
-            .replace("long", "__P_SHORT__")
-            .replace("Long", "__P_SHORT_CAP__")
-            .replace("short", "__P_LONG__")
-            .replace("Short", "__P_LONG_CAP__")
-            .replace("buyers", "__P_SELLERS__")
-            .replace("Buyers", "__P_SELLERS_CAP__")
-            .replace("sellers", "__P_BUYERS__")
-            .replace("Sellers", "__P_BUYERS_CAP__")
-            .replace("buyer", "__P_SELLER__")
-            .replace("Buyer", "__P_SELLER_CAP__")
-            .replace("seller", "__P_BUYER__")
-            .replace("Seller", "__P_BUYER_CAP__")
-            .replace("buying", "__P_SELLING__")
-            .replace("Buying", "__P_SELLING_CAP__")
-            .replace("selling", "__P_BUYING__")
-            .replace("Selling", "__P_BUYING_CAP__")
-            .replace("buy", "__P_SELL__")
-            .replace("Buy", "__P_SELL_CAP__")
-            .replace("sell", "__P_BUY__")
-            .replace("Sell", "__P_BUY_CAP__")
+    companion object {
+        private val KEYWORDS_MAP = mapOf(
+            "long liquidation" to "short covering",
+            "short covering" to "long liquidation",
+            "long-liquidation" to "short-covering",
+            "short-covering" to "long-liquidation",
+            "long-squeeze" to "short-squeeze",
+            "short-squeeze" to "long-squeeze",
+            "bear-trap" to "bull-trap",
+            "bear trap" to "bull trap",
+            "bull-trap" to "bear-trap",
+            "bull trap" to "bear trap",
+            "bearish" to "bullish",
+            "Bearish" to "Bullish",
+            "bullish" to "bearish",
+            "Bullish" to "Bearish",
+            "bear" to "bull",
+            "Bear" to "Bull",
+            "bull" to "bear",
+            "Bull" to "Bear",
+            "long" to "short",
+            "Long" to "Short",
+            "short" to "long",
+            "Short" to "Long",
+            "buyers" to "sellers",
+            "Buyers" to "Sellers",
+            "sellers" to "buyers",
+            "Sellers" to "Buyers",
+            "buyer" to "seller",
+            "Buyer" to "Seller",
+            "seller" to "buyer",
+            "Seller" to "Buyer",
+            "buying" to "selling",
+            "Buying" to "Selling",
+            "selling" to "buying",
+            "Selling" to "Buying",
+            "buy" to "sell",
+            "Buy" to "Sell",
+            "sell" to "buy",
+            "Sell" to "Buy"
+        )
 
-            // Third step: Placeholders to targets
-            .replace("__P_LL__", "short covering")
-            .replace("__P_SC__", "long liquidation")
-            .replace("__P_LL_H__", "short-covering")
-            .replace("__P_SC_H__", "long-liquidation")
-            .replace("__P_LS__", "short-squeeze")
-            .replace("__P_SS__", "long-squeeze")
-            .replace("__P_BT__", "bull-trap")
-            .replace("__P_BT2__", "bull trap")
-            .replace("__P_UT__", "bear-trap")
-            .replace("__P_UT2__", "bear trap")
-            .replace("__P_BULLISH__", "bullish")
-            .replace("__P_BULLISH_CAP__", "Bullish")
-            .replace("__P_BEARISH__", "bearish")
-            .replace("__P_BEARISH_CAP__", "Bearish")
-            .replace("__P_BULL__", "bull")
-            .replace("__P_BULL_CAP__", "Bull")
-            .replace("__P_BEAR__", "bear")
-            .replace("__P_BEAR_CAP__", "Bear")
-            .replace("__P_SHORT__", "short")
-            .replace("__P_SHORT_CAP__", "Short")
-            .replace("__P_LONG__", "long")
-            .replace("__P_LONG_CAP__", "Long")
-            .replace("__P_SELLERS__", "sellers")
-            .replace("__P_SELLERS_CAP__", "Sellers")
-            .replace("__P_BUYERS__", "buyers")
-            .replace("__P_BUYERS_CAP__", "Buyers")
-            .replace("__P_SELLER__", "seller")
-            .replace("__P_SELLER_CAP__", "Seller")
-            .replace("__P_BUYER__", "buyer")
-            .replace("__P_BUYER_CAP__", "Buyer")
-            .replace("__P_SELLING__", "selling")
-            .replace("__P_SELLING_CAP__", "Selling")
-            .replace("__P_BUYING__", "buying")
-            .replace("__P_BUYING_CAP__", "Buying")
-            .replace("__P_SELL__", "sell")
-            .replace("__P_SELL_CAP__", "Sell")
-            .replace("__P_BUY__", "buy")
-            .replace("__P_BUY_CAP__", "Buy")
+        private val SWAP_REGEX = Regex(
+            KEYWORDS_MAP.keys
+                .sortedByDescending { it.length }
+                .joinToString("|") { Regex.escape(it) }
+        )
+    }
+
+    private fun swapKeywords(text: String): String {
+        return SWAP_REGEX.replace(text) { matchResult ->
+            KEYWORDS_MAP[matchResult.value] ?: matchResult.value
+        }
+    }
+}
+
+private class Aligner<T>(private val list: List<T>, private val getTimestamp: (T) -> Long) {
+    private var idx = -1
+
+    private fun absDiff(a: Long, b: Long): Long = if (a > b) a - b else b - a
+
+    fun findClosest(t: Long, default: T): T {
+        if (list.isEmpty()) return default
+        while (idx + 1 < list.size && getTimestamp(list[idx + 1]) <= t) {
+            idx++
+        }
+        if (idx == -1) {
+            return list[0]
+        }
+        if (idx == list.size - 1) {
+            return list[idx]
+        }
+        val curr = list[idx]
+        val next = list[idx + 1]
+        val currDiff = absDiff(getTimestamp(curr), t)
+        val nextDiff = absDiff(getTimestamp(next), t)
+        return if (nextDiff < currDiff) next else curr
+    }
+
+    fun findLastBeforeOrClosest(t: Long, default: T): T {
+        if (list.isEmpty()) return default
+        while (idx + 1 < list.size && getTimestamp(list[idx + 1]) <= t) {
+            idx++
+        }
+        if (idx >= 0) {
+            return list[idx]
+        }
+        return list[0]
     }
 }
