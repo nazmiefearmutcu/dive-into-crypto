@@ -24,6 +24,7 @@ class SettingsStore(private val kv: KeyValueStore) {
         kv.putFloat("weight_oi_momentum", data.weightOiMomentum.toFloat())
         kv.putFloat("weight_whale_ls", data.weightWhaleLs.toFloat())
         kv.putFloat("weight_account_ls", data.weightAccountLs.toFloat())
+        kv.putString("language", data.language)
 
         // Save weights
         data.weights.forEach { (key, value) ->
@@ -50,6 +51,7 @@ class SettingsStore(private val kv: KeyValueStore) {
         val weightOiMomentum = kv.getFloat("weight_oi_momentum", 0.30f).toDouble()
         val weightWhaleLs = kv.getFloat("weight_whale_ls", 0.20f).toDouble()
         val weightAccountLs = kv.getFloat("weight_account_ls", 0.15f).toDouble()
+        val language = kv.getString("language", "en") ?: "en"
 
         val defaultWeights = mapOf(
             "rsi" to 1.5,
@@ -89,7 +91,8 @@ class SettingsStore(private val kv: KeyValueStore) {
             weightTakerLs = weightTakerLs,
             weightOiMomentum = weightOiMomentum,
             weightWhaleLs = weightWhaleLs,
-            weightAccountLs = weightAccountLs
+            weightAccountLs = weightAccountLs,
+            language = language
         )
     }
 }
@@ -107,5 +110,6 @@ data class SettingsData(
     val weightTakerLs: Double,
     val weightOiMomentum: Double,
     val weightWhaleLs: Double,
-    val weightAccountLs: Double
+    val weightAccountLs: Double,
+    val language: String
 )

@@ -14,7 +14,9 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.diveintocrypto.android.AppContainer
+import com.diveintocrypto.android.util.Translator
 import com.diveintocrypto.android.ui.logs.LogsScreen
 import com.diveintocrypto.android.ui.nav.NavRoute
 import com.diveintocrypto.android.ui.panel.PanelScreen
@@ -45,11 +47,15 @@ fun MobileShell(container: AppContainer) {
     val currentRoute = NavRoute.values().firstOrNull { it.slug == currentSlug }
         ?: NavRoute.Default
 
+    val settings by container.settingsStore.settingsState.collectAsStateWithLifecycle()
+    val lang = settings.language
+
     Scaffold(
-        topBar = { MobileTopBar(pageTitle = currentRoute.label) },
+        topBar = { MobileTopBar(pageTitle = Translator.tr(currentRoute.label, lang)) },
         bottomBar = {
             MobileBottomBar(
                 currentRoute = currentRoute,
+                lang = lang,
                 onNavigate = { route ->
                     if (route.slug != currentSlug) {
                         nav.navigate(route.slug) {

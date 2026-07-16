@@ -41,6 +41,7 @@ import com.diveintocrypto.android.ui.nav.NavRoute
 import com.diveintocrypto.android.ui.theme.DiveColors
 import com.diveintocrypto.android.ui.theme.DiveDims
 import com.diveintocrypto.android.ui.theme.DiveFonts
+import com.diveintocrypto.android.util.Translator
 import kotlinx.coroutines.launch
 
 /**
@@ -100,6 +101,7 @@ fun MobileTopBar(
 @Composable
 fun MobileBottomBar(
     currentRoute: NavRoute,
+    lang: String = "en",
     onNavigate: (NavRoute) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -123,7 +125,7 @@ fun MobileBottomBar(
         ) {
             NavRoute.BottomBarRoutes.forEach { route ->
                 BottomNavCell(
-                    label = route.label,
+                    label = Translator.tr(route.label, lang),
                     icon = if (route == currentRoute) route.iconFilled else route.iconOutlined,
                     active = route == currentRoute,
                     onClick = { onNavigate(route) },
@@ -131,7 +133,7 @@ fun MobileBottomBar(
             }
             val overflowActive = !currentRoute.inBottomBar
             BottomNavCell(
-                label = "More",
+                label = Translator.tr("More", lang),
                 icon = Icons.Rounded.Apps,
                 active = overflowActive,
                 onClick = { showOverflow = true },
@@ -162,7 +164,7 @@ fun MobileBottomBar(
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Text(
-                    text = "MORE",
+                    text = Translator.tr("MORE", lang),
                     color = DiveColors.TextMuted,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
@@ -172,6 +174,7 @@ fun MobileBottomBar(
                 NavRoute.OverflowRoutes.forEach { route ->
                     OverflowRow(
                         route = route,
+                        label = Translator.tr(route.label, lang),
                         active = route == currentRoute,
                         onClick = {
                             scope.launch { overflowSheetState.hide() }.invokeOnCompletion {
@@ -229,7 +232,7 @@ private fun BottomNavCell(
 }
 
 @Composable
-private fun OverflowRow(route: NavRoute, active: Boolean, onClick: () -> Unit) {
+private fun OverflowRow(route: NavRoute, label: String, active: Boolean, onClick: () -> Unit) {
     val bg = if (active) Color(0x265B8DEF) else DiveColors.BgCardHover
     val fg = if (active) DiveColors.Accent else DiveColors.Text
     Row(
@@ -250,7 +253,7 @@ private fun OverflowRow(route: NavRoute, active: Boolean, onClick: () -> Unit) {
         )
         Spacer(modifier = Modifier.width(14.dp))
         Text(
-            text = route.label,
+            text = label,
             color = fg,
             fontSize = 15.sp,
             fontWeight = FontWeight.SemiBold,

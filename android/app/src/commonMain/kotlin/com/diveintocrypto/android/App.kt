@@ -13,6 +13,9 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
+import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.diveintocrypto.android.util.LocalLanguage
 import com.diveintocrypto.android.ui.mobile.MobileShell
 import com.diveintocrypto.android.ui.theme.DiveThemeController
 import com.diveintocrypto.android.ui.theme.DiveIntoCryptoTheme
@@ -31,8 +34,10 @@ import com.diveintocrypto.android.ui.theme.DiveColors
 fun App(container: AppContainer) {
     DiveIntoCryptoTheme {
         val base = LocalDensity.current
+        val settings by container.settingsStore.settingsState.collectAsStateWithLifecycle()
         CompositionLocalProvider(
-            LocalDensity provides Density(base.density, base.fontScale * DiveThemeController.fontScale)
+            LocalDensity provides Density(base.density, base.fontScale * DiveThemeController.fontScale),
+            LocalLanguage provides settings.language
         ) {
             val scan = DiveThemeController.scanlines
             Box(

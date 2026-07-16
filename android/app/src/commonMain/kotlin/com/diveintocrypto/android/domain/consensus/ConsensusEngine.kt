@@ -66,7 +66,8 @@ class ConsensusEngine(private val settingsStore: SettingsStore? = null) {
         weightTakerLs = 0.35,
         weightOiMomentum = 0.30,
         weightWhaleLs = 0.20,
-        weightAccountLs = 0.15
+        weightAccountLs = 0.15,
+        language = "en"
     )
 
     fun evaluate(results: List<IndicatorResult>): ConsensusOutput {

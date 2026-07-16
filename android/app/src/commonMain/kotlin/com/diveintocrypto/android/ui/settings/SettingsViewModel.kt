@@ -34,7 +34,8 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
                         weightTakerLs = settings.weightTakerLs,
                         weightOiMomentum = settings.weightOiMomentum,
                         weightWhaleLs = settings.weightWhaleLs,
-                        weightAccountLs = settings.weightAccountLs
+                        weightAccountLs = settings.weightAccountLs,
+                        language = settings.language
                     )
                 }
             }
@@ -62,6 +63,11 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
     fun updateConfidenceThreshold(value: Int) {
         val current = container.settingsStore.getSettings()
         container.settingsStore.updateSettings(current.copy(confidenceThreshold = value))
+    }
+
+    fun updateLanguage(value: String) {
+        val current = container.settingsStore.getSettings()
+        container.settingsStore.updateSettings(current.copy(language = value))
     }
 
     fun updateMinConfidenceForTrade(value: Int) {
@@ -159,6 +165,7 @@ data class SettingsUiState(
     val weightOiMomentum: Double = 0.30,
     val weightWhaleLs: Double = 0.20,
     val weightAccountLs: Double = 0.15,
+    val language: String = "en",
 
     // Favorite searching
     val favoriteSearchQuery: String = "",

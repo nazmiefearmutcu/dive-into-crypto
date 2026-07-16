@@ -39,6 +39,7 @@ import com.diveintocrypto.android.platform.AppInfo
 import com.diveintocrypto.android.platform.format
 import com.diveintocrypto.android.ui.theme.DiveColors
 import com.diveintocrypto.android.ui.theme.DiveFonts
+import com.diveintocrypto.android.util.tr
 
 /**
  * Enriched Settings screen (2026-05-24).
@@ -112,7 +113,8 @@ fun SettingsScreen(container: AppContainer) {
             onWeightsChange = vm::updateQuantBiasWeights
         )
 
-        // 5. Theme & About
+        // 5. Language & Theme & About
+        LanguageCard(currentLang = state.language, onLanguageChange = vm::updateLanguage)
         ThemeCard()
         AboutCard()
 
@@ -271,13 +273,13 @@ private fun FavoritesCard(
     SettingsCard(title = "FAVORITE COINS") {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(
-                text = "Manage your quick-access list on the Panel tab.",
+                text = "Manage your quick-access list on the Panel tab.".tr(),
                 color = DiveColors.TextMuted,
                 fontSize = 11.sp
             )
 
             if (favorites.isEmpty()) {
-                Text("No favorite coins added yet.", color = DiveColors.TextDim, fontSize = 12.sp)
+                Text("No favorite coins added yet.".tr(), color = DiveColors.TextDim, fontSize = 12.sp)
             } else {
                 Row(
                     modifier = Modifier
@@ -359,7 +361,7 @@ private fun FavoritesCard(
                                     fontSize = 12.sp,
                                     fontFamily = DiveFonts.body
                                 )
-                                Text("+ Add", color = DiveColors.Accent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                Text("+ Add".tr(), color = DiveColors.Accent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             }
                         }
                     }
@@ -379,7 +381,7 @@ private fun ToggleRow(label: String, value: Boolean, onToggle: (Boolean) -> Unit
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        Text(text = label, color = DiveColors.Text, fontSize = 13.sp)
+        Text(text = label.tr(), color = DiveColors.Text, fontSize = 13.sp)
         Box(
             modifier = Modifier
                 .width(44.dp)
@@ -415,7 +417,7 @@ private fun StepperRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        Text(text = label, color = DiveColors.Text, fontSize = 13.sp)
+        Text(text = label.tr(), color = DiveColors.Text, fontSize = 13.sp)
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -456,6 +458,44 @@ private fun StepperRow(
         }
     }
 }
+@Composable
+private fun LanguageCard(
+    currentLang: String,
+    onLanguageChange: (String) -> Unit
+) {
+    SettingsCard(title = "LANGUAGE / DİL") {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .background(DiveColors.Border),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(topStart = 8.dp, bottomStart = 8.dp))
+                    .clickable { onLanguageChange("en") }
+                    .background(if (currentLang == "en") DiveColors.Accent else Color.Transparent)
+                    .padding(12.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("English", color = if (currentLang == "en") Color.White else DiveColors.Text, fontWeight = FontWeight.Bold)
+            }
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(topEnd = 8.dp, bottomEnd = 8.dp))
+                    .clickable { onLanguageChange("tr") }
+                    .background(if (currentLang == "tr") DiveColors.Accent else Color.Transparent)
+                    .padding(12.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("Türkçe", color = if (currentLang == "tr") Color.White else DiveColors.Text, fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
 
 @Composable
 private fun ThemeCard() {
@@ -481,14 +521,14 @@ private fun ThemeCard() {
             Spacer(modifier = Modifier.width(14.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "Dark",
+                    text = "Dark".tr(),
                     color = DiveColors.Text,
                     fontSize = 15.sp,
                     fontWeight = FontWeight.SemiBold,
                 )
                 Spacer(Modifier.height(2.dp))
                 Text(
-                    text = "Dive Into Crypto brand — fixed",
+                    text = "Dive Into Crypto brand — fixed".tr(),
                     color = DiveColors.TextMuted,
                     fontSize = 12.sp,
                 )
@@ -534,7 +574,7 @@ private fun AboutRow(label: String, value: String) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            text = label,
+            text = label.tr(),
             color = DiveColors.TextMuted,
             fontSize = 12.sp,
             modifier = Modifier.weight(1f),
@@ -560,7 +600,7 @@ private fun SettingsCard(title: String, content: @Composable () -> Unit) {
             .padding(horizontal = 16.dp, vertical = 14.dp),
     ) {
         Text(
-            text = title,
+            text = title.tr(),
             color = DiveColors.TextMuted,
             fontSize = 11.sp,
             fontWeight = FontWeight.Bold,
