@@ -36,11 +36,11 @@ market data. It is an instrument for *seeing* the market, not trading it for you
 | **Stack** | Python (FastAPI) + React terminal UI | Kotlin · Jetpack Compose |
 | **Data** | [Crypcodile](https://github.com/nazmiefearmutcu/Crypcodile)-fed, highest fidelity | Binance USDT-M public REST + WS |
 | **Runs** | local, terminal-launched | on your device, single APK |
-| **Engine** | full **57 indicators + 3 overlays** | 15-indicator core (fixture-pinned) |
+| **Engine** | full **57 indicators + 3 overlays** | full **57 indicators + 3 overlays** |
 
-Both speak the same consensus vocabulary. The Android app pins its 15-indicator core to a shared
-Python reference by fixture (see [Parity](#parity)); the desktop engine is the reference and runs
-the full extended set.
+Both run the same engine. Every indicator is pinned to the shared Python reference by fixture
+(see [Parity](#parity)); the desktop engine is the reference, the Kotlin engine is its
+fixture-verified mirror.
 
 ---
 
@@ -124,11 +124,12 @@ Nothing leaves your machine except public Binance requests. Details:
 
 ## Parity
 
-Cross-language parity is enforced **per indicator**, not per screen: the shared 15-indicator core is
-pinned to a `BTCUSDT 1h × 300` fixture (signal + score, exact), so Android and the desktop reference
-agree on that core. The desktop engine extends the core to 57 indicators plus the three overlays;
-porting the extended set to the Android/Kotlin mirror is on the roadmap. Nothing is synthesised —
-when a data source is unavailable it is shown as unavailable, never faked.
+Cross-language parity is enforced **per indicator**, not per screen, against a `BTCUSDT 1h × 300`
+fixture (signal + score, exact): the original 15-indicator core has its long-standing fixture gate,
+and the 42 extended indicators have their own (`ExtendedIndicatorsFixtureTest`) — every Kotlin
+indicator must reproduce the Python reference bit-for-signal. The three overlays (microstructure ·
+regime · MTF-confluence) are ported with mirrored unit tests. Nothing is synthesised — when a data
+source is unavailable it is shown as unavailable, never faked.
 
 ```bash
 cd desktop/backend && uv run pytest -q      # engine, parity, parsers  (offline)
