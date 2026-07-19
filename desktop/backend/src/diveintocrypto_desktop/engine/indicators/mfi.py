@@ -1,6 +1,5 @@
 """MFI (Money Flow Index) indicator."""
 
-from typing import Any
 import pandas as pd
 import numpy as np
 
@@ -30,11 +29,20 @@ class MFIIndicator(BaseIndicator):
 
         positive_sum = positive_flow.rolling(window=period).sum()
         negative_sum = negative_flow.rolling(window=period).sum()
-        negative_sum = negative_sum.replace(0, np.nan)
 
-        money_ratio = positive_sum / negative_sum
-        mfi = 100.0 - (100.0 / (1.0 + money_ratio))
+        is_nan = positive_sum.isna() | negative_sum.isna()
+        both_zero = (positive_sum == 0.0) & (negative_sum == 0.0)
+        neg_zero = (negative_sum == 0.0) & (positive_sum != 0.0)
 
+        money_ratio = positive_sum / negative_sum.where(negative_sum != 0.0, 1.0)
+        standard_mfi = 100.0 - (100.0 / (1.0 + money_ratio))
+
+        mfi_values = np.select(
+            condlist=[is_nan, both_zero, neg_zero],
+            choicelist=[np.nan, 50.0, 100.0],
+            default=standard_mfi
+        )
+        mfi = pd.Series(mfi_values, index=df.index)
         current_mfi = mfi.iloc[-1]
 
         if pd.isna(current_mfi):

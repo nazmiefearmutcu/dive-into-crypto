@@ -4,7 +4,7 @@ from typing import Any
 
 import pandas as pd
 
-from diveintocrypto_desktop.engine.indicators.base import BaseIndicator, IndicatorResult
+from diveintocrypto_desktop.engine.indicators.base import BaseIndicator, IndicatorResult, Signal
 from diveintocrypto_desktop.engine.indicators.rsi import RSIIndicator
 from diveintocrypto_desktop.engine.indicators.macd import MACDIndicator
 from diveintocrypto_desktop.engine.indicators.bollinger import BollingerBandsIndicator
@@ -20,6 +20,50 @@ from diveintocrypto_desktop.engine.indicators.atr_filter import ATRFilterIndicat
 from diveintocrypto_desktop.engine.indicators.ichimoku import IchimokuIndicator
 from diveintocrypto_desktop.engine.indicators.psar import PSARIndicator
 from diveintocrypto_desktop.engine.indicators.obv import OBVIndicator
+from diveintocrypto_desktop.engine.indicators.supertrend import SupertrendIndicator
+from diveintocrypto_desktop.engine.indicators.awesome_oscillator import AwesomeOscillatorIndicator
+from diveintocrypto_desktop.engine.indicators.cmf import CMFIndicator
+from diveintocrypto_desktop.engine.indicators.squeeze import TTMSqueezeIndicator
+from diveintocrypto_desktop.engine.indicators.choppiness import ChoppinessIndexIndicator
+from diveintocrypto_desktop.engine.indicators.vwap import VWAPIndicator
+from diveintocrypto_desktop.engine.indicators.vortex import VortexIndicator
+# --- New indicators (strategy-lab R&D fleet, 2026-07-19) ---
+from diveintocrypto_desktop.engine.indicators.keltner_breakout import KeltnerBreakoutIndicator
+from diveintocrypto_desktop.engine.indicators.donchian_breakout import DonchianBreakoutIndicator
+from diveintocrypto_desktop.engine.indicators.chaikin_oscillator import ChaikinOscillatorIndicator
+from diveintocrypto_desktop.engine.indicators.elder_ray import ElderRayIndicator
+from diveintocrypto_desktop.engine.indicators.klinger_oscillator import KlingerOscillatorIndicator
+from diveintocrypto_desktop.engine.indicators.trix import TRIXIndicator
+from diveintocrypto_desktop.engine.indicators.coppock_curve import CoppockCurveIndicator
+from diveintocrypto_desktop.engine.indicators.kst import KSTIndicator
+from diveintocrypto_desktop.engine.indicators.dpo import DPOIndicator
+from diveintocrypto_desktop.engine.indicators.fisher_transform import FisherTransformIndicator
+from diveintocrypto_desktop.engine.indicators.connors_rsi import ConnorsRSIIndicator
+from diveintocrypto_desktop.engine.indicators.stoch_rsi import StochRSIIndicator
+from diveintocrypto_desktop.engine.indicators.ultimate_oscillator import UltimateOscillatorIndicator
+from diveintocrypto_desktop.engine.indicators.aroon_oscillator import AroonOscillatorIndicator
+from diveintocrypto_desktop.engine.indicators.schaff_trend_cycle import SchaffTrendCycleIndicator
+from diveintocrypto_desktop.engine.indicators.wavetrend import WaveTrendIndicator
+from diveintocrypto_desktop.engine.indicators.relative_vigor_index import RelativeVigorIndexIndicator
+from diveintocrypto_desktop.engine.indicators.balance_of_power import BalanceOfPowerIndicator
+from diveintocrypto_desktop.engine.indicators.accum_dist_line import AccumDistLineIndicator
+from diveintocrypto_desktop.engine.indicators.mass_index import MassIndexIndicator
+# --- New indicators batch 2 (strategy-lab, 2026-07-19) ---
+from diveintocrypto_desktop.engine.indicators.cmo import CMOIndicator
+from diveintocrypto_desktop.engine.indicators.tsi import TSIIndicator
+from diveintocrypto_desktop.engine.indicators.vwma_cross import VWMACrossIndicator
+from diveintocrypto_desktop.engine.indicators.qstick import QstickIndicator
+from diveintocrypto_desktop.engine.indicators.force_index import ForceIndexIndicator
+from diveintocrypto_desktop.engine.indicators.bollinger_percent_b import BollingerPercentBIndicator
+from diveintocrypto_desktop.engine.indicators.zscore_reversion import ZScoreReversionIndicator
+from diveintocrypto_desktop.engine.indicators.linreg_slope import LinRegSlopeIndicator
+from diveintocrypto_desktop.engine.indicators.atr_percentile import ATRPercentileIndicator
+from diveintocrypto_desktop.engine.indicators.hist_vol_percentile import HistVolPercentileIndicator
+from diveintocrypto_desktop.engine.indicators.hurst import HurstRegimeIndicator
+from diveintocrypto_desktop.engine.indicators.range_expansion import RangeExpansionIndicator
+from diveintocrypto_desktop.engine.indicators.kalman_trend import KalmanTrendIndicator
+from diveintocrypto_desktop.engine.indicators.half_life_reversion import HalfLifeReversionIndicator
+from diveintocrypto_desktop.engine.indicators.rolling_sharpe import RollingSharpeIndicator
 from diveintocrypto_desktop.engine.utils.logger import get_logger
 
 logger = get_logger("services.signal_service")
@@ -50,6 +94,50 @@ class SignalService:
             IchimokuIndicator,
             PSARIndicator,
             OBVIndicator,
+            SupertrendIndicator,
+            AwesomeOscillatorIndicator,
+            CMFIndicator,
+            TTMSqueezeIndicator,
+            ChoppinessIndexIndicator,
+            VWAPIndicator,
+            VortexIndicator,
+            # --- New indicators (strategy-lab R&D fleet, 2026-07-19) ---
+            KeltnerBreakoutIndicator,
+            DonchianBreakoutIndicator,
+            ChaikinOscillatorIndicator,
+            ElderRayIndicator,
+            KlingerOscillatorIndicator,
+            TRIXIndicator,
+            CoppockCurveIndicator,
+            KSTIndicator,
+            DPOIndicator,
+            FisherTransformIndicator,
+            ConnorsRSIIndicator,
+            StochRSIIndicator,
+            UltimateOscillatorIndicator,
+            AroonOscillatorIndicator,
+            SchaffTrendCycleIndicator,
+            WaveTrendIndicator,
+            RelativeVigorIndexIndicator,
+            BalanceOfPowerIndicator,
+            AccumDistLineIndicator,
+            MassIndexIndicator,
+            # --- New indicators batch 2 (strategy-lab, 2026-07-19) ---
+            CMOIndicator,
+            TSIIndicator,
+            VWMACrossIndicator,
+            QstickIndicator,
+            ForceIndexIndicator,
+            BollingerPercentBIndicator,
+            ZScoreReversionIndicator,
+            LinRegSlopeIndicator,
+            ATRPercentileIndicator,
+            HistVolPercentileIndicator,
+            HurstRegimeIndicator,
+            RangeExpansionIndicator,
+            KalmanTrendIndicator,
+            HalfLifeReversionIndicator,
+            RollingSharpeIndicator,
         ]
         return [cls(self.config) for cls in indicator_classes]
 
@@ -69,7 +157,6 @@ class SignalService:
                 )
             except Exception as e:
                 logger.error(f"Indicator {indicator.name} failed: {e}")
-                from diveintocrypto_desktop.engine.indicators.base import Signal, SIGNAL_SCORES
                 fallback = IndicatorResult(
                     name=indicator.name,
                     signal=Signal.NEUTRAL,

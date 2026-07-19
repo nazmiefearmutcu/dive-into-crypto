@@ -1,6 +1,5 @@
 """ADX + Directional Index (DI) indicator."""
 
-from typing import Any
 import pandas as pd
 import numpy as np
 
@@ -23,11 +22,11 @@ class ADXDIIndicator(BaseIndicator):
         low = df["low"]
         close = df["close"]
 
-        plus_dm = high.diff()
-        minus_dm = -low.diff()
+        raw_plus_dm = high.diff()
+        raw_minus_dm = -low.diff()
 
-        plus_dm = plus_dm.where((plus_dm > minus_dm) & (plus_dm > 0), 0.0)
-        minus_dm = minus_dm.where((minus_dm > plus_dm) & (minus_dm > 0), 0.0)
+        plus_dm = raw_plus_dm.where((raw_plus_dm > raw_minus_dm) & (raw_plus_dm > 0), 0.0)
+        minus_dm = raw_minus_dm.where((raw_minus_dm > raw_plus_dm) & (raw_minus_dm > 0), 0.0)
 
         tr1 = high - low
         tr2 = (high - close.shift(1)).abs()

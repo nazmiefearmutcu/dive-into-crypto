@@ -176,8 +176,20 @@ function GorunumScreen({ ctx }) {
 
 /* ── Ayarlar ──────────────────────────────────────────────────────────────── */
 function AyarlarScreen({ ctx }) {
-  const [conf, setConf] = React.useState(55);
-  const [trade, setTrade] = React.useState(70);
+  const [conf, setConf] = React.useState(() => {
+    const saved = localStorage.getItem("dive_conf");
+    return saved ? parseInt(saved, 10) : 55;
+  });
+  const [trade, setTrade] = React.useState(() => {
+    const saved = localStorage.getItem("dive_trade");
+    return saved ? parseInt(saved, 10) : 70;
+  });
+  React.useEffect(() => {
+    localStorage.setItem("dive_conf", conf);
+  }, [conf]);
+  React.useEffect(() => {
+    localStorage.setItem("dive_trade", trade);
+  }, [trade]);
   const [q, setQ] = React.useState("");
   const allSyms = SGS_DATA.map((d) => d.s);
   const matches = q ? allSyms.filter((s) => s.includes(q.toUpperCase()) && !ctx.favorites.includes(s)).slice(0, 4) : [];
