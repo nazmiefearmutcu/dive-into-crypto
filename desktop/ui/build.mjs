@@ -6,15 +6,9 @@ import { readFileSync, writeFileSync, mkdirSync, copyFileSync } from "fs";
 
 const APP = "src/app";
 const FILES = [
-  "theme.js",
-  "data.js",
-  "icons.jsx",
-  "chart.jsx",
-  "ui.jsx",
-  "screens-market.jsx",
-  "screens-more.jsx",
-  "appearance.jsx",
-  "desktop-shell.jsx",
+  "data.js",         // live backend adapter (window.DIVE + globals)
+  "mock.js",         // offline demo fallback (window.DIVE_MOCK)
+  "desktop-app.jsx", // "Depth Terminal" UI — shell + screens
 ];
 
 const prelude =

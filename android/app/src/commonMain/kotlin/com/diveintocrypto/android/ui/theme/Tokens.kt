@@ -17,20 +17,21 @@ import androidx.compose.ui.unit.dp
  * Defaults are the "Nova Cyber" preset (futuristic neon cyan/magenta).
  */
 object DiveColors {
-    var Bg by mutableStateOf(Color(0xFF05060B))
-    var BgCard by mutableStateOf(Color(0x9E141A2E))
-    var BgCardHover by mutableStateOf(Color(0xB31E2642))
-    var Border by mutableStateOf(Color(0x2978A0FF))
-    var BorderStrong by mutableStateOf(Color(0x5778B4FF))
-    var Text by mutableStateOf(Color(0xFFEAF0FF))
-    var TextMuted by mutableStateOf(Color(0xFF8C95BC))
-    var TextDim by mutableStateOf(Color(0xFF535C82))
-    var Accent by mutableStateOf(Color(0xFF00E5FF))
-    var Accent2 by mutableStateOf(Color(0xFFFF2BD6))
-    var Green by mutableStateOf(Color(0xFF22F5A6))
-    var GreenDim by mutableStateOf(Color(0xFF22F5A6))
-    var Red by mutableStateOf(Color(0xFFFF3B6B))
-    var RedDim by mutableStateOf(Color(0xFFFF3B6B))
+    // Defaults = "Depth Terminal · Phosphor" (anti-slop instrument palette).
+    var Bg by mutableStateOf(Color(0xFF05070A))
+    var BgCard by mutableStateOf(Color(0xFF0A0E14))
+    var BgCardHover by mutableStateOf(Color(0xFF0C1119))
+    var Border by mutableStateOf(Color(0xFF182029))
+    var BorderStrong by mutableStateOf(Color(0xFF232E38))
+    var Text by mutableStateOf(Color(0xFFDFE7EA))
+    var TextMuted by mutableStateOf(Color(0xFF7C8A92))
+    var TextDim by mutableStateOf(Color(0xFF3A454D))
+    var Accent by mutableStateOf(Color(0xFF39FF9E))
+    var Accent2 by mutableStateOf(Color(0xFF1C7A52))
+    var Green by mutableStateOf(Color(0xFF4DFFA6))
+    var GreenDim by mutableStateOf(Color(0xFF4DFFA6))
+    var Red by mutableStateOf(Color(0xFFFF5C6C))
+    var RedDim by mutableStateOf(Color(0xFFFF5C6C))
     // Categorical series colors — kept fixed & distinct (NOT collapsed onto the
     // preset's 2 brand colors) so chart series stay distinguishable in every theme.
     var Yellow by mutableStateOf(Color(0xFFEAB308))
@@ -40,7 +41,7 @@ object DiveColors {
     var Cyan by mutableStateOf(Color(0xFF06B6D4))
 
     /** Primary chart-line color (driven by the "Grafik Rengi" axis). */
-    var Chart by mutableStateOf(Color(0xFF00E5FF))
+    var Chart by mutableStateOf(Color(0xFF39FF9E))
 
     var GreenTint15 by mutableStateOf(Color(0xFF22F5A6).copy(alpha = 0.15f))
     var RedTint15 by mutableStateOf(Color(0xFFFF3B6B).copy(alpha = 0.15f))
@@ -57,7 +58,7 @@ object DiveColors {
 
     /** Screen-root background color: Transparent when the mesh is active (so the root glow shows
      *  through), otherwise the flat [Bg]. All full-screen roots use this. */
-    var RootBg by mutableStateOf(Color(0xFF05060B))
+    var RootBg by mutableStateOf(Color(0xFF05070A))
 
     fun apply(p: DivePreset) {
         Bg = p.bg
@@ -90,8 +91,8 @@ object DiveColors {
 }
 
 object DiveDims {
-    var Radius by mutableStateOf(18.dp)
-    var RadiusSm by mutableStateOf(14.dp)
+    var Radius by mutableStateOf(2.dp)
+    var RadiusSm by mutableStateOf(1.dp)
     var CardPadH by mutableStateOf(14.dp)
     var CardPadV by mutableStateOf(12.dp)
 
