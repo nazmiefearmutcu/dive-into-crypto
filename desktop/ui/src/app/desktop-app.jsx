@@ -217,8 +217,9 @@ const NAV=[
 const THEMES=[["phosphor","#39ff9e"],["amber","#ffb02e"],["ice","#59c6ff"],["paper","#c2410c"]];
 const SYMBOL_VIEWS=new Set(["panel","flow","sig"]);
 
+const VIEW_IDS=["scan","panel","flow","sig","logs","settings"];
 function App(){
-  const [view,setView]=useState("scan");
+  const [view,setView]=useState(()=>{const h=(location.hash||"").replace(/^#\/?/,"").split("/")[0];return VIEW_IDS.includes(h)?h:"scan";});
   const [sym,setSym]=useState(null);
   const [theme,setThemeState]=useState(()=>localStorage.getItem("dive_theme")||"phosphor");
   const [q,setQ]=useState("");
