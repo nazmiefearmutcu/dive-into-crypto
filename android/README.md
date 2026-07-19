@@ -13,6 +13,8 @@
 - **Platform:** Android 8.0+ (minSdk 26), single signed APK, sideload install
 - **Stack:** Kotlin Multiplatform · Jetpack Compose · Ktor · kotlinx.serialization
 - **Data:** Binance USDT‑M Futures public REST + WebSocket
+- **Engine:** the 15‑indicator core, pinned by fixture to the shared Python reference (the desktop edition extends that reference to **57 indicators + 3 overlays**)
+- **Look:** **Depth Terminal** — a hand‑built trading instrument, not a generic dashboard
 - **License:** MIT
 
 ---
@@ -73,7 +75,7 @@ Top movers by 24 h % change.
 
 ### Network Log · Appearance · Settings
 - **Network Log** — live scan progress and request/error log.
-- **Appearance** — 9 built‑in theme presets (3 families × 3 variants) plus accent, contrast, corner‑roundness and other live tuning.
+- **Appearance** — 10 built‑in theme presets across 3 families (NOVA · LEDGER · TERMINAL), defaulting to **Depth Terminal · Phosphor** — the same anti‑slop instrument palette as the desktop edition (blueprint dark, single phosphor accent, sharp corners) — plus a light **Paper** variant, accent, contrast, corner‑roundness and other live tuning.
 - **Settings** — confidence threshold, per‑indicator weights, favorites, and the data source (Futures / Spot). All preferences are stored on the device.
 
 ---
