@@ -1,6 +1,5 @@
 """RSI (Relative Strength Index) indicator."""
 
-from typing import Any
 import pandas as pd
 import numpy as np
 
@@ -29,8 +28,19 @@ class RSIIndicator(BaseIndicator):
         avg_gain = gain.rolling(window=period, min_periods=period).mean()
         avg_loss = loss.rolling(window=period, min_periods=period).mean()
 
-        rs = avg_gain / avg_loss.replace(0, np.nan)
-        rsi = 100.0 - (100.0 / (1.0 + rs))
+        is_nan = avg_gain.isna() | avg_loss.isna()
+        both_zero = (avg_gain == 0.0) & (avg_loss == 0.0)
+        loss_zero = (avg_loss == 0.0) & (avg_gain != 0.0)
+
+        rs = avg_gain / avg_loss.where(avg_loss != 0.0, 1.0)
+        standard_rsi = 100.0 - (100.0 / (1.0 + rs))
+
+        rsi_values = np.select(
+            condlist=[is_nan, both_zero, loss_zero],
+            choicelist=[np.nan, 50.0, 100.0],
+            default=standard_rsi
+        )
+        rsi = pd.Series(rsi_values, index=df.index)
         current_rsi = rsi.iloc[-1]
 
         if pd.isna(current_rsi):

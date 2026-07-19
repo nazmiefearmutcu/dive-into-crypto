@@ -1,6 +1,5 @@
 """OBV (On-Balance Volume) indicator."""
 
-from typing import Any
 import pandas as pd
 import numpy as np
 
@@ -36,10 +35,11 @@ class OBVIndicator(BaseIndicator):
 
         # Divergence detection
         lookback = min(divergence_lookback, len(close) - 1)
-        price_change = (close.iloc[-1] - close.iloc[-lookback - 1]) / close.iloc[-lookback - 1]
+        base_price = close.iloc[-lookback - 1]
+        price_change = (close.iloc[-1] - base_price) / base_price if base_price != 0.0 else 0.0
         obv_change = obv_series.iloc[-1] - obv_series.iloc[-lookback - 1]
-        obv_base = abs(obv_series.iloc[-lookback - 1])
-        obv_change_pct = obv_change / obv_base if obv_base != 0 else 0
+        volume_sum = volume.iloc[-lookback:].sum()
+        obv_change_pct = obv_change / volume_sum if volume_sum != 0 else 0.0
 
         raw = {
             "obv": round(current_obv, 2),
