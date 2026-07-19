@@ -63,11 +63,11 @@ Deribit (IV / DVOL)     ─┤
             └───────────────────────────────────────────────┘
 ```
 
-**Engine.** The backend *is* the canonical Python reference. Its 15-indicator core is pinned to the
-Android `BTCUSDT 1h × 300` fixtures (signal + score, exact) — cross-language parity is enforced
-per-indicator. The desktop engine extends that core to 57 indicators plus three overlays
+**Engine.** The backend *is* the canonical Python reference: 57 indicators plus three overlays
 (futures-microstructure, regime-adaptive weighting, MTF-confluence) that annotate but never alter
-the parity-locked vote.
+the parity-locked vote. The Android/Kotlin engine mirrors all 57, pinned to the same
+`BTCUSDT 1h × 300` fixtures (signal + score, exact) — cross-language parity is enforced
+per-indicator, on the original core and the extended set alike.
 
 **Honest data.** Every number in the live app is real, derived from Binance via Crypcodile. There is
 no synthesised path in production; when a source is unavailable it is shown as unavailable (e.g. a

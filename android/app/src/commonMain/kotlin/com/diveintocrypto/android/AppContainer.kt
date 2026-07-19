@@ -9,21 +9,7 @@ import com.diveintocrypto.android.engine.MarketDataEngine
 import com.diveintocrypto.android.engine.exchanges.binance.BinanceConnector
 import com.diveintocrypto.android.domain.consensus.ConsensusConfig
 import com.diveintocrypto.android.domain.consensus.ConsensusEngine
-import com.diveintocrypto.android.domain.indicator.AdxDiIndicator
-import com.diveintocrypto.android.domain.indicator.AtrFilterIndicator
-import com.diveintocrypto.android.domain.indicator.BollingerIndicator
-import com.diveintocrypto.android.domain.indicator.CciIndicator
-import com.diveintocrypto.android.domain.indicator.EmaCrossIndicator
-import com.diveintocrypto.android.domain.indicator.IchimokuIndicator
-import com.diveintocrypto.android.domain.indicator.MacdIndicator
-import com.diveintocrypto.android.domain.indicator.MfiIndicator
-import com.diveintocrypto.android.domain.indicator.ObvIndicator
-import com.diveintocrypto.android.domain.indicator.PsarIndicator
-import com.diveintocrypto.android.domain.indicator.RocIndicator
-import com.diveintocrypto.android.domain.indicator.RsiIndicator
-import com.diveintocrypto.android.domain.indicator.SmaCrossIndicator
-import com.diveintocrypto.android.domain.indicator.StochasticIndicator
-import com.diveintocrypto.android.domain.indicator.WilliamsRIndicator
+import com.diveintocrypto.android.domain.indicator.*
 import com.diveintocrypto.android.domain.model.IndicatorConfig
 
 /** Indicator weights — verbatim from the original Python reference implementation. */
@@ -43,6 +29,49 @@ val ALL_INDICATOR_WEIGHTS: Map<String, Double> = mapOf(
     "ichimoku" to 2.0,
     "psar" to 1.3,
     "obv" to 1.2,
+    // ── Extended set (parity with the desktop reference engine, 2026-07-20) ──
+    "supertrend" to 2.0,
+    "awesome_oscillator" to 1.2,
+    "cmf" to 1.5,
+    "squeeze" to 2.5,
+    "choppiness" to 1.0,
+    "vwap" to 1.8,
+    "vortex" to 1.5,
+    "keltner_breakout" to 1.5,
+    "donchian_breakout" to 1.5,
+    "chaikin_oscillator" to 1.3,
+    "elder_ray" to 1.2,
+    "klinger_oscillator" to 1.3,
+    "trix" to 1.4,
+    "coppock_curve" to 1.2,
+    "kst" to 1.4,
+    "dpo" to 1.0,
+    "fisher_transform" to 1.2,
+    "connors_rsi" to 1.2,
+    "stoch_rsi" to 1.2,
+    "ultimate_oscillator" to 1.2,
+    "aroon_oscillator" to 1.3,
+    "schaff_trend_cycle" to 1.4,
+    "wavetrend" to 1.5,
+    "relative_vigor_index" to 1.1,
+    "balance_of_power" to 1.0,
+    "accum_dist_line" to 1.3,
+    "mass_index" to 1.0,
+    "cmo" to 1.2,
+    "tsi" to 1.3,
+    "vwma_cross" to 1.4,
+    "qstick" to 1.0,
+    "force_index" to 1.2,
+    "bollinger_percent_b" to 1.2,
+    "zscore_reversion" to 1.0,
+    "linreg_slope" to 1.4,
+    "atr_percentile" to 1.0,
+    "hist_vol_percentile" to 0.8,
+    "hurst" to 1.2,
+    "range_expansion" to 1.0,
+    "kalman_trend" to 1.4,
+    "half_life_reversion" to 1.0,
+    "rolling_sharpe" to 1.2,
 )
 
 /**
@@ -148,6 +177,51 @@ class AppContainer(kv: KeyValueStore) {
             ObvIndicator(IndicatorConfig(mapOf(
                 "sma_period" to 20.0, "divergence_lookback" to 10.0,
             ))),
+            // ── Extended set (desktop-reference parity, 2026-07-20). Empty config
+            //    → each indicator's in-code defaults, which mirror the Python
+            //    reference (`self.thresholds.get(key, default)`). ──────────────
+            SupertrendIndicator(IndicatorConfig()),
+            AwesomeOscillatorIndicator(IndicatorConfig()),
+            CmfIndicator(IndicatorConfig()),
+            SqueezeIndicator(IndicatorConfig()),
+            ChoppinessIndicator(IndicatorConfig()),
+            VwapIndicator(IndicatorConfig()),
+            VortexIndicator(IndicatorConfig()),
+            KeltnerBreakoutIndicator(IndicatorConfig()),
+            DonchianBreakoutIndicator(IndicatorConfig()),
+            ElderRayIndicator(IndicatorConfig()),
+            TrixIndicator(IndicatorConfig()),
+            CoppockCurveIndicator(IndicatorConfig()),
+            KstIndicator(IndicatorConfig()),
+            SchaffTrendCycleIndicator(IndicatorConfig()),
+            FisherTransformIndicator(IndicatorConfig()),
+            ConnorsRsiIndicator(IndicatorConfig()),
+            StochRsiIndicator(IndicatorConfig()),
+            UltimateOscillatorIndicator(IndicatorConfig()),
+            WavetrendIndicator(IndicatorConfig()),
+            DpoIndicator(IndicatorConfig()),
+            AroonOscillatorIndicator(IndicatorConfig()),
+            ChaikinOscillatorIndicator(IndicatorConfig()),
+            KlingerOscillatorIndicator(IndicatorConfig()),
+            AccumDistLineIndicator(IndicatorConfig()),
+            BalanceOfPowerIndicator(IndicatorConfig()),
+            RelativeVigorIndexIndicator(IndicatorConfig()),
+            MassIndexIndicator(IndicatorConfig()),
+            CmoIndicator(IndicatorConfig()),
+            TsiIndicator(IndicatorConfig()),
+            VwmaCrossIndicator(IndicatorConfig()),
+            QstickIndicator(IndicatorConfig()),
+            ForceIndexIndicator(IndicatorConfig()),
+            BollingerPercentBIndicator(IndicatorConfig()),
+            ZscoreReversionIndicator(IndicatorConfig()),
+            LinregSlopeIndicator(IndicatorConfig()),
+            AtrPercentileIndicator(IndicatorConfig()),
+            HistVolPercentileIndicator(IndicatorConfig()),
+            HurstIndicator(IndicatorConfig()),
+            RangeExpansionIndicator(IndicatorConfig()),
+            KalmanTrendIndicator(IndicatorConfig()),
+            HalfLifeReversionIndicator(IndicatorConfig()),
+            RollingSharpeIndicator(IndicatorConfig()),
         )
     }
 }

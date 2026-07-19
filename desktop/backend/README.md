@@ -5,8 +5,9 @@ indicators across 12 timeframes**, three futures-native overlays (microstructure
 weighting · MTF-confluence), and a whale-divergence filter — over live Binance USDT-M perpetual
 futures, and serves it to the Depth Terminal UI over local HTTP/WS.
 
-Its 15-indicator core is the parity anchor the Android app pins to (fixture-exact, per indicator);
-the remaining 42 indicators and the three overlays are desktop-side extensions.
+It is the parity anchor the Android app pins to: all 57 indicators are fixture-verified per
+indicator (signal + score, exact) against this reference, and the three overlays are mirrored in
+Kotlin with matching unit tests.
 
 ## Run
 

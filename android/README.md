@@ -13,7 +13,7 @@
 - **Platform:** Android 8.0+ (minSdk 26), single signed APK, sideload install
 - **Stack:** Kotlin Multiplatform · Jetpack Compose · Ktor · kotlinx.serialization
 - **Data:** Binance USDT‑M Futures public REST + WebSocket
-- **Engine:** the 15‑indicator core, pinned by fixture to the shared Python reference (the desktop edition extends that reference to **57 indicators + 3 overlays**)
+- **Engine:** the full **57‑indicator consensus + 3 overlays** (microstructure · regime‑adaptive weighting · MTF‑confluence), every indicator pinned by fixture to the shared Python reference
 - **Look:** **Depth Terminal** — a hand‑built trading instrument, not a generic dashboard
 - **License:** MIT
 
