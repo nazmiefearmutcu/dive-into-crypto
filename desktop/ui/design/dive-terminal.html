@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="tr" data-theme="phosphor">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Dive Into Crypto — Depth Terminal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Martian+Mono:wght@300;400;600;700;800&family=IBM+Plex+Mono:wght@400;500;600;700&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&display=swap" rel="stylesheet" />
+<style>
+/* ============================================================================
+   DIVE INTO CRYPTO — "DEPTH TERMINAL"
+   Anti-slop trading instrument. Not a dashboard: a piece of precision equipment.
+   Blueprint grid · schematic corner-brackets · phosphor glow only where alive.
+   ========================================================================== */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#05070a; --bg2:#080b10; --panel:#0a0e14; --panel2:#0c1119;
+  --ink:#dfe7ea; --dim:#7c8a92; --faint:#3a454d; --line:#182029; --line2:#232e38;
+  --accent:#39ff9e; --accent-ink:#04140c; --accent-dim:#1c7a52;
+  --up:#4dffa6; --up-soft:#0e2e20; --down:#ff5c6c; --down-soft:#2e1116;
+  --warn:#ffc23d; --warn-soft:#2e2410; --info:#57d4ff; --neutral:#5a6a72;
+  --grid:rgba(90,120,110,.045); --glow:0 0 18px rgba(57,255,158,.22);
+  --font-d:"Martian Mono",monospace; --font-m:"IBM Plex Mono",monospace; --font-s:"Newsreader",serif;
+  --rail:74px;
+}
+[data-theme="amber"]{
+  --bg:#0a0602;--bg2:#0d0803;--panel:#100a03;--panel2:#140d04;
+  --ink:#f3e2c4;--dim:#9a8560;--faint:#4a3c26;--line:#241a0d;--line2:#332512;
+  --accent:#ffb02e;--accent-ink:#160d01;--accent-dim:#7a5410;
+  --up:#ffd166;--up-soft:#2e2008;--down:#ff6b4a;--down-soft:#2e1408;
+  --warn:#ffd93d;--warn-soft:#2e2609;--info:#f0a860;--neutral:#7a6544;
+  --grid:rgba(150,110,40,.05);--glow:0 0 18px rgba(255,176,46,.24);
+}
+[data-theme="ice"]{
+  --bg:#04070c;--bg2:#060a11;--panel:#080d16;--panel2:#0a1220;
+  --ink:#d8e6f2;--dim:#6f8399;--faint:#33424f;--line:#131f2c;--line2:#1e2f40;
+  --accent:#59c6ff;--accent-ink:#02121e;--accent-dim:#1a6a99;
+  --up:#5fe0e0;--up-soft:#08262e;--down:#ff6b8a;--down-soft:#2a0f18;
+  --warn:#ffcf5c;--warn-soft:#2a2410;--info:#8ad6ff;--neutral:#516576;
+  --grid:rgba(60,130,190,.055);--glow:0 0 18px rgba(89,198,255,.24);
+}
+[data-theme="paper"]{
+  --bg:#e9e4d8;--bg2:#e4ded0;--panel:#f2eee4;--panel2:#ece7da;
+  --ink:#1b1c18;--dim:#6b675b;--faint:#b3ad9c;--line:#cfc8b6;--line2:#bcb4a0;
+  --accent:#c2410c;--accent-ink:#fff;--accent-dim:#e08a5a;
+  --up:#1a7a4a;--up-soft:#d6 e8dd;--up-soft:#d7e9de;--down:#b42318;--down-soft:#f0dcd8;
+  --warn:#a66a00;--warn-soft:#efe4c8;--info:#1d6fa5;--neutral:#8a8474;
+  --grid:rgba(80,70,40,.05);--glow:none;
+}
+
+html,body{height:100%}
+body{
+  background:var(--bg); color:var(--ink); font-family:var(--font-m);
+  font-size:14px; line-height:1.4; overflow:hidden;
+  -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+  font-feature-settings:"tnum" 1,"cv01" 1;
+}
+/* blueprint grid + vignette + grain */
+body::before{
+  content:""; position:fixed; inset:0; pointer-events:none; z-index:0;
+  background:
+    linear-gradient(var(--grid) 1px,transparent 1px) 0 0/34px 34px,
+    linear-gradient(90deg,var(--grid) 1px,transparent 1px) 0 0/34px 34px,
+    radial-gradient(120% 90% at 70% -10%, transparent 40%, rgba(0,0,0,.55) 100%);
+}
+body::after{ /* scanline sweep + fine grain */
+  content:""; position:fixed; inset:0; pointer-events:none; z-index:60; opacity:.5;
+  background:repeating-linear-gradient(0deg,rgba(0,0,0,0) 0,rgba(0,0,0,0) 2px,rgba(0,0,0,.16) 3px,rgba(0,0,0,0) 4px);
+  mix-blend-mode:multiply;
+}
+[data-theme="paper"] body::after{display:none}
+
+.app{position:relative;z-index:1;display:grid;grid-template-columns:var(--rail) 1fr;grid-template-rows:34px 1fr;height:100vh}
+
+/* ── status strip (oscilloscope header) ─────────────────────────────────── */
+.strip{grid-column:1/3;display:flex;align-items:center;gap:14px;padding:0 14px;
+  border-bottom:1px solid var(--line2);background:linear-gradient(180deg,var(--bg2),var(--bg));
+  font-family:var(--font-m);font-size:11px;letter-spacing:.06em;color:var(--dim)}
+.strip .live{display:flex;align-items:center;gap:6px;color:var(--accent);font-weight:600}
+.dot{width:6px;height:6px;border-radius:1px;background:var(--accent);box-shadow:var(--glow);animation:blink 1.9s steps(1) infinite}
+@keyframes blink{0%,70%{opacity:1}71%,100%{opacity:.25}}
+.strip .seg{color:var(--faint)}
+.strip b{color:var(--ink);font-weight:600}
+.strip .spacer{flex:1}
+.strip .clk{color:var(--ink);font-variant-numeric:tabular-nums}
+
+/* ── left rail ──────────────────────────────────────────────────────────── */
+.rail{grid-row:2/3;display:flex;flex-direction:column;align-items:center;gap:2px;padding:12px 0;
+  border-right:1px solid var(--line2);background:var(--bg2)}
+.mark{width:38px;height:38px;position:relative;margin-bottom:14px;flex:none}
+.mark svg{display:block}
+.rail-btn{width:56px;height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;
+  border:1px solid transparent;border-radius:3px;background:transparent;color:var(--dim);cursor:pointer;
+  font-family:var(--font-d);font-size:8px;font-weight:600;letter-spacing:.04em;transition:all .12s}
+.rail-btn svg{width:19px;height:19px;stroke:currentColor;fill:none;stroke-width:1.6}
+.rail-btn:hover{color:var(--ink);background:var(--panel)}
+.rail-btn.on{color:var(--accent);border-color:var(--line2);background:var(--panel2)}
+.rail-btn.on::before{content:"";position:absolute;left:0;width:2px;height:30px;background:var(--accent);box-shadow:var(--glow)}
+.rail-btn{position:relative}
+.rail .grow{flex:1}
+
+/* ── content ────────────────────────────────────────────────────────────── */
+.stage{grid-row:2/3;overflow-y:auto;overflow-x:hidden;padding:16px 18px 40px}
+.stage::-webkit-scrollbar{width:9px}
+.stage::-webkit-scrollbar-thumb{background:var(--line2);border-radius:0}
+.stage::-webkit-scrollbar-track{background:transparent}
+
+/* view header: editorial serif + rule */
+.vhead{display:flex;align-items:baseline;gap:14px;margin-bottom:16px;padding-bottom:10px;border-bottom:1px solid var(--line2);position:relative}
+.vhead::after{content:"";position:absolute;bottom:-1px;left:0;width:64px;height:1px;background:var(--accent);box-shadow:var(--glow)}
+.vhead h1{font-family:var(--font-s);font-weight:500;font-size:30px;letter-spacing:-.01em;color:var(--ink)}
+.vhead .kicker{font-family:var(--font-d);font-size:9px;font-weight:700;letter-spacing:.34em;color:var(--accent)}
+.vhead .meta{margin-left:auto;font-family:var(--font-m);font-size:11px;color:var(--dim);text-align:right;line-height:1.5}
+
+/* schematic panel with corner brackets */
+.panel{position:relative;background:
+    linear-gradient(180deg,var(--panel2),var(--panel));
+  border:1px solid var(--line2);margin-bottom:14px}
+.panel::before,.panel::after{content:"";position:absolute;width:9px;height:9px;pointer-events:none}
+.panel::before{top:-1px;left:-1px;border-top:2px solid var(--accent);border-left:2px solid var(--accent)}
+.panel::after{bottom:-1px;right:-1px;border-bottom:2px solid var(--accent);border-right:2px solid var(--accent)}
+.panel.mute::before,.panel.mute::after{border-color:var(--line2)}
+.panel .ph{display:flex;align-items:center;gap:8px;padding:9px 13px;border-bottom:1px solid var(--line);
+  font-family:var(--font-d);font-size:9px;font-weight:700;letter-spacing:.22em;color:var(--dim)}
+.panel .ph .tick{color:var(--accent)}
+.panel .pb{padding:13px}
+
+.label{font-family:var(--font-d);font-size:8.5px;font-weight:700;letter-spacing:.24em;color:var(--dim)}
+
+/* ── SCANNER: ranking table ─────────────────────────────────────────────── */
+.rank{width:100%;border-collapse:collapse;font-family:var(--font-m);font-size:12.5px}
+.rank thead th{font-family:var(--font-d);font-size:8.5px;font-weight:700;letter-spacing:.16em;color:var(--faint);
+  text-align:left;padding:8px 10px;border-bottom:1px solid var(--line2);white-space:nowrap}
+.rank thead th.r{text-align:right}
+.rank tbody tr{border-bottom:1px solid var(--line);cursor:pointer;transition:background .1s}
+.rank tbody tr:hover{background:var(--panel2)}
+.rank tbody tr:hover td:first-child{box-shadow:inset 2px 0 0 var(--accent)}
+.rank td{padding:9px 10px;vertical-align:middle}
+.rank td.r{text-align:right;font-variant-numeric:tabular-nums}
+.rk{font-family:var(--font-d);font-size:11px;font-weight:800;color:var(--faint);width:26px}
+.sym{font-weight:700;font-size:14px;letter-spacing:.01em}
+.sym small{display:block;font-family:var(--font-m);font-size:9.5px;font-weight:400;color:var(--dim);letter-spacing:.04em}
+.px{font-weight:600;color:var(--ink)}
+.chg.up{color:var(--up)} .chg.dn{color:var(--down)}
+.score{font-family:var(--font-d);font-weight:800;color:var(--warn)}
+
+/* signal pill */
+.pill{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border:1px solid;border-radius:2px;
+  font-family:var(--font-d);font-size:8.5px;font-weight:700;letter-spacing:.1em;white-space:nowrap}
+.pill.b{color:var(--up);border-color:color-mix(in srgb,var(--up) 45%,transparent);background:var(--up-soft)}
+.pill.s{color:var(--down);border-color:color-mix(in srgb,var(--down) 45%,transparent);background:var(--down-soft)}
+.pill.n{color:var(--neutral);border-color:var(--line2);background:transparent}
+.pill .g{width:5px;height:5px;border-radius:1px;background:currentColor}
+
+/* confidence bar (segmented, like a VU meter) */
+.vu{display:flex;gap:2px;align-items:center;height:12px}
+.vu i{width:4px;height:100%;background:var(--line2);border-radius:0}
+.vu i.on{background:var(--accent);box-shadow:0 0 6px color-mix(in srgb,var(--accent) 50%,transparent)}
+.vu i.on.dn{background:var(--down);box-shadow:0 0 6px color-mix(in srgb,var(--down) 50%,transparent)}
+
+/* 12-TF heat strip */
+.heat{display:grid;grid-template-columns:repeat(12,1fr);gap:2px;width:190px}
+.heat b{height:15px;display:flex;align-items:center;justify-content:center;font-family:var(--font-m);
+  font-size:7px;font-weight:600;color:var(--bg);border-radius:1px;position:relative}
+.heat b.u{background:var(--up)} .heat b.d{background:var(--down)} .heat b.z{background:var(--line2);color:var(--dim)}
+
+/* ── PANEL view grid ────────────────────────────────────────────────────── */
+.grid2{display:grid;grid-template-columns:1.35fr 1fr;gap:14px;align-items:start}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+@media(max-width:1150px){.grid2{grid-template-columns:1fr}.grid3{grid-template-columns:1fr}}
+
+/* hero verdict block */
+.verdict{display:flex;align-items:stretch;gap:0}
+.verdict .big{flex:1;padding:16px 18px}
+.verdict .vlabel{font-family:var(--font-d);font-size:9px;font-weight:700;letter-spacing:.24em;color:var(--dim)}
+.verdict .vsig{font-family:var(--font-s);font-weight:500;font-size:44px;line-height:1;margin:6px 0 2px;letter-spacing:-.01em}
+.verdict .vsig.b{color:var(--up)} .verdict .vsig.s{color:var(--down)} .verdict .vsig.n{color:var(--neutral)}
+.verdict .vsub{font-family:var(--font-m);font-size:11px;color:var(--dim)}
+.verdict .side{width:120px;border-left:1px solid var(--line);display:flex;flex-direction:column}
+.verdict .side .cell{flex:1;padding:10px 12px;border-bottom:1px solid var(--line)}
+.verdict .side .cell:last-child{border-bottom:0}
+.verdict .side .k{font-family:var(--font-d);font-size:7.5px;font-weight:700;letter-spacing:.18em;color:var(--faint)}
+.verdict .side .v{font-family:var(--font-d);font-size:20px;font-weight:800;color:var(--ink);font-variant-numeric:tabular-nums}
+.verdict .side .v small{font-size:11px;color:var(--dim);font-weight:600}
+
+.price-row{display:flex;align-items:baseline;gap:12px;padding:12px 14px;border-bottom:1px solid var(--line)}
+.price-row .p{font-family:var(--font-d);font-size:26px;font-weight:700;font-variant-numeric:tabular-nums}
+.price-row .c{font-family:var(--font-m);font-size:14px;font-weight:600}
+.price-row .c.up{color:var(--up)} .price-row .c.dn{color:var(--down)}
+
+/* indicator table (dense, grouped) */
+.itbl{width:100%;border-collapse:collapse;font-family:var(--font-m);font-size:11.5px}
+.itbl td{padding:4.5px 10px;border-bottom:1px solid var(--line)}
+.itbl tr.fam td{background:var(--bg2);font-family:var(--font-d);font-size:8px;font-weight:700;letter-spacing:.2em;color:var(--faint);padding:6px 10px}
+.itbl .nm{color:var(--ink)}
+.itbl .rv{text-align:right;color:var(--dim);font-variant-numeric:tabular-nums;font-size:10.5px}
+.itbl .sg{text-align:right;width:74px}
+.mini{display:inline-block;padding:1px 6px;border-radius:2px;font-family:var(--font-d);font-size:8px;font-weight:700;letter-spacing:.06em}
+.mini.sb{color:var(--up);background:var(--up-soft)} .mini.b{color:var(--up);background:transparent;border:1px solid color-mix(in srgb,var(--up) 40%,transparent)}
+.mini.ss{color:var(--down);background:var(--down-soft)} .mini.s{color:var(--down);background:transparent;border:1px solid color-mix(in srgb,var(--down) 40%,transparent)}
+.mini.n{color:var(--neutral);border:1px solid var(--line2)}
+
+/* instrument gauges (overlays) */
+.gauge{padding:11px 13px;border-bottom:1px solid var(--line)}
+.gauge:last-child{border-bottom:0}
+.gauge .gt{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.gauge .gt .gn{font-family:var(--font-d);font-size:8.5px;font-weight:700;letter-spacing:.16em;color:var(--dim)}
+.gauge .gt .gv{font-family:var(--font-d);font-size:15px;font-weight:800;font-variant-numeric:tabular-nums}
+.bar{position:relative;height:6px;background:var(--line);overflow:hidden}
+.bar .mid{position:absolute;left:50%;top:-2px;bottom:-2px;width:1px;background:var(--faint)}
+.bar .fill{position:absolute;top:0;bottom:0;height:100%}
+.bar .fill.pos{left:50%;background:var(--up)} .bar .fill.neg{right:50%;background:var(--down)}
+.gauge .cap{margin-top:6px;font-family:var(--font-m);font-size:9.5px;color:var(--faint)}
+
+/* whale / reason */
+.reason{font-family:var(--font-s);font-size:14px;font-style:italic;color:var(--dim);line-height:1.5;padding:12px 14px}
+.reason b{font-style:normal;color:var(--ink)}
+.tagrow{display:flex;flex-wrap:wrap;gap:6px;padding:0 14px 13px}
+.tag{font-family:var(--font-d);font-size:8px;font-weight:700;letter-spacing:.08em;padding:3px 8px;border:1px solid var(--line2);color:var(--dim)}
+.tag.hot{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 40%,transparent)}
+.tag.good{color:var(--up);border-color:color-mix(in srgb,var(--up) 40%,transparent)}
+.tag.bad{color:var(--down);border-color:color-mix(in srgb,var(--down) 40%,transparent)}
+
+/* theme selector in strip */
+.themes{display:flex;gap:5px}
+.themes button{width:13px;height:13px;border-radius:2px;border:1px solid var(--line2);cursor:pointer;padding:0}
+.themes button.on{outline:1px solid var(--ink);outline-offset:1px}
+
+/* boot power-on */
+.stage>*{animation:rise .5s cubic-bezier(.2,.7,.2,1) backwards}
+.stage>*:nth-child(2){animation-delay:.05s}.stage>*:nth-child(3){animation-delay:.1s}
+.stage>*:nth-child(4){animation-delay:.15s}.stage>*:nth-child(5){animation-delay:.2s}
+@keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.flash{animation:fl .5s ease}@keyframes fl{0%{background:color-mix(in srgb,var(--accent) 22%,transparent)}100%{background:transparent}}
+.hidden{display:none!important}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- status strip -->
+  <div class="strip">
+    <span class="live"><span class="dot"></span>CANLI</span>
+    <span class="seg">│</span>
+    <span>BINANCE USDT-M · PERP</span>
+    <span class="seg">│</span>
+    <span><b id="s-count">57</b> İNDİKATÖR</span>
+    <span class="seg">│</span>
+    <span><b>12</b> TF</span>
+    <span class="spacer"></span>
+    <span id="s-sym">—</span>
+    <span class="seg">│</span>
+    <span class="clk" id="s-clk">--:--:--</span>
+    <span class="seg">│</span>
+    <div class="themes" id="themes"></div>
+  </div>
+
+  <!-- rail -->
+  <nav class="rail">
+    <div class="mark" id="mark"></div>
+    <button class="rail-btn on" data-view="scan"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M16 16l5 5"/></svg>TARA</button>
+    <button class="rail-btn" data-view="panel"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16"/><path d="M3 9h18M9 9v11"/></svg>PANEL</button>
+    <button class="rail-btn" data-view="flow"><svg viewBox="0 0 24 24"><path d="M4 18V9M9 18V5M14 18v-6M19 18v-9"/></svg>OI·L/S</button>
+    <button class="rail-btn" data-view="sig"><svg viewBox="0 0 24 24"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>SİNYAL</button>
+    <div class="grow"></div>
+    <button class="rail-btn"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></svg>AYAR</button>
+  </nav>
+
+  <!-- stage -->
+  <main class="stage" id="stage"></main>
+</div>
+
+<script>
+/* ── mark (schematic diamond crest) ─────────────────────────────────────── */
+document.getElementById('mark').innerHTML =
+ '<svg width="38" height="38" viewBox="0 0 38 38"><g fill="none" stroke="var(--accent)" stroke-width="1.5">'+
+ '<path d="M19 3 L34 19 L19 35 L4 19 Z"/><path d="M19 10 L27 19 L19 28 L11 19 Z" stroke="var(--accent-dim)"/>'+
+ '<circle cx="19" cy="19" r="2.4" fill="var(--accent)" stroke="none"/></g></svg>';
+
+/* ── mock market (real contract shape from assemble()) ──────────────────── */
+const TF=["1m","3m","5m","15m","30m","1h","2h","4h","6h","8h","12h","1d"];
+function tfset(bias){return TF.map((tf,i)=>{const r=Math.sin(i*1.3+bias)+bias*0.4;const s=r>0.35?1:r<-0.35?-1:0;
+  return{tf,score:s,confidence:Math.min(98,Math.abs(Math.round(r*46))+42*Math.abs(s))};});}
+const FAM=[
+ ["TREND",[["ema_cross","BUY","+1.9%"],["supertrend","STRONG_BUY","BULL"],["ichimoku","BUY","tenkan>"],["adx_di","STRONG_BUY","31.4"],["kalman_trend","BUY","+0.8%"],["schaff_trend_cycle","BUY","72"],["donchian_breakout","STRONG_BUY","brk"]]],
+ ["OSCILLATOR",[["rsi","NEUTRAL","58"],["stoch_rsi","SELL","89↓"],["connors_rsi","NEUTRAL","51"],["ultimate_oscillator","BUY","61"],["wavetrend","SELL","x"],["fisher_transform","STRONG_SELL","2.8"]]],
+ ["VOLUME",[["obv","BUY","up"],["mfi","BUY","44"],["chaikin_oscillator","BUY","+"],["accum_dist_line","STRONG_SELL","div"],["klinger_oscillator","STRONG_BUY","x↑"]]],
+ ["VOLATILITY / REGIME",[["bollinger_percent_b","BUY","0.86"],["atr_percentile","BUY","p0.71"],["hurst","BUY","0.61"],["squeeze","NEUTRAL","—"],["mass_index","NEUTRAL","24.5"]]],
+ ["STATISTICAL",[["zscore_reversion","SELL","z+1.8"],["linreg_slope","STRONG_BUY","R²0.82"],["rolling_sharpe","BUY","+1.1"],["half_life_reversion","NEUTRAL","hl>"]]],
+];
+function mk(s,name,px,ch,sig,conf,risk,net,bias,wr,micro,reg,mtf,reason){
+  return{s,name,price:px,ch,finalSignal:sig,confidence:conf,risk,net,
+    multiTf:tfset(bias),quantBias:net>0?42.1:-38.5,whaleRegime:wr,
+    divergence:{score:wr==='adverse'?-61.2:wr==='confirm'?58.4:12.1,tf:"4h",coverage:wr==='neutral'?1:3},
+    microstructure:micro,regime:reg,mtfConfluence:mtf,reason,indicators:FAM};
+}
+const MK={
+ BTCUSDT:mk("BTCUSDT","BITCOIN",68240.50,2.14,"STRONG_BUY",84,"DÜŞÜK",1820,1.1,"confirm",
+   {score:53.4,direction:1,label:"BUY",active:6,signals:[["oi_price_divergence",.42],["oi_breakout_confirm",.61],["funding_fade",-.18],["taker_aggression",.55],["ls_crowding_fade",-.12],["smart_dumb_spread",.33]]},
+   {regime:"TREND",adx:31.4,chop:29.8,adaptive_score:0.94},
+   {score:71.2,direction:1,gate:true,htf_agree:0.86,label:"STRONG"},
+   "Balina akışı indikatör yönünü teyit ediyor (WF +58.4). Yüksek TF yığını hizalı."),
+ ETHUSDT:mk("ETHUSDT","ETHEREUM",3512.80,1.05,"BUY",67,"ORTA",940,0.6,"neutral",
+   {score:18.9,direction:1,label:"NEUTRAL",active:5,signals:[["oi_price_divergence",.12],["oi_breakout_confirm",.0],["funding_fade",-.31],["taker_aggression",.28],["smart_dumb_spread",.19]]},
+   {regime:"MIXED",adx:22.1,chop:48.0,adaptive_score:0.41},
+   {score:33.0,direction:1,gate:false,htf_agree:0.5,label:"WEAK"},
+   "Belirgin balina uyumsuzluğu yok. Orta rejim: trend teyidi zayıf."),
+ SOLUSDT:mk("SOLUSDT","SOLANA",171.42,-3.28,"SELL",71,"ORTA",-1120,-0.7,"adverse",
+   {score:-47.7,direction:-1,label:"SELL",active:6,signals:[["oi_price_divergence",-.55],["oi_breakout_confirm",-.4],["funding_fade",.6],["taker_aggression",-.44],["ls_crowding_fade",.5],["smart_dumb_spread",-.28]]},
+   {regime:"RANGE",adx:16.2,chop:66.4,adaptive_score:-0.58},
+   {score:-52.4,direction:-1,gate:true,htf_agree:0.71,label:"WEAK"},
+   "İndikatör yönüne karşı balina akışı (WF -61.2). Kalabalık long → fade."),
+ AVAXUSDT:mk("AVAXUSDT","AVALANCHE",38.91,4.72,"STRONG_BUY",79,"DÜŞÜK",1510,1.0,"confirm",
+   {score:48.1,direction:1,label:"BUY",active:6,signals:[["oi_price_divergence",.38],["oi_breakout_confirm",.72],["funding_fade",-.1],["taker_aggression",.6],["ls_crowding_fade",-.2],["smart_dumb_spread",.41]]},
+   {regime:"TREND",adx:28.9,chop:33.1,adaptive_score:0.88},
+   {score:64.0,direction:1,gate:true,htf_agree:0.83,label:"STRONG"},
+   "OI genişlemesi kırılımı teyit ediyor. Taker alım baskısı güçlü."),
+ SUIUSDT:mk("SUIUSDT","SUI",4.118,-1.94,"NEUTRAL",41,"YÜKSEK",120,-0.1,"neutral",
+   {score:-8.2,direction:0,label:"NEUTRAL",active:4,signals:[["oi_price_divergence",-.08],["funding_fade",.14],["taker_aggression",-.11],["smart_dumb_spread",.05]]},
+   {regime:"MIXED",adx:19.0,chop:55.2,adaptive_score:-0.06},
+   {score:8.0,direction:1,gate:false,htf_agree:0.4,label:"NEUTRAL"},
+   "Çatışan sinyaller nötrlüğe zorluyor. Yüksek risk."),
+ WIFUSDT:mk("WIFUSDT","DOGWIFHAT",2.884,8.11,"STRONG_BUY",76,"YÜKSEK",1990,1.2,"confirm",
+   {score:59.0,direction:1,label:"STRONG_BUY",active:6,signals:[["oi_price_divergence",.5],["oi_breakout_confirm",.8],["funding_fade",-.3],["taker_aggression",.72],["ls_crowding_fade",-.05],["smart_dumb_spread",.55]]},
+   {regime:"TREND",adx:34.0,chop:27.0,adaptive_score:1.12},
+   {score:78.0,direction:1,gate:true,htf_agree:0.9,label:"STRONG"},
+   "Momentum patlaması: OI + taker + smart-money hepsi long. Yüksek volatilite riski."),
+ ARBUSDT:mk("ARBUSDT","ARBITRUM",0.9124,-0.62,"SELL",58,"ORTA",-680,-0.5,"neutral",
+   {score:-22.4,direction:-1,label:"SELL",active:5,signals:[["oi_price_divergence",-.2],["funding_fade",.25],["taker_aggression",-.3],["ls_crowding_fade",.18],["smart_dumb_spread",-.14]]},
+   {regime:"RANGE",adx:17.5,chop:62.0,adaptive_score:-0.34},
+   {score:-40.0,direction:-1,gate:false,htf_agree:0.55,label:"WEAK"},
+   "Zayıf satış. Aralık rejimi: osilatörlere ağırlık verildi."),
+ LINKUSDT:mk("LINKUSDT","CHAINLINK",17.84,2.90,"BUY",64,"DÜŞÜK",870,0.5,"confirm",
+   {score:31.2,direction:1,label:"BUY",active:6,signals:[["oi_price_divergence",.28],["oi_breakout_confirm",.35],["funding_fade",-.12],["taker_aggression",.4],["ls_crowding_fade",-.1],["smart_dumb_spread",.22]]},
+   {regime:"TREND",adx:26.0,chop:36.5,adaptive_score:0.66},
+   {score:52.0,direction:1,gate:true,htf_agree:0.75,label:"WEAK"},
+   "Balina teyidi + orta güçte trend. Düşük risk."),
+};
+const ORDER=["WIFUSDT","BTCUSDT","AVAXUSDT","LINKUSDT","ETHUSDT","ARBUSDT","ARBUSDT","SOLUSDT","SUIUSDT"];
+const RANK=[...new Set(ORDER)].map(k=>MK[k]).sort((a,b)=>Math.abs(b.net)-Math.abs(a.net));
+
+/* ── helpers ────────────────────────────────────────────────────────────── */
+const cls=s=>s.includes("BUY")?"b":s.includes("SELL")?"s":"n";
+const mcls=s=>({STRONG_BUY:"sb",BUY:"b",STRONG_SELL:"ss",SELL:"s",NEUTRAL:"n"}[s]||"n");
+const fmt=v=>v>=1000?v.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2}):v>=1?v.toFixed(3):v.toFixed(4);
+const kfmt=v=>Math.abs(v)>=1000?(v/1000).toFixed(1)+"K":Math.round(v);
+function vu(conf,dir){let n=Math.round(conf/10);let h="";for(let i=0;i<10;i++)h+=`<i class="${i<n?'on '+(dir<0?'dn':''):''}"></i>`;return `<div class="vu">${h}</div>`;}
+function heat(mtf){return `<div class="heat">${mtf.map(m=>`<b class="${m.score>0?'u':m.score<0?'d':'z'}" title="${m.tf} ${m.confidence}%">${m.tf.replace('m','').replace('h','H').replace('d','D')}</b>`).join("")}</div>`;}
+function pill(sig,small){const c=cls(sig);return `<span class="pill ${c}"><span class="g"></span>${sig.replace("STRONG_","S-").replace("_"," ")}</span>`;}
+function gauge(name,score,cap){const p=Math.max(-100,Math.min(100,score));const pos=p>=0;const col=pos?"var(--up)":"var(--down)";
+  return `<div class="gauge"><div class="gt"><span class="gn">${name}</span><span class="gv" style="color:${col}">${p>0?'+':''}${p.toFixed(1)}</span></div>
+   <div class="bar"><div class="mid"></div><div class="fill ${pos?'pos':'neg'}" style="width:${Math.abs(p)/2}%"></div></div>
+   <div class="cap">${cap}</div></div>`;}
+
+/* ── views ──────────────────────────────────────────────────────────────── */
+let CUR="BTCUSDT";
+function viewScan(){
+  const rows=RANK.map((r,i)=>{
+    const hit=r.multiTf.filter(m=>m.score===Math.sign(r.net)).length;
+    return `<tr onclick="openSym('${r.s}')">
+      <td class="rk">${String(i+1).padStart(2,'0')}</td>
+      <td><div class="sym">${r.s.replace('USDT','')}<small>${r.name}</small></div></td>
+      <td>${pill(r.finalSignal)}</td>
+      <td class="r px">$${fmt(r.price)}<span class="chg ${r.ch>=0?'up':'dn'}" style="display:block;font-size:10px">${r.ch>=0?'+':''}${r.ch}%</span></td>
+      <td>${vu(r.confidence,r.net)}</td>
+      <td class="r score">${kfmt(r.net)}</td>
+      <td class="r" style="color:${hit>=10?'var(--up)':'var(--warn)'};font-family:var(--font-d);font-weight:700;font-size:10px">${hit}/12</td>
+      <td>${heat(r.multiTf)}</td>
+    </tr>`;}).join("");
+  return `
+  <div class="vhead"><span class="kicker">MANUEL TARAMA</span><h1>Piyasa Süpürmesi</h1>
+    <div class="meta">TÜM BINANCE USDT-M · 12 TF<br>KONSENSÜS · 57 İNDİKATÖR + 3 OVERLAY</div></div>
+  <div class="panel"><div class="ph"><span class="tick">▸</span>SIRALANMIŞ SONUÇLAR<span style="margin-left:auto;color:var(--faint)">${RANK.length} HAYATTA KALAN</span></div>
+    <div class="pb" style="padding:0">
+      <table class="rank"><thead><tr>
+        <th>#</th><th>SEMBOL</th><th>KARAR</th><th class="r">FİYAT</th><th>GÜVEN</th><th class="r">PUAN</th><th class="r">UYUM</th><th>12 ZAMAN DİLİMİ</th>
+      </tr></thead><tbody>${rows}</tbody></table>
+    </div></div>`;
+}
+function viewPanel(){
+  const d=MK[CUR];const c=cls(d.finalSignal);
+  const itbl=d.indicators.map(([fam,rows])=>
+    `<tr class="fam"><td colspan="3">${fam}</td></tr>`+
+    rows.map(([n,sg,rv])=>`<tr><td class="nm">${n}</td><td class="rv">${rv}</td><td class="sg"><span class="mini ${mcls(sg)}">${sg.replace("STRONG_","S-").replace("_"," ")}</span></td></tr>`).join("")
+  ).join("");
+  const wr=d.whaleRegime;const wrtag=wr==='confirm'?'<span class="tag good">BALİNA: TEYİT</span>':wr==='adverse'?'<span class="tag bad">BALİNA: KARŞIT</span>':'<span class="tag">BALİNA: NÖTR</span>';
+  const rg=d.regime;const mtf=d.mtfConfluence;
+  return `
+  <div class="vhead"><span class="kicker">SEMBOL DERİNLİK</span><h1>${d.s.replace('USDT','')} · ${d.name}</h1>
+    <div class="meta">1H BİRİNCİL · 12 TF KONSENSÜS<br>RİSK: ${d.risk}</div></div>
+  <div class="grid2">
+   <div>
+    <div class="panel"><div class="ph"><span class="tick">▸</span>KONSENSÜS KARARI</div>
+      <div class="price-row"><span class="p">$${fmt(d.price)}</span><span class="c ${d.ch>=0?'up':'dn'}">${d.ch>=0?'▲':'▼'} ${Math.abs(d.ch)}%</span>
+        <span style="margin-left:auto">${heat(d.multiTf)}</span></div>
+      <div class="verdict"><div class="big">
+          <div class="vlabel">NİHAİ SİNYAL</div>
+          <div class="vsig ${c}">${d.finalSignal.replace("STRONG_","GÜÇLÜ ").replace("_"," ")}</div>
+          <div class="vsub">${vu(d.confidence,d.net)} &nbsp; güven %${d.confidence}</div>
+        </div>
+        <div class="side">
+          <div class="cell"><div class="k">GÜVEN</div><div class="v">${d.confidence}<small>%</small></div></div>
+          <div class="cell"><div class="k">PUAN</div><div class="v" style="color:var(--warn)">${kfmt(d.net)}</div></div>
+        </div></div>
+      <div class="reason"><b>Tez.</b> ${d.reason}</div>
+      <div class="tagrow">${wrtag}
+        <span class="tag ${rg.regime==='TREND'?'good':rg.regime==='RANGE'?'hot':''}">REJİM: ${rg.regime}</span>
+        <span class="tag">ADX ${rg.adx}</span><span class="tag">CHOP ${rg.chop}</span>
+        <span class="tag ${mtf.gate?'good':''}">MTF ${mtf.gate?'✓ KAPI':'✕'} ${(mtf.htf_agree*100).toFixed(0)}%</span></div>
+    </div>
+    <div class="panel mute"><div class="ph"><span class="tick">▸</span>İNDİKATÖR TABLOSU · 57 SATIR</div>
+      <div class="pb" style="padding:0;max-height:none"><table class="itbl"><tbody>${itbl}</tbody></table></div></div>
+   </div>
+   <div>
+    <div class="panel"><div class="ph"><span class="tick">▸</span>FUTURES MİKROYAPI</div>
+      <div class="pb" style="padding:0">
+        ${gauge("BÜTÜN DEMET",d.microstructure.score,`${d.microstructure.active} sinyal aktif · ${d.microstructure.label}`)}
+        ${d.microstructure.signals.map(([n,v])=>gauge(n.replace(/_/g," ").toUpperCase(),v*100,"")).join("")}
+      </div></div>
+    <div class="panel mute"><div class="ph"><span class="tick">▸</span>REJİM & KONFLUENS</div>
+      <div class="pb" style="padding:0">
+        ${gauge("REJİM AĞIRLIKLI SKOR",rg.adaptive_score*50,`${rg.regime} · adx ${rg.adx} · chop ${rg.chop}`)}
+        ${gauge("MTF KONFLUENS",mtf.score,`üst-TF uyum ${(mtf.htf_agree*100).toFixed(0)}% · ${mtf.gate?'KAPI AÇIK':'kapı kapalı'}`)}
+        ${gauge("BALİNA UYUMSUZLUK",d.divergence.score,`en iyi ${d.divergence.tf} · kapsam ${d.divergence.coverage}/3`)}
+      </div></div>
+   </div>
+  </div>`;
+}
+function viewSoon(t){return `<div class="vhead"><span class="kicker">${t}</span><h1>${t}</h1><div class="meta">Panel görünümüyle aynı motor</div></div>
+ <div class="panel mute"><div class="ph"><span class="tick">▸</span>${t}</div><div class="pb"><div class="reason">Bu görünüm aynı canlı motoru kullanır — tasarım dili birebir aynı bileşenlerle uygulanır.</div></div></div>`;}
+
+/* ── router / theme / clock ─────────────────────────────────────────────── */
+const stage=document.getElementById('stage');
+function render(v){
+  stage.innerHTML = v==='scan'?viewScan():v==='panel'?viewPanel():viewSoon(v==='flow'?'OI · L/S':'SİNYAL');
+  document.getElementById('s-sym').textContent = v==='panel'?CUR:'TARAMA';
+}
+window.openSym=function(s){CUR=s;setView('panel');};
+let VIEW='scan';
+function setView(v){VIEW=v;document.querySelectorAll('.rail-btn[data-view]').forEach(b=>b.classList.toggle('on',b.dataset.view===v));render(v);}
+document.querySelectorAll('.rail-btn[data-view]').forEach(b=>b.onclick=()=>setView(b.dataset.view));
+
+const THEMES=[["phosphor","#39ff9e"],["amber","#ffb02e"],["ice","#59c6ff"],["paper","#c2410c"]];
+const tw=document.getElementById('themes');
+THEMES.forEach(([id,c])=>{const b=document.createElement('button');b.style.background=c;b.title=id;
+  b.onclick=()=>{document.documentElement.setAttribute('data-theme',id);[...tw.children].forEach(x=>x.classList.remove('on'));b.classList.add('on');};
+  if(id==='phosphor')b.classList.add('on');tw.appendChild(b);});
+
+function clk(){const d=new Date();document.getElementById('s-clk').textContent=d.toTimeString().slice(0,8);}
+clk();setInterval(clk,1000);
+
+setView('scan');
+</script>
+</body>
+</html>
