@@ -19,9 +19,12 @@ from diveintocrypto_desktop.data import open_interest as oi_mod
 from diveintocrypto_desktop.data import ratios as rat
 from diveintocrypto_desktop.data.http import FAPI_V1, get_json
 from diveintocrypto_desktop.engine.consensus.engine import ConsensusEngine
+from diveintocrypto_desktop.engine.consensus import regime as rg
 from diveintocrypto_desktop.engine.loader import load_config
 from diveintocrypto_desktop.engine.signal_service import SignalService
 from diveintocrypto_desktop.scan import divergence as dv
+from diveintocrypto_desktop.scan import microstructure as ms
+from diveintocrypto_desktop.scan import mtf as mtf_mod
 from diveintocrypto_desktop.scan.constants import ALL_TFS, DIVERGENCE_MIN_SHOWN, PERIOD_MS, TIME_WEIGHTS
 
 # Primary raw value to surface per indicator in the 15-row table.
@@ -156,6 +159,11 @@ def assemble(
         "bias": bias,
     }
 
+    # ── strategy overlays (all additive; do NOT alter the canonical consensus) ─
+    micro = ms.evaluate(series_data, enabled=cfg.get("microstructure", {}).get("enabled", True))
+    regime = rg.evaluate(primary_results or [], weights, cfg)
+    mtf_conf = mtf_mod.confluence(multi_tf)
+
     primary_candles = candles_by_tf.get(primary_tf) or next((c for c in candles_by_tf.values() if c), [])
 
     return {
@@ -178,6 +186,9 @@ def assemble(
         "quantBias": round(sym_div.score, 1),
         "whaleRegime": whale_regime,
         "divergence": {"score": round(sym_div.score, 1), "tf": sym_div.best_tf, "coverage": coverage},
+        "microstructure": micro,
+        "regime": regime,
+        "mtfConfluence": mtf_conf,
     }
 
 

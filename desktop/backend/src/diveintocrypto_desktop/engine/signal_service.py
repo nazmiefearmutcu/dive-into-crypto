@@ -48,6 +48,22 @@ from diveintocrypto_desktop.engine.indicators.relative_vigor_index import Relati
 from diveintocrypto_desktop.engine.indicators.balance_of_power import BalanceOfPowerIndicator
 from diveintocrypto_desktop.engine.indicators.accum_dist_line import AccumDistLineIndicator
 from diveintocrypto_desktop.engine.indicators.mass_index import MassIndexIndicator
+# --- New indicators batch 2 (strategy-lab, 2026-07-19) ---
+from diveintocrypto_desktop.engine.indicators.cmo import CMOIndicator
+from diveintocrypto_desktop.engine.indicators.tsi import TSIIndicator
+from diveintocrypto_desktop.engine.indicators.vwma_cross import VWMACrossIndicator
+from diveintocrypto_desktop.engine.indicators.qstick import QstickIndicator
+from diveintocrypto_desktop.engine.indicators.force_index import ForceIndexIndicator
+from diveintocrypto_desktop.engine.indicators.bollinger_percent_b import BollingerPercentBIndicator
+from diveintocrypto_desktop.engine.indicators.zscore_reversion import ZScoreReversionIndicator
+from diveintocrypto_desktop.engine.indicators.linreg_slope import LinRegSlopeIndicator
+from diveintocrypto_desktop.engine.indicators.atr_percentile import ATRPercentileIndicator
+from diveintocrypto_desktop.engine.indicators.hist_vol_percentile import HistVolPercentileIndicator
+from diveintocrypto_desktop.engine.indicators.hurst import HurstRegimeIndicator
+from diveintocrypto_desktop.engine.indicators.range_expansion import RangeExpansionIndicator
+from diveintocrypto_desktop.engine.indicators.kalman_trend import KalmanTrendIndicator
+from diveintocrypto_desktop.engine.indicators.half_life_reversion import HalfLifeReversionIndicator
+from diveintocrypto_desktop.engine.indicators.rolling_sharpe import RollingSharpeIndicator
 from diveintocrypto_desktop.engine.utils.logger import get_logger
 
 logger = get_logger("services.signal_service")
@@ -106,6 +122,22 @@ class SignalService:
             BalanceOfPowerIndicator,
             AccumDistLineIndicator,
             MassIndexIndicator,
+            # --- New indicators batch 2 (strategy-lab, 2026-07-19) ---
+            CMOIndicator,
+            TSIIndicator,
+            VWMACrossIndicator,
+            QstickIndicator,
+            ForceIndexIndicator,
+            BollingerPercentBIndicator,
+            ZScoreReversionIndicator,
+            LinRegSlopeIndicator,
+            ATRPercentileIndicator,
+            HistVolPercentileIndicator,
+            HurstRegimeIndicator,
+            RangeExpansionIndicator,
+            KalmanTrendIndicator,
+            HalfLifeReversionIndicator,
+            RollingSharpeIndicator,
         ]
         return [cls(self.config) for cls in indicator_classes]
 
