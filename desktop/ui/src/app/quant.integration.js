@@ -1,5 +1,5 @@
 global.window = global;
-const Q = require("./quant.js");   // must load BEFORE data.js (data.js calls SGS_QUANT.decision)
+const Q = require("./quant.cjs");   // must load BEFORE data.js (data.js calls SGS_QUANT.decision)
 require("./data.js");
 const uni = global.SGS_DATA;
 const dist = { confirm: 0, adverse: 0, neutral: 0 };

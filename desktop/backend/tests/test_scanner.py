@@ -38,6 +38,10 @@ def test_rank_score_blends_divergence():
 
 @pytest.mark.live
 def test_live_scan_small():
+    from diveintocrypto_desktop.engine.loader import load_config
+    from diveintocrypto_desktop.engine.signal_service import SignalService
+    expected_indicator_count = len(SignalService(load_config()).indicators)
+
     async def run():
         try:
             res = await scanner.scan(size=5, universe_limit=12)
@@ -45,7 +49,7 @@ def test_live_scan_small():
             assert 0 < len(res["survivors"]) <= 5
             top = res["survivors"][0]
             assert top["s"].endswith("USDT")
-            assert len(top["multiTf"]) == 12 and len(top["indicators"]) == 15
+            assert len(top["multiTf"]) == 12 and len(top["indicators"]) == expected_indicator_count
             assert top["finalSignal"] in {"STRONG_BUY", "BUY", "NEUTRAL", "SELL", "STRONG_SELL"}
             assert "_candles_by_tf" not in top  # transient cache stripped
         finally:

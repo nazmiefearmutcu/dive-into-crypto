@@ -142,3 +142,53 @@ def test_zlema_correctness_and_parity():
     for r, e in zip(result, expected):
         assert abs(r - e) < 1e-9
 
+
+def test_sanitize_under_threshold():
+    # Less than 20% corrupt values (n = 30, limit is n // 5 = 6 corrupt values allowed)
+    # We corrupt 3 values (10%), they should be forward/back-filled.
+    prices = [100.0 + i for i in range(30)]
+    prices[5] = float('nan')
+    prices[15] = float('nan')
+    prices[25] = float('nan')
+    
+    clean = dv._sanitize(prices, 30)
+    assert clean is not None
+    assert len(clean) == 30
+    assert clean[5] == 100.0 + 4  # forward filled from index 4
+    assert clean[15] == 100.0 + 14  # forward filled from index 14
+    assert clean[25] == 100.0 + 24  # forward filled from index 24
+
+
+def test_sanitize_over_threshold_returns_none():
+    # n = 30, n // 5 = 6 limit. 7 corrupt values (23.3%) should cause it to return None.
+    prices = [100.0 + i for i in range(30)]
+    for idx in [2, 5, 8, 11, 14, 17, 20]:
+        prices[idx] = float('nan')
+    
+    clean = dv._sanitize(prices, 30)
+    assert clean is None
+
+
+def test_sanitize_all_nan_returns_none():
+    # If all values are NaN, sanitize returns None.
+    prices = [float('nan')] * 30
+    assert dv._sanitize(prices, 30) is None
+
+
+def test_per_tf_returns_none_tf_on_corrupt_data():
+    # If price has more than 20% NaN, per_tf returns NONE_TF
+    prices = rising_price()
+    for idx in range(15): # 15 / 60 = 25% corrupt
+        prices[idx] = float('nan')
+    
+    r = dv.per_tf(prices, distributing_whale(), tf_weight=95)
+    assert r == dv.NONE_TF
+
+
+def test_per_tf_handles_invalid_start_price_or_whale():
+    # If start values are <= 0, per_tf returns NONE_TF
+    prices = [0.0] * 60
+    r = dv.per_tf(prices, distributing_whale(), tf_weight=95)
+    assert r == dv.NONE_TF
+
+

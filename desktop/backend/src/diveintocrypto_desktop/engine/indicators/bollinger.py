@@ -1,8 +1,6 @@
 """Bollinger Bands indicator."""
 
-from typing import Any
 import pandas as pd
-import numpy as np
 
 from diveintocrypto_desktop.engine.indicators.base import BaseIndicator, IndicatorResult, Signal
 
@@ -48,13 +46,13 @@ class BollingerBandsIndicator(BaseIndicator):
 
         if current_close < current_lower:
             if is_squeeze:
-                return self._make_result(Signal.BUY, "Price below lower band during squeeze - potential breakout", raw)
+                return self._make_result(Signal.SELL, "Price below lower band during squeeze - potential breakout", raw)
             return self._make_result(Signal.STRONG_BUY, "Price below lower Bollinger Band", raw)
         elif position < 0.15:
             return self._make_result(Signal.BUY, f"Price near lower Bollinger Band (pos={position:.2f})", raw)
         elif current_close > current_upper:
             if is_squeeze:
-                return self._make_result(Signal.SELL, "Price above upper band during squeeze - potential breakout", raw)
+                return self._make_result(Signal.BUY, "Price above upper band during squeeze - potential breakout", raw)
             return self._make_result(Signal.STRONG_SELL, "Price above upper Bollinger Band", raw)
         elif position > 0.85:
             return self._make_result(Signal.SELL, f"Price near upper Bollinger Band (pos={position:.2f})", raw)

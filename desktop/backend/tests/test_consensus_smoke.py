@@ -26,10 +26,11 @@ def _synthetic_ohlcv(n: int = 300) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def test_signal_service_returns_15_results():
+def test_signal_service_returns_expected_results():
     df = _synthetic_ohlcv()
-    results = SignalService(load_config()).calculate_all(df)
-    assert len(results) == 15
+    service = SignalService(load_config())
+    results = service.calculate_all(df)
+    assert len(results) == len(service.indicators)
     assert all(isinstance(r, IndicatorResult) for r in results)
     names = {r.name for r in results}
     assert {"rsi", "macd", "adx_di", "atr_filter", "ichimoku"} <= names

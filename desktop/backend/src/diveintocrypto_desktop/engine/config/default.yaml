@@ -21,6 +21,9 @@ indicator_thresholds:
   atr:
     high_volatility_multiplier: 2.0
     period: 14
+  awesome_oscillator:
+    fast_period: 5
+    slow_period: 34
   bollinger:
     period: 20
     squeeze_threshold: 0.02
@@ -31,6 +34,16 @@ indicator_thresholds:
     sell: 100
     strong_buy: -200
     strong_sell: 200
+  choppiness:
+    choppy_threshold: 61.8
+    period: 14
+    trending_threshold: 38.2
+  cmf:
+    buy: 0.05
+    period: 20
+    sell: -0.05
+    strong_buy: 0.2
+    strong_sell: -0.2
   ema_cross:
     long_period: 21
     short_period: 9
@@ -71,11 +84,22 @@ indicator_thresholds:
     long_period: 50
     short_period: 10
     strong_divergence_pct: 0.02
+  squeeze:
+    bb_mult: 2.0
+    kc_mult: 1.5
+    period: 20
   stochastic:
     d_period: 3
     k_period: 14
     overbought: 80
     oversold: 20
+  supertrend:
+    multiplier: 3.0
+    period: 10
+  vortex:
+    period: 14
+  vwap:
+    period: 20
   williams_r:
     overbought: -20
     oversold: -80
@@ -83,8 +107,11 @@ indicator_thresholds:
 indicator_weights:
   adx_di: 1.5
   atr_filter: 0.0
+  awesome_oscillator: 1.2
   bollinger: 1.5
   cci: 1.0
+  choppiness: 1.0
+  cmf: 1.5
   ema_cross: 1.8
   ichimoku: 2.0
   macd: 2.0
@@ -94,8 +121,33 @@ indicator_weights:
   roc: 1.0
   rsi: 1.5
   sma_cross: 1.8
+  squeeze: 2.5
   stochastic: 1.2
+  supertrend: 2.0
+  vortex: 1.5
+  vwap: 1.8
   williams_r: 1.0
+  # --- New indicators (strategy-lab R&D fleet, 2026-07-19) ---
+  keltner_breakout: 1.5
+  donchian_breakout: 1.5
+  chaikin_oscillator: 1.3
+  elder_ray: 1.2
+  klinger_oscillator: 1.3
+  trix: 1.4
+  coppock_curve: 1.2
+  kst: 1.4
+  dpo: 1.0
+  fisher_transform: 1.2
+  connors_rsi: 1.2
+  stoch_rsi: 1.2
+  ultimate_oscillator: 1.2
+  aroon_oscillator: 1.3
+  schaff_trend_cycle: 1.4
+  wavetrend: 1.5
+  relative_vigor_index: 1.1
+  balance_of_power: 1.0
+  accum_dist_line: 1.3
+  mass_index: 1.0
 leverage:
   enabled: true
   min_leverage: 2

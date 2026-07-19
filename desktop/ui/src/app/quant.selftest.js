@@ -2,7 +2,7 @@
    SGS quant self-test — sign conventions + elimination/backfill invariants.
    Run:  node quant.selftest.js     (exit 0 = all green)
    ========================================================================== */
-const Q = require("./quant.js");
+const Q = require("./quant.cjs");
 
 let pass = 0, fail = 0;
 function ok(name, cond) { if (cond) { pass++; } else { fail++; console.log("  ✗ FAIL:", name); } }
@@ -125,7 +125,7 @@ ok("dir0 never adverse", Q.divergence(coin("F", "NEUTRAL", -1, 1)).adverse === f
 /* ── LENS A (sign conventions + v2 coherence gate) — self-contained IIFE with
    its own require + counters so it is independent of the parent harness. ── */
 (function () {
-  const Q2 = require("./quant.js");
+  const Q2 = require("./quant.cjs");
   let p2 = 0, f2 = 0;
   function ok2(name, cond) { if (cond) p2++; else { f2++; console.log("  ✗ LENS-A FAIL:", name); } }
   function approx2(a, b, e) { return Math.abs(a - b) <= (e || 1e-9); }

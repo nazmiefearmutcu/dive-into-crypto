@@ -7,6 +7,7 @@ real activity; scan results are cached briefly to respect Binance rate limits.
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import asyncio
 import time
 from collections import deque
@@ -38,7 +39,12 @@ def _log(msg: str, status: int = 200, ms: int = 0) -> None:
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="Dive Into Crypto — Desktop", version="0.1.0")
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        yield
+        await close_session()
+
+    app = FastAPI(title="Dive Into Crypto — Desktop", version="0.1.0", lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware, allow_origins=["http://127.0.0.1", "http://localhost"],
         allow_origin_regex=r"http://(127\.0\.0\.1|localhost):\d+", allow_methods=["GET"], allow_headers=["*"],
@@ -116,9 +122,6 @@ def create_app() -> FastAPI:
         except WebSocketDisconnect:
             return
 
-    @app.on_event("shutdown")
-    async def _shutdown() -> None:
-        await close_session()
 
     if _UI_DIST.exists():
         app.mount("/", StaticFiles(directory=str(_UI_DIST), html=True), name="ui")
