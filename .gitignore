@@ -34,7 +34,10 @@ keystore.properties
 
 # ── Desktop edition ──
 # NOTE: desktop/ui/dist/ IS committed (prebuilt bundle) so the app runs with no Node.
+# The backend serves it directly (api/app.py → _UI_DIST), so it is a runtime artefact,
+# not a build leftover. Rebuild with `cd desktop/ui && npm run build` after editing src/.
 desktop/ui/node_modules/
+desktop/ui/test/.tmp/
 desktop/backend/.venv/
 desktop/backend/data/
 
@@ -43,6 +46,8 @@ desktop/backend/data/
 **/*.pyc
 *.pyc
 
-# Agents
+# Agents — working notes carry local machine paths; never publish.
 .agents/
+docs/superpowers/
+.superpowers/
 
