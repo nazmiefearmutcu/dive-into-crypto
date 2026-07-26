@@ -128,13 +128,36 @@ Cross-language parity is enforced **per indicator**, not per screen, against a `
 fixture (signal + score, exact): the original 15-indicator core has its long-standing fixture gate,
 and the 42 extended indicators have their own (`ExtendedIndicatorsFixtureTest`) — every Kotlin
 indicator must reproduce the Python reference bit-for-signal. The three overlays (microstructure ·
-regime · MTF-confluence) are ported with mirrored unit tests. Nothing is synthesised — when a data
-source is unavailable it is shown as unavailable, never faked.
+regime · MTF-confluence) are ported with mirrored unit tests.
 
 ```bash
 cd desktop/backend && uv run pytest -q      # engine, parity, parsers  (offline)
 uv run pytest -m live -q                     # network-gated, against live Binance
+cd desktop/ui && npm ci && npm test          # UI: no-fabricated-data guarantees
 ```
+
+---
+
+## Nothing is synthesised
+
+When a data source is unavailable it is shown as unavailable, never faked. A failed fetch renders an
+explicit **DATA SOURCE UNAVAILABLE** state naming the underlying error — it does not fill the screen
+with plausible-looking numbers. This matters here specifically: Binance market data is geo-restricted
+in some regions (Türkiye included), so the failure path is a *normal* condition, not an edge case.
+
+There is one fabricated dataset in the repo, `desktop/ui/src/app/mock.js`, and it exists only so a
+developer can exercise the UI without a backend. It is **manual-only** — nothing in the app calls it —
+and while it is active the UI renders a fixed `DEMO DATA — NOT LIVE MARKET DATA` banner across the
+viewport plus an inline `DEMO` marker on every fabricated price, verdict and rationale, so a
+fabricated signal cannot be screenshotted without the warning in frame.
+
+Both properties are pinned by tests (`desktop/ui/test/demo-mode.test.mjs`): one asserts a failed fetch
+leaves every data global empty and never reaches the demo generator, another asserts the banner and
+per-value markers render whenever demo mode is on.
+
+> Earlier revisions did auto-invoke the demo generator when the universe fetch threw, with no on-screen
+> indication. Given the geo-restriction above that path could fire routinely — if you ran a build from
+> before this note, treat any signal you saw as unverified.
 
 ---
 

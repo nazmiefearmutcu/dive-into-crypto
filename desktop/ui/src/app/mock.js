@@ -1,7 +1,16 @@
-/* Offline demo market — populates SGS_DATA_MAP / SGS_SCAN with the REAL contract
-   shape (assemble() output) so the UI renders without the backend. Activated by
-   window.DIVE_MOCK() when a live fetch fails. No effect when the backend is up. */
+/* FABRICATED demo market — every price, verdict, confidence and rationale below is
+   INVENTED. It exists only so a developer can exercise the UI without a backend.
+
+   HARD RULES (do not weaken):
+   1. window.DIVE_MOCK() is MANUAL ONLY. Nothing in the app may call it automatically.
+      A failed live fetch must surface as an error, never as fabricated data.
+   2. Activating it flips window.DIVE_DEMO.active and stamps <html data-demo="1">,
+      which makes the app render a permanent, unmissable DEMO banner.
+   3. Every fabricated symbol object carries `_demo:true` so individual cards can be
+      marked at the point of display, not just globally.
+   Invoke from the devtools console: DIVE_MOCK() */
 (function(){
+  window.DIVE_DEMO = window.DIVE_DEMO || { active:false };
   const TFS=["1m","3m","5m","15m","30m","1h","2h","4h","6h","8h","12h","1d"];
   const NAMES="ema_cross sma_cross macd ichimoku psar adx_di supertrend vortex aroon_oscillator schaff_trend_cycle trix kst coppock_curve kalman_trend donchian_breakout keltner_breakout elder_ray roc awesome_oscillator relative_vigor_index cmo tsi qstick rsi stochastic williams_r cci connors_rsi stoch_rsi ultimate_oscillator fisher_transform wavetrend obv mfi cmf vwap chaikin_oscillator klinger_oscillator accum_dist_line force_index vwma_cross bollinger bollinger_percent_b squeeze choppiness atr_filter atr_percentile hist_vol_percentile mass_index range_expansion hurst balance_of_power zscore_reversion linreg_slope half_life_reversion rolling_sharpe".split(" ");
   const SIGS=["STRONG_BUY","BUY","NEUTRAL","SELL","STRONG_SELL"];
@@ -12,7 +21,7 @@
     const sig=v>0.9?"STRONG_BUY":v>0.25?"BUY":v<-0.9?"STRONG_SELL":v<-0.25?"SELL":"NEUTRAL";
     return{name,signal:sig,weight:1.2,value:+(v*20).toFixed(2)};});}
   function sym(s,name,price,ch,sig,conf,risk,net,bias,wr,ms,rg,mtf,reason){const r=rng(s.length*97+Math.round(price));
-    return{s,name,price,ch,finalSignal:sig,confidence:conf,risk,netNss:net,quantBias:net>0?42.1:-38.5,
+    return{s,name,price,ch,finalSignal:sig,confidence:conf,risk,netNss:net,quantBias:net>0?42.1:-38.5,_demo:true,
       multiTf:multiTf(r,bias),indicators:inds(r,bias),whaleRegime:wr,
       divergence:{score:wr==="adverse"?-61.2:wr==="confirm"?58.4:12.1,tf:"4h",coverage:wr==="neutral"?1:3},
       microstructure:ms,regime:rg,mtfConfluence:mtf,reason};}
@@ -51,12 +60,17 @@
      {regime:"MIXED",adx:19,chop:55.2,adaptive_score:-0.06},{score:8,direction:1,gate:false,htf_agree:0.4,label:"NEUTRAL"},
      "Çatışan sinyaller nötrlüğe zorluyor. Yüksek risk."),
   };
+  /* Manual demo mode. Never called automatically — see HARD RULES above. */
   window.DIVE_MOCK=function(){
     const order=["WIFUSDT","BTCUSDT","AVAXUSDT","LINKUSDT","ETHUSDT","ARBUSDT","SOLUSDT","SUIUSDT"];
+    window.DIVE_DEMO.active=true;
+    try{ document.documentElement.setAttribute("data-demo","1"); }catch(e){}
+    if(typeof console!=="undefined"&&console.warn)
+      console.warn("[DIVE] DEMO MODE ON — every price, verdict and score on screen is FABRICATED. Not live market data.");
     Object.keys(M).forEach(k=>{window.SGS_DATA_MAP[k]=M[k];});
     window.SGS_DATA=order.map(k=>M[k]);
-    window.SGS_SCAN={survivors:order.map((k,i)=>({d:M[k],score:M[k].netNss,rank:i+1})),eliminated:[],scanned:60,universeCount:437};
-    window.SGS_LOGS=[{t:"12:09:44",msg:"GET /fapi/v1/klines BTCUSDT 1h → 200 (300 mum)"},{t:"12:09:44",msg:"GET /futures/data/openInterestHist → 200"},{t:"12:09:43",msg:"scan(15,24) → 8 survivor / 437 evren"}];
+    window.SGS_SCAN={survivors:order.map((k,i)=>({d:M[k],score:M[k].netNss,rank:i+1,_demo:true})),eliminated:[],scanned:60,universeCount:437,_demo:true};
+    window.SGS_LOGS=[{t:"--:--:--",msg:"[DEMO] fabricated log line — no request was made"},{t:"--:--:--",msg:"[DEMO] fabricated log line — no request was made"},{t:"--:--:--",msg:"[DEMO] fabricated log line — no request was made"}];
     if(typeof window.__diveOnData==="function") window.__diveOnData();
   };
 })();

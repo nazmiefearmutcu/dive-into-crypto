@@ -170,3 +170,32 @@ body::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:60;opa
 .stage>*:nth-child(2){animation-delay:.05s}.stage>*:nth-child(3){animation-delay:.1s}.stage>*:nth-child(4){animation-delay:.15s}.stage>*:nth-child(5){animation-delay:.2s}
 @keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 .hidden{display:none!important}
+
+/* ── demo / data-unavailable surfacing ───────────────────────────────────────
+   The banner is deliberately theme-INDEPENDENT (hard-coded hazard colours, no
+   var()) so demo mode cannot be disguised by picking a theme, and sits above the
+   scanline overlay (z-index 60) so it is always in frame on a screenshot. */
+.demo-banner{position:fixed;top:0;left:0;right:0;z-index:9999;height:34px;
+  display:flex;align-items:center;justify-content:center;gap:16px;padding:0 14px;
+  background:repeating-linear-gradient(135deg,#ff2d55 0 14px,#1a0006 14px 28px);
+  color:#fff;font-family:var(--font-d),ui-monospace,monospace;font-size:11px;letter-spacing:.16em;
+  border-bottom:2px solid #ff2d55;text-shadow:0 1px 2px #000;pointer-events:none;white-space:nowrap;overflow:hidden}
+.demo-banner b{font-weight:800;font-size:12px}
+.demo-banner span{font-size:10px;letter-spacing:.08em;opacity:.92;text-transform:none}
+.app.is-demo{margin-top:34px;height:calc(100vh - 34px)}
+.app.is-demo::after{content:"";position:fixed;inset:34px 0 0 0;pointer-events:none;z-index:58;
+  border:2px solid rgba(255,45,85,.55)}
+.strip .live.demo{color:#ff5c7a}
+.strip .live.demo .dot{background:#ff2d55;box-shadow:0 0 12px rgba(255,45,85,.6)}
+
+/* Inline marker pinned to an individual fabricated value. */
+.demo-mark{display:inline-block;vertical-align:middle;margin:0 5px;padding:1px 5px;
+  background:#ff2d55;color:#fff;font-family:var(--font-d),ui-monospace,monospace;
+  font-size:8px;font-weight:800;letter-spacing:.12em;line-height:1.5;border-radius:1px;white-space:nowrap}
+
+/* Explicit "no data" state — replaces the old silent fabricated fallback. */
+.state.src-down{height:auto;padding:56px 24px;max-width:760px;margin:0 auto;gap:18px}
+.src-down .sd-title{font-family:var(--font-d);font-size:13px;font-weight:800;letter-spacing:.14em;color:var(--warn)}
+.src-down .sd-body{color:var(--dim);font-size:12.5px;line-height:1.65;text-align:center}
+.src-down .sd-err{font-family:var(--font-m);font-size:11px;color:var(--down);
+  border:1px solid var(--line2);background:var(--panel);padding:8px 12px;max-width:100%;overflow-wrap:anywhere}

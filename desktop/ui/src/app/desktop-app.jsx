@@ -1,8 +1,12 @@
 /* ============================================================================
    DIVE INTO CRYPTO — DESKTOP · "DEPTH TERMINAL"  (self-contained React app)
    Reads the live backend via window.DIVE / SGS_DATA_MAP / SGS_SCAN (data.js).
-   Falls back to an embedded demo market when the backend is unreachable, so the
-   UI renders standalone. Themed via [data-theme] on <html>.
+
+   When the backend is unreachable the UI renders an explicit "data source
+   unavailable" state. It NEVER falls back to fabricated data: the embedded demo
+   market (mock.js) is manual-only, and while it is active a permanent banner plus
+   a per-value DEMO marker make every fabricated number impossible to mistake for
+   a live quote. Themed via [data-theme] on <html>.
    ========================================================================== */
 const { useState, useEffect, useRef, useCallback } = React;
 
@@ -70,6 +74,56 @@ function Heat({multiTf}){
 
 function Pill({sig}){const c=cls(sig);return <span className={"pill "+c}><span className="g"/>{shortSig(sig)}</span>;}
 
+/* ── demo-mode surfacing ─────────────────────────────────────────────────────
+   mock.js fabricates prices/verdicts wholesale. It is manual-only, but if it IS
+   on, nothing fabricated may reach the screen unlabelled: a fixed banner spans
+   the viewport and every fabricated value carries an inline DEMO marker, so a
+   fabricated verdict cannot be screenshotted without the warning in frame. */
+const isDemo = () => !!(typeof window!=="undefined" && window.DIVE_DEMO && window.DIVE_DEMO.active);
+
+function DemoBanner(){
+  if(!isDemo()) return null;
+  return <div className="demo-banner" role="alert" data-testid="demo-banner">
+    <b>DEMO DATA — NOT LIVE MARKET DATA</b>
+    <span>Ekrandaki her fiyat, karar ve skor UYDURMADIR · every price, verdict and score on screen is FABRICATED</span>
+  </div>;
+}
+
+/* Inline marker attached to an individual fabricated value. */
+function DemoMark({row}){
+  if(!(row && row._demo)) return null;
+  return <span className="demo-mark" title="Fabricated demo value — not live market data">DEMO</span>;
+}
+
+function DataSourceDown({error,onRetry}){
+  return <div className="state src-down" role="alert" data-testid="source-unavailable">
+    <div className="sd-title">VERİ KAYNAĞI KULLANILAMIYOR · DATA SOURCE UNAVAILABLE</div>
+    <div className="sd-body">
+      Yerel arka uca ya da Binance USDT-M public API'sine ulaşılamadı. Hiçbir sayı gösterilmiyor —
+      bu uygulama veri yokken veri uydurmaz.<br/>
+      Could not reach the local backend or the Binance USDT-M public API. No numbers are shown:
+      this app does not synthesise data it does not have.
+      <br/><br/>
+      Binance market data is geo-restricted in some regions (Türkiye included). That is a network
+      condition, not an app bug.
+    </div>
+    {error && <div className="sd-err">{String(error)}</div>}
+    <button className="cta" onClick={onRetry}>TEKRAR DENE · RETRY</button>
+  </div>;
+}
+
+/* Boot the symbol universe. Extracted so the no-fabrication guarantee is directly
+   testable: on failure this returns an error and MUST NOT touch window.DIVE_MOCK. */
+async function bootUniverse(api){
+  try{
+    const u = await api.universe(60);
+    const top = (u||[]).slice(0,8).map(r=>r.s);
+    return { ok:true, symbol: top[0] || null, error:null };
+  }catch(e){
+    return { ok:false, symbol:null, error: (e && e.message) ? e.message : String(e) };
+  }
+}
+
 function Gauge({name,score,cap}){const p=Math.max(-100,Math.min(100,score||0));const pos=p>=0;
   return <div className="gauge">
     <div className="gt"><span className="gn">{name}</span>
@@ -100,8 +154,8 @@ function Scanner({onPick}){
               return <tr key={d.s} onClick={()=>onPick(d.s)}>
                 <td className="rk">{String(i+1).padStart(2,"0")}</td>
                 <td><div className="sym">{d.s.replace("USDT","")}<small>{d.name||d.s}</small></div></td>
-                <td><Pill sig={d.finalSignal||"NEUTRAL"}/></td>
-                <td className="r"><span className="px">${fmt(d.price)}</span>
+                <td><Pill sig={d.finalSignal||"NEUTRAL"}/><DemoMark row={d}/></td>
+                <td className="r"><span className="px">${fmt(d.price)}</span><DemoMark row={d}/>
                   <span className={"chg "+(d.ch>=0?"up":"dn")} style={{display:"block",fontSize:10}}>{d.ch>=0?"+":""}{num(d.ch,2)}%</span></td>
                 <td><Vu conf={d.confidence} dir={dir}/></td>
                 <td className="r score">{kfmt(score)}</td>
@@ -139,18 +193,18 @@ function Panel({sym}){
     <div className="grid2">
       <div>
         <div className="panel"><div className="ph"><span className="tick">▸</span>KONSENSÜS KARARI</div>
-          <div className="price-row"><span className="p">${fmt(d.price)}</span>
+          <div className="price-row"><span className="p">${fmt(d.price)}</span><DemoMark row={d}/>
             <span className={"c "+(d.ch>=0?"up":"dn")}>{d.ch>=0?"▲":"▼"} {num(Math.abs(d.ch||0),2)}%</span>
             <span style={{marginLeft:"auto"}}><Heat multiTf={d.multiTf}/></span></div>
           <div className="verdict">
-            <div className="big"><div className="vlabel">NİHAİ SİNYAL</div>
+            <div className="big"><div className="vlabel">NİHAİ SİNYAL <DemoMark row={d}/></div>
               <div className={"vsig "+c}>{shortSig(d.finalSignal||"NEUTRAL").replace("S-","GÜÇLÜ ")}</div>
               <div className="vsub"><Vu conf={d.confidence} dir={dir}/> güven %{d.confidence||0}</div></div>
             <div className="side">
               <div className="cell"><div className="k">GÜVEN</div><div className="v">{d.confidence||0}<small>%</small></div></div>
               <div className="cell"><div className="k">PUAN</div><div className="v" style={{color:"var(--warn)"}}>{kfmt(score)}</div></div>
             </div></div>
-          <div className="reason"><b>Tez.</b> {d.reason||"—"}</div>
+          <div className="reason"><b>Tez.</b> <DemoMark row={d}/> {d.reason||"—"}</div>
           <div className="tagrow">{wrtag}
             <span className={"tag "+(rg.regime==="TREND"?"good":rg.regime==="RANGE"?"hot":"")}>REJİM: {rg.regime||"—"}</span>
             {rg.adx!=null && <span className="tag">ADX {num(rg.adx)}</span>}
@@ -224,7 +278,9 @@ function App(){
   const [theme,setThemeState]=useState(()=>localStorage.getItem("dive_theme")||"phosphor");
   const [q,setQ]=useState("");
   const [clock,setClock]=useState("");
+  const [bootErr,setBootErr]=useState(null);
   const [,force]=useState(0);
+  const demo=isDemo();
   const setTheme=(t)=>{setThemeState(t);localStorage.setItem("dive_theme",t);document.documentElement.setAttribute("data-theme",t);};
 
   useEffect(()=>{document.documentElement.setAttribute("data-theme",theme);},[]);
@@ -232,17 +288,16 @@ function App(){
   useEffect(()=>{const id=setInterval(()=>setClock(new Date().toTimeString().slice(0,8)),1000);
     setClock(new Date().toTimeString().slice(0,8));return()=>clearInterval(id);},[]);
 
-  // boot: universe → first symbol; mock fallback if backend down
-  useEffect(()=>{(async()=>{
-    try{
-      const u=await window.DIVE.universe(60);
-      const top=(u||[]).slice(0,8).map(r=>r.s);
-      setSym(s=>s||top[0]||"BTCUSDT");
-    }catch(e){
-      if(window.DIVE_MOCK) window.DIVE_MOCK();
-      setSym(s=>s||"BTCUSDT"); force(v=>v+1);
-    }
-  })();},[]);
+  // boot: universe → first symbol. If the fetch fails we surface an explicit
+  // unavailable state — we do NOT fabricate a market to fill the screen.
+  const boot=useCallback(async()=>{
+    setBootErr(null);
+    const r=await bootUniverse(window.DIVE);
+    if(r.ok){ setSym(s=>s||r.symbol||"BTCUSDT"); }
+    else{ setBootErr(r.error||"unknown error"); }
+    force(v=>v+1);
+  },[]);
+  useEffect(()=>{ boot(); },[boot]);
 
   useEffect(()=>{ if(sym&&SYMBOL_VIEWS.has(view)) window.DIVE?.symbol?.(sym).catch(()=>{}); },[sym,view]);
   useEffect(()=>{ let live=true; const tick=async()=>{ if(!live)return;
@@ -256,17 +311,25 @@ function App(){
     setSym(s); if(!SYMBOL_VIEWS.has(view)) setView("panel"); setQ("");};
   const pick=(s)=>{setSym(s);setView("panel");};
 
+  // A failed boot with nothing to show renders the unavailable state, not a
+  // fabricated market. Settings stays reachable so the app is not a dead end.
+  const noData=!!bootErr && !demo && !(window.SGS_DATA||[]).length;
+
   let body;
-  if(view==="scan") body=<Scanner onPick={pick}/>;
+  if(noData && view!=="settings") body=<DataSourceDown error={bootErr} onRetry={boot}/>;
+  else if(view==="scan") body=<Scanner onPick={pick}/>;
   else if(view==="panel") body=<Panel sym={sym}/>;
   else if(view==="flow") body=<Flow sym={sym}/>;
   else if(view==="sig") body=<Signal sym={sym}/>;
   else if(view==="logs") body=<Logs/>;
   else body=<Settings theme={theme} setTheme={setTheme}/>;
 
-  return <div className="app">
+  return <div className={"app"+(demo?" is-demo":"")}>
+    <DemoBanner/>
     <div className="strip">
-      <span className="live"><span className="dot"/>CANLI</span><span className="seg">│</span>
+      {demo
+        ? <span className="live demo"><span className="dot"/>DEMO</span>
+        : <span className="live"><span className="dot"/>CANLI</span>}<span className="seg">│</span>
       <span>BINANCE USDT-M · PERP</span><span className="seg">│</span>
       <span><b>57</b> İNDİKATÖR</span><span className="seg">│</span><span><b>12</b> TF</span>
       <span className="spacer"/>
@@ -286,4 +349,8 @@ function App(){
   </div>;
 }
 
-ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+/* Mount only in a real browser document; importing this bundle in a test runner
+   must not try to mount. Named pieces are exported for the demo-mode tests. */
+const _diveRoot = (typeof document!=="undefined" && document.getElementById) ? document.getElementById("root") : null;
+if(_diveRoot) ReactDOM.createRoot(_diveRoot).render(<App/>);
+globalThis.DIVE_APP = { App, DemoBanner, DemoMark, DataSourceDown, bootUniverse, isDemo };

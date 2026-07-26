@@ -5,7 +5,8 @@
   "description": "Dive Into Crypto — Desktop UI (terminal-themed scanner front-end)",
   "type": "module",
   "scripts": {
-    "build": "node build.mjs"
+    "build": "node build.mjs",
+    "test": "node --test \"test/**/*.test.mjs\""
   },
   "devDependencies": {
     "esbuild": "^0.24.2",
