@@ -7,8 +7,10 @@ os.environ['NO_PROXY'] = '127.0.0.1,localhost'
 os.environ['no_proxy'] = '127.0.0.1,localhost'
 from pathlib import Path
 
-# Add backend src to sys.path
-backend_src = Path("/Users/nazmi/dive-into-crypto/desktop/backend/src")
+# Add backend src to sys.path. Derived from this file's location so the suite
+# runs from any checkout rather than one hardcoded developer machine.
+REPO_ROOT = Path(__file__).resolve().parents[1]
+backend_src = REPO_ROOT / "desktop" / "backend" / "src"
 if str(backend_src) not in sys.path:
     sys.path.insert(0, str(backend_src))
 

@@ -12,6 +12,9 @@ from diveintocrypto_desktop.engine.consensus.engine import ConsensusEngine
 from diveintocrypto_desktop.engine.indicators.base import IndicatorResult, Signal
 from tests.e2e.test_tier1_coverage import python_swap_keywords, calc_sample_variance
 
+# Resolved from this file so the check runs from any checkout.
+_GRADLE_KTS = Path(__file__).resolve().parents[2] / "android" / "app" / "build.gradle.kts"
+
 # ---------------------------------------------------------
 # Feature 1: Zero-Lag EMA (ZLEMA) tests
 # ---------------------------------------------------------
@@ -239,33 +242,33 @@ async def test_websocket_close_frame(server_url):
 
 def test_gradle_keystore_missing_env_missing():
     """Verify Gradle file contains logic to handle both keystore.properties and Env var missing."""
-    path = Path("/Users/nazmi/dive-into-crypto/android/app/build.gradle.kts")
+    path = _GRADLE_KTS
     content = path.read_text()
     # It checks if file exists, and uses Environment variables if not or as fallback
     assert "System.getenv" in content
 
 def test_gradle_keystore_env_partially_missing():
     """Verify logic for handling partially configured signing credentials."""
-    path = Path("/Users/nazmi/dive-into-crypto/android/app/build.gradle.kts")
+    path = _GRADLE_KTS
     content = path.read_text()
     assert "STORE_PASSWORD" in content or "KEY_PASSWORD" in content
 
 def test_gradle_syntax_check():
     """Verify build.gradle.kts contains valid Kotlin gradle configuration syntax."""
-    path = Path("/Users/nazmi/dive-into-crypto/android/app/build.gradle.kts")
+    path = _GRADLE_KTS
     content = path.read_text()
     assert "plugins {" in content
     assert "android {" in content
 
 def test_gradle_malformed_env_values():
     """Verify that environment variables are read as String variables."""
-    path = Path("/Users/nazmi/dive-into-crypto/android/app/build.gradle.kts")
+    path = _GRADLE_KTS
     content = path.read_text()
     assert "getProperty" in content or "System.getenv" in content
 
 def test_gradle_non_existent_paths():
     """Verify keystore files are resolved using rootProject file locator."""
-    path = Path("/Users/nazmi/dive-into-crypto/android/app/build.gradle.kts")
+    path = _GRADLE_KTS
     content = path.read_text()
     assert "rootProject.file" in content
 

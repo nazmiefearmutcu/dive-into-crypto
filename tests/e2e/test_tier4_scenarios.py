@@ -12,6 +12,9 @@ from diveintocrypto_desktop.engine.consensus.engine import ConsensusEngine
 from diveintocrypto_desktop.engine.indicators.base import IndicatorResult, Signal
 from tests.e2e.test_tier1_coverage import python_swap_keywords
 
+# Resolved from this file so the check runs from any checkout.
+_GRADLE_KTS = Path(__file__).resolve().parents[2] / "android" / "app" / "build.gradle.kts"
+
 # ---------------------------------------------------------
 # Tier 4: Real-World Scenarios (5 cases)
 # ---------------------------------------------------------
@@ -103,7 +106,7 @@ def test_scenario_clean_gradle_build_signing_fallback():
     Assert that Gradle build scripts fall back to loading environment variables
     when keystore.properties does not exist.
     """
-    path = Path("/Users/nazmi/dive-into-crypto/android/app/build.gradle.kts")
+    path = _GRADLE_KTS
     content = path.read_text()
     
     # Assert code has checking logic: `keystorePropsFile.exists()`

@@ -12,6 +12,9 @@ from diveintocrypto_desktop.scan import divergence as dv
 from diveintocrypto_desktop.engine.consensus.engine import ConsensusEngine
 from diveintocrypto_desktop.engine.indicators.base import IndicatorResult, Signal
 
+# Resolved from this file so the check runs from any checkout.
+_GRADLE_KTS = Path(__file__).resolve().parents[2] / "android" / "app" / "build.gradle.kts"
+
 # ---------------------------------------------------------
 # Feature 1: Zero-Lag EMA (ZLEMA) tests
 # ---------------------------------------------------------
@@ -339,34 +342,34 @@ async def test_websocket_invalid_symbol_graceful(server_url):
 
 def test_gradle_properties_reading_fallback():
     """Verify that build.gradle.kts check finds keystore properties parsing logic."""
-    path = Path("/Users/nazmi/dive-into-crypto/android/app/build.gradle.kts")
+    path = _GRADLE_KTS
     assert path.exists()
     content = path.read_text()
     assert "keystore.properties" in content
 
 def test_gradle_environment_variables_overrides():
     """Verify that build.gradle.kts makes reference to System.getenv or environment overrides."""
-    path = Path("/Users/nazmi/dive-into-crypto/android/app/build.gradle.kts")
+    path = _GRADLE_KTS
     content = path.read_text()
     assert "System.getenv" in content or "System.getenv(" in content
 
 def test_gradle_signing_configs_release_section():
     """Verify that signingConfigs and release blocks are declared in build.gradle.kts."""
-    path = Path("/Users/nazmi/dive-into-crypto/android/app/build.gradle.kts")
+    path = _GRADLE_KTS
     content = path.read_text()
     assert "signingConfigs" in content
     assert "release" in content
 
 def test_gradle_store_file_fallback():
     """Verify build.gradle.kts references storeFile, storePassword, keyAlias, keyPassword."""
-    path = Path("/Users/nazmi/dive-into-crypto/android/app/build.gradle.kts")
+    path = _GRADLE_KTS
     content = path.read_text()
     for prop in ["storeFile", "storePassword", "keyAlias", "keyPassword"]:
         assert prop in content
 
 def test_gradle_no_keystore_file_env_present():
     """Verify that environment variables take precedence or act as fallback when keystore.properties missing."""
-    path = Path("/Users/nazmi/dive-into-crypto/android/app/build.gradle.kts")
+    path = _GRADLE_KTS
     content = path.read_text()
     # Script should fall back to env if props file doesn't exist
     assert "exists()" in content

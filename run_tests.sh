@@ -1,12 +1,16 @@
 #!/bin/bash
 set -e
 
+# Resolve the repo root from this script's own location so the script runs from
+# any checkout, and from any working directory.
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 echo "=== Running Pytest in desktop/backend ==="
-cd /Users/nazmi/dive-into-crypto/desktop/backend
+cd "$REPO_ROOT/desktop/backend"
 pytest
 
 echo "=== Running Gradle Tests in android ==="
-cd /Users/nazmi/dive-into-crypto/android
+cd "$REPO_ROOT/android"
 ./gradlew test
 
 echo "=== Testing Release Signing Config with Environment Variables ==="

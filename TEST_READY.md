@@ -21,15 +21,14 @@ tests/
 
 ## Running the Tests
 
-Ensure dependencies are installed using `uv`:
+Ensure dependencies are installed using `uv`, from the repository root:
 ```bash
-cd /Users/nazmi/dive-into-crypto/desktop/backend
+cd desktop/backend
 uv pip install pytest httpx pytest-asyncio websockets
 ```
 
-Execute all tests from the project root:
+Execute all tests from the repository root:
 ```bash
-cd /Users/nazmi/dive-into-crypto
 uv run pytest tests/
 ```
 
