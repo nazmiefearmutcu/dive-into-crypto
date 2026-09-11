@@ -8,11 +8,11 @@ import com.diveintocrypto.android.data.KeyValueStore
 
 /**
  * Dive Into Crypto theme presets — ported verbatim from the design
- * deliverable's `theme.js` (3 families × 3 variants = 9 presets).
+ * deliverable's `theme.js` (3 families: NOVA 3 · LEDGER 3 · TERMINAL 4 = 10 presets).
  *
  *   NOVA     · futuristic (neon/glass/depth)
  *   LEDGER   · classic (clean corporate finance)
- *   TERMINAL · night (monospace, low color, CRT)
+ *   TERMINAL · night (monospace, low color, CRT) + the light "Paper" variant
  *
  * Applying a preset swaps the live [DiveColors] tokens, re-skinning the whole app.
  */

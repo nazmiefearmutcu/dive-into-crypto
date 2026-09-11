@@ -38,7 +38,9 @@ class MarketDataEngine(
     val deribit: DeribitConnector = DeribitConnector(),
 ) {
     private val candleCacheLock = SynchronizedObject()
-    private val candleCache = mutableMapOf<String, List<Candle>>()
+    // Bounded LRU: an app-scoped singleton scanning ~500 symbols × 12 TFs used to
+    // grow this map without bound; it is now capped (access-ordered, evicts LRU key).
+    private val candleCache = LruCache<String, List<Candle>>(CANDLE_CACHE_MAX_KEYS)
 
     private val restCacheLock = SynchronizedObject()
     private val openInterestCache = mutableMapOf<String, CachedData<OpenInterestPoint>>()
@@ -67,7 +69,7 @@ class MarketDataEngine(
 
     private fun updateCache(key: String, candle: Candle) {
         synchronized(candleCacheLock) {
-            val currentList = candleCache[key] ?: emptyList()
+            val currentList = candleCache.get(key) ?: emptyList()
             val lastCandle = currentList.lastOrNull()
             val newList = when {
                 lastCandle == null -> listOf(candle)
@@ -81,7 +83,7 @@ class MarketDataEngine(
                     currentList
                 }
             }
-            candleCache[key] = newList.takeLast(1000)
+            candleCache.put(key, newList.takeLast(1000))
         }
     }
 
@@ -92,7 +94,7 @@ class MarketDataEngine(
 
     suspend fun history(symbol: String, interval: String, limit: Int = 300): List<Candle> {
         val key = "SPOT:$symbol:$interval"
-        val cached = synchronized(candleCacheLock) { candleCache[key] }
+        val cached = synchronized(candleCacheLock) { candleCache.get(key) }
         if (cached != null && cached.size >= limit) {
             val lastCandle = cached.lastOrNull()
             if (lastCandle != null) {
@@ -105,9 +107,9 @@ class MarketDataEngine(
         }
         val fetched = binance.spotClient().klines(symbol = symbol, interval = interval, limit = limit)
         val mergedPruned = synchronized(candleCacheLock) {
-            val current = candleCache[key] ?: emptyList()
+            val current = candleCache.get(key) ?: emptyList()
             val merged = mergeLists(fetched, current).takeLast(1000)
-            candleCache[key] = merged
+            candleCache.put(key, merged)
             merged.takeLast(limit)
         }
         return mergedPruned
@@ -119,7 +121,9 @@ class MarketDataEngine(
         val wsUrl = if (wsDataSource == "SPOT") "wss://stream.binance.com:9443"
                     else "wss://fstream.binance.com"
         val key = "$wsDataSource:$symbol:$interval"
-        return binance.wsClient().klineStream(symbol = symbol, interval = interval, customBaseUrl = wsUrl)
+        // Reconnecting stream: backoff+jitter lives in BinanceWsClient, so the
+        // ViewModels no longer need their own restart loops.
+        return binance.wsClient().reconnectingKlineStream(symbol = symbol, interval = interval, customBaseUrl = wsUrl)
             .onEach { update ->
                 updateCache(key, update.candle)
             }
@@ -127,7 +131,7 @@ class MarketDataEngine(
 
     suspend fun futuresHistory(symbol: String, interval: String, limit: Int = 300): List<Candle> {
         val key = "FUTURES:$symbol:$interval"
-        val cached = synchronized(candleCacheLock) { candleCache[key] }
+        val cached = synchronized(candleCacheLock) { candleCache.get(key) }
         if (cached != null && cached.size >= limit) {
             val lastCandle = cached.lastOrNull()
             if (lastCandle != null) {
@@ -140,9 +144,9 @@ class MarketDataEngine(
         }
         val fetched = binance.futuresClient().klines(symbol = symbol, interval = interval, limit = limit)
         val mergedPruned = synchronized(candleCacheLock) {
-            val current = candleCache[key] ?: emptyList()
+            val current = candleCache.get(key) ?: emptyList()
             val merged = mergeLists(fetched, current).takeLast(1000)
-            candleCache[key] = merged
+            candleCache.put(key, merged)
             merged.takeLast(limit)
         }
         return mergedPruned
@@ -248,7 +252,7 @@ class MarketDataEngine(
         val wsUrl = if (wsDataSource == "SPOT") "wss://stream.binance.com:9443"
                     else "wss://fstream.binance.com"
         val key = "$wsDataSource:$symbol:$interval"
-        return binance.wsClient().klineStream(symbol = symbol, interval = interval, customBaseUrl = wsUrl)
+        return binance.wsClient().reconnectingKlineStream(symbol = symbol, interval = interval, customBaseUrl = wsUrl)
             .onEach { update ->
                 updateCache(key, update.candle)
             }
@@ -267,4 +271,13 @@ class MarketDataEngine(
     /** Live derivative tickers (perp/future) for the given symbols. */
     fun derivativeTickerStream(symbols: Set<String>): Flow<DerivativeTicker> =
         deribit.stream(setOf(Channel.DERIVATIVE_TICKER), symbols).filterIsInstance<DerivativeTicker>()
+
+    companion object {
+        /**
+         * Upper bound on distinct symbol:timeframe keys kept in the candle cache
+         * (each entry holds ≤1000 candles). Bounds the singleton's memory footprint
+         * regardless of universe size.
+         */
+        const val CANDLE_CACHE_MAX_KEYS = 96
+    }
 }

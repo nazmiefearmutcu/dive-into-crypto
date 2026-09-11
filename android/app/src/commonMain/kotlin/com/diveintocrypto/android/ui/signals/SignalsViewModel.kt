@@ -37,7 +37,7 @@ class SignalsViewModel(private val container: AppContainer) : ViewModel() {
 
     private var symbolJobs: Job? = null
     private var tickerJob: Job? = null
-    private var fallbackTickerJob: Job? = null
+    private var stalenessJob: Job? = null
 
     init {
         // Collect active symbol changes.
@@ -114,40 +114,49 @@ class SignalsViewModel(private val container: AppContainer) : ViewModel() {
 
     private fun restartTickerJob(timeframe: String) {
         tickerJob?.cancel()
-        fallbackTickerJob?.cancel()
+        stalenessJob?.cancel()
         val symbol = container.activeSymbol.value
 
         var lastWsMessageTime = 0L
 
+        // The repository stream is self-healing (BinanceWsClient.reconnectingKlineStream:
+        // exponential backoff + jitter, reset on first frame), so a single collect is enough.
+        // NO synthetic ticks: when the socket is quiet the data simply stops being refreshed
+        // and the staleness watchdog below flags it — nothing is fabricated.
         tickerJob = viewModelScope.launch(Dispatchers.Default) {
-            while (true) {
-                try {
-                    container.repository.liveKlines(symbol, timeframe).collect { update ->
-                        lastWsMessageTime = nowMillis()
-                        processTick(timeframe, update.candle)
-                    }
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (t: Throwable) {
-                    delay(5000)
+            try {
+                container.repository.liveKlines(symbol, timeframe).collect { update ->
+                    lastWsMessageTime = nowMillis()
+                    _ui.update { it.copy(isStale = false, dataAgeMs = 0L) }
+                    processTick(timeframe, update.candle)
                 }
+            } catch (e: CancellationException) {
+                throw e
             }
         }
 
-        fallbackTickerJob = viewModelScope.launch(Dispatchers.Default) {
-            delay(3000)
+        // Clock-only staleness watchdog. It ONLY reads the wall clock — it never
+        // touches market data. UI renders a STALE chip from [SignalsUiState.isStale]
+        // / [SignalsUiState.dataAgeMs]; ticks are NOT invented while quiet.
+        stalenessJob = viewModelScope.launch(Dispatchers.Default) {
+            var lastAgePush = 0L
             while (true) {
+                delay(1_000)
+                val last = lastWsMessageTime
                 val now = nowMillis()
-                if (now - lastWsMessageTime > 3000) {
-                    val cs = kotlinx.atomicfu.locks.synchronized(mapLock) { candlesMap[timeframe] } ?: emptyList()
-                    val lastCandle = cs.lastOrNull()
-                    if (lastCandle != null) {
-                        val simulatedPrice = lastCandle.close * (1.0 + kotlin.random.Random.nextDouble(-0.0002, 0.0002))
-                        val updatedCandle = lastCandle.copy(close = simulatedPrice)
-                        processTick(timeframe, updatedCandle)
+                val age = if (last > 0L) now - last else null
+                val stale = age == null || age > STALE_AFTER_MS
+                _ui.update {
+                    // Push immediately on staleness transitions; refresh the age
+                    // reading at most every STALE_AGE_PUSH_MS to bound recomposition.
+                    val dueAgePush = now - lastAgePush >= STALE_AGE_PUSH_MS
+                    if (it.isStale == stale && !dueAgePush && it.dataAgeMs == age) {
+                        it
+                    } else {
+                        if (dueAgePush || it.isStale != stale) lastAgePush = now
+                        it.copy(isStale = stale, dataAgeMs = age)
                     }
                 }
-                delay(1000)
             }
         }
     }
@@ -239,8 +248,16 @@ class SignalsViewModel(private val container: AppContainer) : ViewModel() {
     override fun onCleared() {
         symbolJobs?.cancel()
         tickerJob?.cancel()
-        fallbackTickerJob?.cancel()
+        stalenessJob?.cancel()
         super.onCleared()
+    }
+
+    companion object {
+        /** WS-quiet threshold after which the UI state is flagged stale (nothing is fabricated). */
+        const val STALE_AFTER_MS = 3_000L
+
+        /** Minimum interval between staleness-age state pushes (bounds recomposition). */
+        const val STALE_AGE_PUSH_MS = 5_000L
     }
 }
 
@@ -276,4 +293,13 @@ data class SignalsUiState(
     val lastUpdateMs: Long? = null,
     val isLoading: Boolean = true,
     val errorMessage: String? = null,
+    /**
+     * HONESTY FIELDS (replaces the deleted random-tick fallback):
+     * true once no WebSocket frame has arrived for more than [SignalsViewModel.STALE_AFTER_MS]
+     * (or none ever arrived on this session). The displayed candles are then the last REAL
+     * data — nothing is extrapolated.
+     */
+    val isStale: Boolean = false,
+    /** ms since the last WS frame; null = no frame received yet in this session. */
+    val dataAgeMs: Long? = null,
 )

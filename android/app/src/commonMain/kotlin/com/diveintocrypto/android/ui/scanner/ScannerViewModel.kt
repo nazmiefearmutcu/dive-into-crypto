@@ -3,12 +3,16 @@ package com.diveintocrypto.android.ui.scanner
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.diveintocrypto.android.AppContainer
+import com.diveintocrypto.android.domain.consensus.Regime
 import com.diveintocrypto.android.domain.divergence.DivergenceAlignment
 import com.diveintocrypto.android.domain.divergence.WhaleDivergence
 import com.diveintocrypto.android.domain.model.Signal
+import com.diveintocrypto.android.domain.overlay.Microstructure
+import com.diveintocrypto.android.domain.overlay.MtfConfluence
 import com.diveintocrypto.android.platform.beginBackgroundTask
 import com.diveintocrypto.android.platform.endBackgroundTask
 import com.diveintocrypto.android.platform.nowMillis
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -34,7 +38,7 @@ import kotlin.math.abs
  *
  *   2. **Phase 1** — scan the high-time-weight timeframes [1d, 12h, 8h] across EVERY
  *      symbol in the universe. After phase 1 completes, aggregate each symbol's
- *      `finalScore` total and keep the top [PHASE2_TOP_N] (50 by default).
+ *      `finalScore` total and keep the top `scanSurvivors` (Settings, 50 by default).
  *
  *   3. **Phase 2** — scan the remaining 9 lower-time-weight timeframes
  *      [1m, 3m, 5m, 15m, 30m, 1h, 2h, 4h, 6h] but ONLY across the phase-2
@@ -72,7 +76,7 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
      *  elimination/candidate-pool are UNCHANGED; when OFF, behavior is bit-for-bit identical to today. */
     fun setDivergenceSort(on: Boolean) { _ui.update { it.copy(divergenceSort = on) } }
 
-    fun startDemoScan() {
+    fun startScan() {
         if (_ui.value.scanning) return
         // A new scan does NOT clear previous results — they stay on screen until new ones arrive.
         // (Only progress/error are reset; feed/survivors/eliminated are kept.)
@@ -117,33 +121,10 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
         _ui.update { it.copy(stopRequested = true) }
     }
 
-    /** Is the whale divergence OPPOSITE the indicator direction? (adverse = will be eliminated)
-     *  Indicator BUY but divergence bearish (distribution) → adverse; Indicator SELL but divergence
-     *  bullish (accumulation) → adverse. Sub-threshold divergence or no direction → not adverse. */
-    private fun isAdverse(row: CrossRankingRow): Boolean {
-        if (abs(row.divergenceScore) < DIVERGENCE_MIN_SHOWN) return false
-        val dir = when (row.dominantDir) {
-            Signal.BUY, Signal.STRONG_BUY -> 1
-            Signal.SELL, Signal.STRONG_SELL -> -1
-            else -> 0
-        }
-        if (dir == 0) return false
-        return row.divergenceDirection == -dir
-    }
-
-    /** Fills missing (non-top15) TF cells for a displayed row from the full results. */
-    private fun patchPerTf(row: CrossRankingRow, tfResults: Map<String, List<SymbolTfResult>>): CrossRankingRow {
-        val patched = row.perTf.toMutableMap()
-        for (tf in ALL_TFS) {
-            if (tf in patched) continue
-            val weight = TIME_WEIGHTS[tf] ?: 50
-            val rr = tfResults[tf]?.firstOrNull { it.symbol == row.symbol }
-            if (rr != null) {
-                patched[tf] = TfSlotState(rr.signal, rr.confidence, weight, rr.finalScore, false)
-            }
-        }
-        return row.copy(perTf = patched.toMap())
-    }
+    /** Fills missing (non-top15) TF cells for a displayed row from the full results.
+     *  Pure — delegates to the companion function. */
+    private fun patchPerTf(row: CrossRankingRow, tfResults: Map<String, List<SymbolTfResult>>): CrossRankingRow =
+        patchPerTfRow(row, tfResults)
 
     /** Runs one FULL universe scan. true = completed, false = stopped/error. */
     private suspend fun runOneScan(): Boolean {
@@ -152,6 +133,7 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
             it.copy(
                 completedCount = 0,
                 totalCount = 0,
+                failedCount = 0,
                 currentSymbol = null,
                 currentPhase = ScanPhase.UNIVERSE,
                 universeLoading = true,
@@ -196,6 +178,11 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
             val sem = Semaphore(settings.scanParallelism)
             val mutex = Mutex()
             val tfResults: MutableMap<String, MutableList<SymbolTfResult>> = mutableMapOf()
+            // HONESTY: symbols whose kline fetch FAILED (network error) — previously the
+            // failure was swallowed (`catch → emptyList`) and silently shrank the coverage.
+            // Now counted and exposed as ScannerUiState.failedCount so the UI can say
+            // "N symbols could not be scanned".
+            val failedSymbols = mutableSetOf<String>()
             var completed = 0
 
             suspend fun scanOne(symbol: String, tf: String) {
@@ -205,7 +192,16 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
                     _ui.update { it.copy(currentSymbol = symbol) }
                     val candles = try {
                         container.repository.futuresHistory(symbol, tf, limit = 300)
-                    } catch (_: Throwable) { emptyList() }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Throwable) {
+                        mutex.withLock {
+                            if (failedSymbols.add(symbol)) {
+                                _ui.update { s -> s.copy(failedCount = failedSymbols.size) }
+                            }
+                        }
+                        emptyList()
+                    }
 
                     if (candles.size >= 50) {
                         val indicatorOuts = container.indicators.map { it.calculate(candles) }
@@ -218,6 +214,10 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
                         val atrPct = indicatorOuts
                             .firstOrNull { it.name == "atr_filter" }
                             ?.rawValues?.get("atr_pct")
+                        // REGIME overlay (domain/consensus/Regime.kt): label-only, computed from
+                        // the already-computed ADX/Choppiness raws. ADDITIVE annotation — it
+                        // never enters score/elimination (the consensus verdict is untouched).
+                        val regime = Regime.detect(indicatorOuts).regime
 
                         mutex.withLock {
                             tfResults.getOrPut(tf) { mutableListOf() }.add(
@@ -230,6 +230,7 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
                                     timeWeight = weight,
                                     finalScore = finalScore,
                                     atrPct = atrPct,
+                                    regime = regime,
                                 ),
                             )
                         }
@@ -255,7 +256,7 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
 
             if (_ui.value.stopRequested) return false
 
-            // ── Determine phase-2 survivors: top PHASE2_TOP_N by Σ phase-1 finalScore
+            // ── Determine phase-2 survivors: top scanSurvivors by Σ phase-1 finalScore
             val p1Scores = mutableMapOf<String, Double>()
             for (tf in PHASE1_TFS) {
                 for (r in tfResults[tf] ?: emptyList()) {
@@ -291,68 +292,9 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
                     .take(15)
             }
 
-            // ── Cross-rank: union of symbols across all TF top15 lists ───────
-            data class Stats(
-                var count: Int = 0,
-                var buyNss: Double = 0.0,
-                var sellNss: Double = 0.0,
-                var bestConf: Int = 0,
-                var price: Double = 0.0,
-                // DISPLAY-ONLY: the best-confidence TF's ATR% + the 1h TF's ATR% (preferred
-                // when present — spec hint). Only feeds the RISK advisor row.
-                var atrPctBest: Double? = null,
-                var atrPct1h: Double? = null,
-                val perTf: MutableMap<String, TfSlotState> = mutableMapOf(),
-            )
-
-            val symbolStats: MutableMap<String, Stats> = mutableMapOf()
-            for (tf in ALL_TFS) {
-                val weight = TIME_WEIGHTS[tf] ?: 50
-                for (r in tfTop15[tf] ?: emptyList()) {
-                    val s = symbolStats.getOrPut(r.symbol) { Stats() }
-                    s.count += 1
-                    when (r.signal) {
-                        Signal.STRONG_BUY, Signal.BUY -> s.buyNss += r.finalScore
-                        Signal.STRONG_SELL, Signal.SELL -> s.sellNss += r.finalScore
-                        else -> Unit  // NEUTRAL contributes nothing
-                    }
-                    if (r.confidence > s.bestConf) {
-                        s.bestConf = r.confidence
-                        s.price = r.price
-                        s.atrPctBest = r.atrPct
-                    }
-                    if (tf == "1h" && r.atrPct != null) s.atrPct1h = r.atrPct
-                    s.perTf[tf] = TfSlotState(
-                        signal = r.signal,
-                        confidence = r.confidence,
-                        timeWeight = weight,
-                        finalScore = r.finalScore,
-                        inTop15 = true,
-                    )
-                }
-            }
-
-            // Build rows + sort by net_nss desc
-            val crossRows: List<CrossRankingRow> = symbolStats.entries
-                .map { (sym, s) ->
-                    val (dominantDir, netNss) = if (s.buyNss >= s.sellNss) {
-                        Signal.BUY to (s.buyNss - s.sellNss)
-                    } else {
-                        Signal.SELL to (s.sellNss - s.buyNss)
-                    }
-                    CrossRankingRow(
-                        symbol = sym,
-                        dominantDir = dominantDir,
-                        netNss = netNss,
-                        countHit = s.count,
-                        totalTfs = ALL_TFS.size,
-                        perTf = s.perTf.toMap(),
-                        price = s.price,
-                        // Prefer 1h ATR% when present (spec hint); otherwise best-confidence TF ATR%.
-                        atrPct = s.atrPct1h ?: s.atrPctBest,
-                    )
-                }
-                .sortedByDescending { it.netNss }
+            // ── Cross-rank: union of symbols across all TF top15 lists + MTF-confluence
+            //    overlay annotation (pure — see [crossRankRows] in the companion). ──────
+            val crossRows: List<CrossRankingRow> = crossRankRows(tfTop15)
 
             // ── Whale L/S divergence: compute for the candidate pool (first DIVERGENCE_CANDIDATES,
             //    by netNss); then blend the table order with netNss. Since L/S data is expensive,
@@ -414,17 +356,43 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
             // ── ELIMINATION + BACKFILL: eliminate coins whose whale divergence runs OPPOSITE
             //    the indicator direction; fill the vacated slots with the next (lower-scoring)
             //    eligible coins (filter-then-take = automatic backfill). ───────────────
-            val survivorsRaw = rankedRows.filterNot { isAdverse(it) }
-            val eliminatedRows = rankedRows.filter { isAdverse(it) }
-            // Fill the survivors' TF cells (first 24 for cost — table max 20).
-            val survivorRows = survivorsRaw.mapIndexed { i, row ->
-                if (i < 24) patchPerTf(row, tfResults) else row
-            }
+            val (survivorsRaw, eliminatedRows) = eliminateAdverse(rankedRows)
+            // Fill the survivors' TF cells for ALL rows — displaySize=All shows every
+            // survivor, so capping the backfill at the first 24 left rows 25+ with
+            // empty TF cells. (Cost is trivial: in-memory lookups only.)
+            val survivorRows = survivorsRaw.map { patchPerTf(it, tfResults) }
             val elimRows = eliminatedRows.map { patchPerTf(it, tfResults) }
 
+            // ── MICROSTRUCTURE overlay annotations (domain/overlay/Microstructure.kt) ──
+            // ADDITIVE display-only, computed for the visible head of the survivor table
+            // (bounded by [MICRO_ANNOTATION_LIMIT] to cap the extra REST calls; the engine's
+            // 30s series caches absorb repeats in continuous mode). Any fetch failure → no
+            // annotation (fields stay null). NEVER enters score/elimination.
+            val microGate = Semaphore(settings.scanParallelism)
+            val microLimit = survivorRows.size.coerceAtMost(MICRO_ANNOTATION_LIMIT)
+            val microResults: Map<String, Microstructure.Result> =
+                if (microLimit > 0 && !_ui.value.stopRequested) {
+                    coroutineScope {
+                        survivorRows.take(microLimit).map { row ->
+                            async { row.symbol to computeMicrostructure(row.symbol, microGate) }
+                        }.awaitAll().toMap().filterValues { it != null } as Map<String, Microstructure.Result>
+                    }
+                } else emptyMap()
+            val annotatedSurvivorRows = survivorRows.mapIndexed { i, row ->
+                val m = if (i < microLimit) microResults[row.symbol] else null
+                if (m != null) {
+                    row.copy(
+                        microScore = m.score,
+                        microDirection = m.direction,
+                        microLabel = m.label,
+                        microActive = m.active,
+                    )
+                } else row
+            }
+
             val size = _ui.value.displaySize
-            val finalHotList: List<ScannerFeedItem> = survivorRows
-                .take(size.coerceAtMost(survivorRows.size))
+            val finalHotList: List<ScannerFeedItem> = annotatedSurvivorRows
+                .take(size.coerceAtMost(annotatedSurvivorRows.size))
                 .mapIndexed { i, row ->
                     ScannerFeedItem(
                         symbol = row.symbol,
@@ -432,7 +400,7 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
                         signal = row.dominantDir,
                         confidence = row.perTf.values.maxOfOrNull { it.confidence } ?: 0,
                         price = row.price,
-                        riskLevel = riskFromCount(row.countHit, row.totalTfs),
+                        riskLevel = riskFromAgreement(row.countHit, row.totalTfs),
                         error = null,
                     )
                 }
@@ -441,10 +409,9 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
                 it.copy(
                     currentPhase = ScanPhase.IDLE,
                     currentSymbol = null,
-                    feed = finalHotList,
                     hotList = finalHotList,
-                    crossRanking = survivorRows,
-                    survivors = survivorRows,
+                    crossRanking = annotatedSurvivorRows,
+                    survivors = annotatedSurvivorRows,
                     eliminated = elimRows,
                     lastScanAtMs = nowMillis(),
                 )
@@ -453,15 +420,40 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
         return true
     }
 
-    fun selectTimeframe(tf: String) {
-        _ui.update { it.copy(activeTimeframe = tf) }
-    }
-
-    private fun riskFromCount(countHit: Int, total: Int): String = when {
-        countHit >= total - 1 -> "LOW"
-        countHit >= total / 2 -> "MEDIUM"
-        countHit > 0 -> "HIGH"
-        else -> "N/A"
+    /**
+     * MICROSTRUCTURE overlay (domain/overlay/Microstructure.kt) for one survivor row.
+     * Uses the 1h cadence for every series (klines are usually already in the engine's
+     * candle cache from phase 2; the REST series are covered by its 30s caches).
+     * DISPLAY-ONLY annotation: any fetch failure / insufficient data → null (no
+     * annotation). Never enters score/elimination.
+     */
+    private suspend fun computeMicrostructure(symbol: String, gate: Semaphore): Microstructure.Result? = try {
+        gate.withPermit {
+            val candles = container.repository.futuresHistory(symbol, "1h", limit = 30)
+            if (candles.size < 10) {
+                null
+            } else {
+                val oi = container.repository.openInterestHist(symbol, "1h", limit = 30)
+                val taker = container.repository.takerLongShortRatio(symbol, "1h", limit = 30)
+                val glob = container.repository.globalLongShortAccountRatio(symbol, "1h", limit = 30)
+                val pos = container.repository.topLongShortPositionRatio(symbol, "1h", limit = 30)
+                val funding = container.repository.fundingRate(symbol, limit = 30)
+                Microstructure.evaluate(
+                    Microstructure.Series(
+                        oi = oi.map { it.sumOpenInterestValue },
+                        price = candles.map { it.close },
+                        funding = funding.map { it.fundingRate },
+                        taker = taker.map { it.buySellRatio },
+                        glob = glob.map { it.longShortRatio },
+                        pos = pos.map { it.longShortRatio },
+                    )
+                )
+            }
+        }
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Throwable) {
+        null
     }
 
     /**
@@ -514,10 +506,6 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
     }
 
     companion object {
-        const val MAX_PARALLEL = 8
-        const val PHASE2_TOP_N = 50
-        const val FINAL_TOP_N = 5
-
         /** Phase 1 covers the high-time-weight timeframes that filter the universe fast. */
         val PHASE1_TFS: List<String> = listOf("1d", "12h", "8h")
 
@@ -533,6 +521,144 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
 
         /** Backwards-compat alias used by the UI's ScannerUiState default. */
         val DEFAULT_TFS: List<String> = ALL_TFS
+
+        // ── Pure scan-logic helpers (unit-testable, no VM state) ─────────
+
+        /**
+         * CANONICAL risk-from-TF-agreement mapping (identical to the private
+         * `riskFromAgreement` in ScannerScreen — the UI agent should DELETE that
+         * copy and delegate to this function):
+         *   ≥ total-1 → LOW · ≥ total/2 → MEDIUM · > 0 → HIGH · else N/A
+         */
+        fun riskFromAgreement(countHit: Int, totalTfs: Int): String = when {
+            countHit >= totalTfs - 1 -> "LOW"
+            countHit >= totalTfs / 2 -> "MEDIUM"
+            countHit > 0 -> "HIGH"
+            else -> "N/A"
+        }
+
+        /** Is the whale divergence OPPOSITE the indicator direction? (adverse = will be eliminated)
+         *  Indicator BUY but divergence bearish (distribution) → adverse; Indicator SELL but
+         *  divergence bullish (accumulation) → adverse. Sub-threshold divergence or no
+         *  direction → not adverse. */
+        internal fun isAdverseRow(row: CrossRankingRow): Boolean {
+            if (abs(row.divergenceScore) < DIVERGENCE_MIN_SHOWN) return false
+            val dir = when (row.dominantDir) {
+                Signal.BUY, Signal.STRONG_BUY -> 1
+                Signal.SELL, Signal.STRONG_SELL -> -1
+                else -> 0
+            }
+            if (dir == 0) return false
+            return row.divergenceDirection == -dir
+        }
+
+        /** ELIMINATION + BACKFILL: partition ranked rows into (survivors, eliminated).
+         *  Order-preserving; survivors feed the final table (backfill is implicit in
+         *  the filter-then-take). Pure. */
+        internal fun eliminateAdverse(rows: List<CrossRankingRow>): Pair<List<CrossRankingRow>, List<CrossRankingRow>> =
+            rows.partition { !isAdverseRow(it) }
+
+        /** Fills missing (non-top15) TF cells for a displayed row from the full results. Pure. */
+        internal fun patchPerTfRow(
+            row: CrossRankingRow,
+            tfResults: Map<String, List<SymbolTfResult>>,
+        ): CrossRankingRow {
+            val patched = row.perTf.toMutableMap()
+            for (tf in ALL_TFS) {
+                if (tf in patched) continue
+                val weight = TIME_WEIGHTS[tf] ?: 50
+                val rr = tfResults[tf]?.firstOrNull { it.symbol == row.symbol }
+                if (rr != null) {
+                    patched[tf] = TfSlotState(rr.signal, rr.confidence, weight, rr.finalScore, false)
+                }
+            }
+            return row.copy(perTf = patched.toMap())
+        }
+
+        /**
+         * CROSS-RANK: aggregate the per-TF top15 lists into one row per symbol,
+         * sorted by net_nss desc, and annotate each row with its MTF-confluence
+         * overlay (domain/overlay/MtfConfluence.kt — ADDITIVE display-only, it
+         * never changes the ranking). Pure.
+         */
+        internal fun crossRankRows(tfTop15: Map<String, List<SymbolTfResult>>): List<CrossRankingRow> {
+            data class Stats(
+                var count: Int = 0,
+                var buyNss: Double = 0.0,
+                var sellNss: Double = 0.0,
+                var bestConf: Int = 0,
+                var price: Double = 0.0,
+                var regime: String = "MIXED",
+                // DISPLAY-ONLY: the best-confidence TF's ATR% + the 1h TF's ATR% (preferred
+                // when present — spec hint). Only feeds the RISK advisor row.
+                var atrPctBest: Double? = null,
+                var atrPct1h: Double? = null,
+                val perTf: MutableMap<String, TfSlotState> = mutableMapOf(),
+            )
+
+            val symbolStats: MutableMap<String, Stats> = mutableMapOf()
+            for (tf in ALL_TFS) {
+                val weight = TIME_WEIGHTS[tf] ?: 50
+                for (r in tfTop15[tf] ?: emptyList()) {
+                    val s = symbolStats.getOrPut(r.symbol) { Stats() }
+                    s.count += 1
+                    when (r.signal) {
+                        Signal.STRONG_BUY, Signal.BUY -> s.buyNss += r.finalScore
+                        Signal.STRONG_SELL, Signal.SELL -> s.sellNss += r.finalScore
+                        else -> Unit  // NEUTRAL contributes nothing
+                    }
+                    if (r.confidence > s.bestConf) {
+                        s.bestConf = r.confidence
+                        s.price = r.price
+                        s.atrPctBest = r.atrPct
+                        s.regime = r.regime
+                    }
+                    if (tf == "1h" && r.atrPct != null) s.atrPct1h = r.atrPct
+                    s.perTf[tf] = TfSlotState(
+                        signal = r.signal,
+                        confidence = r.confidence,
+                        timeWeight = weight,
+                        finalScore = r.finalScore,
+                        inTop15 = true,
+                    )
+                }
+            }
+
+            return symbolStats.entries
+                .map { (sym, s) ->
+                    val (dominantDir, netNss) = if (s.buyNss >= s.sellNss) {
+                        Signal.BUY to (s.buyNss - s.sellNss)
+                    } else {
+                        Signal.SELL to (s.sellNss - s.buyNss)
+                    }
+                    val row = CrossRankingRow(
+                        symbol = sym,
+                        dominantDir = dominantDir,
+                        netNss = netNss,
+                        countHit = s.count,
+                        totalTfs = ALL_TFS.size,
+                        perTf = s.perTf.toMap(),
+                        price = s.price,
+                        // Prefer 1h ATR% when present (spec hint); otherwise best-confidence TF ATR%.
+                        atrPct = s.atrPct1h ?: s.atrPctBest,
+                        // REGIME overlay annotation (label from the best-confidence TF).
+                        regime = s.regime,
+                    )
+                    // MTF-CONFLUENCE overlay annotation: agreement score across this symbol's
+                    // per-TF verdicts (higher TFs weigh more). ADDITIVE — does not re-rank.
+                    val verdicts = ALL_TFS.mapNotNull { tf ->
+                        s.perTf[tf]?.let { MtfConfluence.TfVerdict(tf, it.signal.name, it.confidence) }
+                    }
+                    val mtf = MtfConfluence.confluence(verdicts)
+                    row.copy(
+                        mtfScore = mtf.score,
+                        mtfDirection = mtf.direction,
+                        mtfGate = mtf.gate,
+                        mtfLabel = mtf.label,
+                    )
+                }
+                .sortedByDescending { it.netNss }
+        }
 
         /**
          * Verbatim from bot_service.py:106-110 (`self._ZAK`).
@@ -559,6 +685,10 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
         const val DIVERGENCE_RANK_WEIGHT = 0.35
         /** Divergence scores below this threshold are treated as "none" (noise filter). */
         const val DIVERGENCE_MIN_SHOWN = 5.0
+
+        /** Microstructure overlay annotations are computed for at most this many
+         *  survivor rows per scan (bounds the extra REST calls; display-only). */
+        const val MICRO_ANNOTATION_LIMIT = 24
         /** TF → period duration (ms). Used to align the price and whale-L/S series by timestamp
          *  (tail alignment would turn a single dropped bar at 1d into a full-day shift). */
         val PERIOD_MS: Map<String, Long> = mapOf(
@@ -583,6 +713,10 @@ data class SymbolTfResult(
      *  DISPLAY-ONLY: only feeds the RISK advisor row — it does NOT affect score/elimination/
      *  ranking (finalScore is confidence²×timeWeight; this field never enters that). */
     val atrPct: Double? = null,
+    /** REGIME overlay label (TREND / RANGE / MIXED) from domain/consensus/Regime.kt,
+     *  detected from the already-computed ADX + Choppiness raws of this (symbol, TF).
+     *  DISPLAY-ONLY annotation — never enters score/elimination/ranking. */
+    val regime: String = "MIXED",
 )
 
 /** A row in the scanner feed/hot list (style.css:661-688). */
@@ -632,6 +766,32 @@ data class CrossRankingRow(
     /** Divergence DESCRIPTIVE raw whale movement: -1 distribution (sell), +1 accumulation (buy), 0 none.
      *  The label/color/arrow is driven by this (NOT sign(score)); independent of the contrarian flip. */
     val divergencePatternDirection: Int = 0,
+
+    // ── STRATEGY OVERLAY ANNOTATIONS (README's "3 overlays", now wired). ──────────
+    // All three are ADDITIVE display-only fields computed alongside the scan;
+    // none of them touches the parity-locked vote / ranking / elimination.
+
+    /** [Regime] label for this symbol's best-confidence TF: TREND / RANGE / MIXED. */
+    val regime: String = "MIXED",
+    /** [MtfConfluence] agreement score across the symbol's per-TF verdicts, −100..+100. */
+    val mtfScore: Double = 0.0,
+    /** [MtfConfluence] dominant direction: +1 bull, −1 bear, 0 none. */
+    val mtfDirection: Int = 0,
+    /** [MtfConfluence] gate: the higher-TF (≥1h) stack agrees with the dominant direction. */
+    val mtfGate: Boolean = false,
+    /** [MtfConfluence] strength label: STRONG / WEAK / NEUTRAL. */
+    val mtfLabel: String = "NEUTRAL",
+    /** [Microstructure] bundle score, −100..+100 (bullish +/bearish −). null = not
+     *  computed (beyond the annotated head) or the series fetch failed. */
+    val microScore: Double? = null,
+    /** [Microstructure] direction: +1 bull, −1 bear, 0 none. null = not computed. */
+    val microDirection: Int? = null,
+    /** [Microstructure] label: STRONG_BUY / BUY / NEUTRAL / SELL / STRONG_SELL / NEUTRAL.
+     *  null = not computed. */
+    val microLabel: String? = null,
+    /** [Microstructure] number of individual signals that had enough data to fire.
+     *  null = not computed. */
+    val microActive: Int? = null,
 )
 
 /** Coarse status for the progress UI. */
@@ -640,7 +800,7 @@ enum class ScanPhase { IDLE, UNIVERSE, PHASE1, PHASE2, FINALIZING }
 data class ScannerUiState(
     val timeframes: List<String> = ScannerViewModel.DEFAULT_TFS,
     val activeTimeframe: String = "15m",
-    val feed: List<ScannerFeedItem> = emptyList(),
+    /** App-ranked feed of the visible survivors (same content the table shows). */
     val hotList: List<ScannerFeedItem> = emptyList(),
     val crossRanking: List<CrossRankingRow> = emptyList(),
     /** Survivors after elimination (coins with adverse whale divergence were removed, backfilled). */
@@ -663,6 +823,12 @@ data class ScannerUiState(
     val currentPhase: ScanPhase = ScanPhase.IDLE,
     val completedCount: Int = 0,
     val totalCount: Int = 0,
+    /**
+     * HONESTY: number of DISTINCT symbols whose kline fetch FAILED during the current
+     * scan (network errors were previously swallowed silently). The UI can render
+     * "N sembol taranamadı" from this. Reset per scan.
+     */
+    val failedCount: Int = 0,
     /** Universe size (full Binance USDT-M futures set after stablecoin filter). */
     val universeSize: Int = 0,
     val universeLoading: Boolean = false,

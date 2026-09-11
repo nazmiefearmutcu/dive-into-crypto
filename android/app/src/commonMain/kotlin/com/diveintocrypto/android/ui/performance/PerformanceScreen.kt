@@ -16,6 +16,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -47,49 +49,57 @@ import com.diveintocrypto.android.ui.theme.DiveFonts
  * A single `/fapi/v1/ticker/24hr` call → 3 different rankings. SKIP_SYMBOLS
  * stablecoins are removed from the universe.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PerformanceScreen(container: AppContainer) {
     val vm: PerformanceViewModel = viewModel { PerformanceViewModel(container) }
     val state by vm.ui.collectAsStateWithLifecycle()
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(DiveColors.RootBg)
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 10.dp, vertical = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+    // Pull-to-refresh wired to the VM's PUBLIC refresh() (loads once on init otherwise).
+    PullToRefreshBox(
+        isRefreshing = state.isLoading,
+        onRefresh = { vm.refresh() },
+        modifier = Modifier.fillMaxSize()
     ) {
-        PageHeader(
-            title = "24h Leaderboard",
-            lastUpdateMs = state.lastUpdateMs,
-            stale = state.lastUpdateMs?.let { (nowMillis() - it) > 60_000 } ?: false,
-            onRefresh = { vm.refresh() },
-        )
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(DiveColors.RootBg)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 10.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            PageHeader(
+                title = "24h Leaderboard",
+                lastUpdateMs = state.lastUpdateMs,
+                stale = state.lastUpdateMs?.let { (nowMillis() - it) > 60_000 } ?: false,
+                onRefresh = { vm.refresh() },
+            )
 
-        if (state.totalSymbols > 0) {
-            DiveCard(title = "SCANNED UNIVERSE") {
-                Text(
-                    text = "${state.totalSymbols} USDT-M futures symbols · stablecoins removed",
-                    color = DiveColors.TextMuted,
-                    fontSize = 12.sp,
-                )
+            if (state.totalSymbols > 0) {
+                DiveCard(title = "SCANNED UNIVERSE") {
+                    Text(
+                        text = "${state.totalSymbols} USDT-M futures symbols · stablecoins removed",
+                        color = DiveColors.TextMuted,
+                        fontSize = 12.sp,
+                    )
+                }
             }
-        }
 
-        if (state.isLoading) {
-            LoadingCard()
-        }
-        state.error?.let { ErrorCard(it) }
+            if (state.isLoading) {
+                LoadingCard()
+            }
+            state.error?.let { ErrorCard(it) }
 
-        LeaderboardCard(title = "🚀 TOP GAINERS", rows = state.gainers, valueColor = DiveColors.Green)
-        LeaderboardCard(title = "📉 TOP LOSERS", rows = state.losers, valueColor = DiveColors.Red)
-        LeaderboardCard(
-            title = "💧 HIGHEST VOLUME",
-            rows = state.byVolume,
-            valueColor = DiveColors.Accent,
-            showVolume = true,
-        )
+            LeaderboardCard(title = "🚀 TOP GAINERS", rows = state.gainers, valueColor = DiveColors.Green)
+            LeaderboardCard(title = "📉 TOP LOSERS", rows = state.losers, valueColor = DiveColors.Red)
+            LeaderboardCard(
+                title = "💧 HIGHEST VOLUME",
+                rows = state.byVolume,
+                valueColor = DiveColors.Accent,
+                showVolume = true,
+            )
+        }
     }
 }
 

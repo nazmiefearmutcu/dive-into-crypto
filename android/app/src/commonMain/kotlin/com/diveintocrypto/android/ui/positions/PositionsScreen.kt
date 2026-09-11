@@ -57,6 +57,7 @@ import com.diveintocrypto.android.platform.format
 import com.diveintocrypto.android.platform.formatTime
 import com.diveintocrypto.android.platform.nowMillis
 import com.diveintocrypto.android.ui.panel.components.PageHeader
+import com.diveintocrypto.android.ui.panel.components.StaleChip
 import com.diveintocrypto.android.ui.panel.components.DiveCard
 import com.diveintocrypto.android.ui.theme.DiveColors
 import com.diveintocrypto.android.ui.theme.DiveDims
@@ -96,6 +97,10 @@ fun PositionsScreen(container: AppContainer) {
             stale = state.lastUpdateMs?.let { (nowMillis() - it) > 5 * 60_000 } ?: false,
             onRefresh = { vm.refresh() },
         )
+
+        // HONESTY: WS staleness chip — "BAĞLANIYOR" before the first frame,
+        // amber "GECİKME · N sn önce" once the live stream goes quiet.
+        StaleChip(isStale = state.isStale, dataAgeMs = state.dataAgeMs)
 
         // Symbol + period selectors
         SymbolPeriodBar(state = state, onPeriod = vm::selectPeriod)
@@ -292,7 +297,7 @@ private fun UnifiedPositionsCard(state: PositionsUiState) {
                         label = "GLOBAL L/S",
                         value = "${curGlobalRatio.format(2)}",
                         deltaPct = globalDelta,
-                        color = Color(0xFF3B82F6),
+                        color = DiveColors.Blue,
                         rangeText = globalRange,
                         modifier = Modifier.weight(1f)
                     )
@@ -410,7 +415,7 @@ private fun UnifiedPositionsCard(state: PositionsUiState) {
                 }
 
                 drawSubChart(oi, metricY(0), metricHeight, w, DiveColors.Cyan, DiveColors.Cyan.copy(alpha = 0.12f))
-                drawSubChart(globalRatio, metricY(1), metricHeight, w, Color(0xFF3B82F6), Color(0xFF3B82F6).copy(alpha = 0.12f))
+                drawSubChart(globalRatio, metricY(1), metricHeight, w, DiveColors.Blue, DiveColors.Blue.copy(alpha = 0.12f))
                 drawSubChart(accountRatio, metricY(2), metricHeight, w, DiveColors.Orange, DiveColors.Orange.copy(alpha = 0.12f))
                 drawSubChart(positionRatio, metricY(3), metricHeight, w, DiveColors.Purple, DiveColors.Purple.copy(alpha = 0.12f))
                 drawSubChart(takerRatio, metricY(4), metricHeight, w, Color(0xFF84CC16), Color(0xFF84CC16).copy(alpha = 0.12f))
@@ -454,7 +459,7 @@ private fun UnifiedPositionsCard(state: PositionsUiState) {
                         drawCursorIntersectionMarker(prices, selIdx, gap, priceHeight, w, priceMarkerColor)
                     }
                     drawCursorIntersectionMarker(oi, selIdx, metricY(0), metricHeight, w, DiveColors.Cyan)
-                    drawCursorIntersectionMarker(globalRatio, selIdx, metricY(1), metricHeight, w, Color(0xFF3B82F6))
+                    drawCursorIntersectionMarker(globalRatio, selIdx, metricY(1), metricHeight, w, DiveColors.Blue)
                     drawCursorIntersectionMarker(accountRatio, selIdx, metricY(2), metricHeight, w, DiveColors.Orange)
                     drawCursorIntersectionMarker(positionRatio, selIdx, metricY(3), metricHeight, w, DiveColors.Purple)
                     drawCursorIntersectionMarker(takerRatio, selIdx, metricY(4), metricHeight, w, Color(0xFF84CC16))

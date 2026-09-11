@@ -33,6 +33,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -144,7 +148,8 @@ fun MobileBottomBar(
             onDismissRequest = { showOverflow = false },
             sheetState = overflowSheetState,
             containerColor = DiveColors.BgCard,
-            scrimColor = Color(0xAA000000),
+            // Theme token: near-black on dark presets, softer on light ones (was pinned 0xAA000000).
+            scrimColor = DiveColors.Scrim,
             tonalElevation = 0.dp,
             dragHandle = {
                 Box(
@@ -196,23 +201,31 @@ private fun BottomNavCell(
 ) {
     val tint = if (active) DiveColors.Accent else DiveColors.TextMuted
     val labelColor = if (active) DiveColors.Text else DiveColors.TextMuted
+    // Theme-derived active pill (was pinned blue 0x265B8DEF that ignored the preset accent).
+    val pillBg = DiveColors.Accent.copy(alpha = 0.15f)
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
         modifier = Modifier
             .clip(RoundedCornerShape(DiveDims.Radius))
+            // A11y: nav destination = tab role with an announced selection state; the
+            // Text child provides the accessible name (icon description is redundant).
+            .semantics {
+                role = Role.Tab
+                stateDescription = if (active) "Seçili" else "Seçili değil"
+            }
             .clickable(onClick = onClick)
             .padding(horizontal = 8.dp, vertical = 6.dp),
     ) {
         Box(
             modifier = Modifier
                 .clip(RoundedCornerShape(12.dp))
-                .background(if (active) Color(0x265B8DEF) else Color.Transparent)
+                .background(if (active) pillBg else Color.Transparent)
                 .padding(horizontal = 12.dp, vertical = 3.dp),
         ) {
             Icon(
                 imageVector = icon,
-                contentDescription = label,
+                contentDescription = null,
                 tint = tint,
                 modifier = Modifier.size(22.dp),
             )
@@ -230,7 +243,7 @@ private fun BottomNavCell(
 
 @Composable
 private fun OverflowRow(route: NavRoute, active: Boolean, onClick: () -> Unit) {
-    val bg = if (active) Color(0x265B8DEF) else DiveColors.BgCardHover
+    val bg = if (active) DiveColors.Accent.copy(alpha = 0.15f) else DiveColors.BgCardHover
     val fg = if (active) DiveColors.Accent else DiveColors.Text
     Row(
         modifier = Modifier
@@ -238,6 +251,10 @@ private fun OverflowRow(route: NavRoute, active: Boolean, onClick: () -> Unit) {
             .clip(RoundedCornerShape(DiveDims.Radius))
             .background(bg)
             .border(1.dp, DiveColors.Border, RoundedCornerShape(DiveDims.Radius))
+            .semantics {
+                role = Role.Button
+                stateDescription = if (active) "Seçili" else "Seçili değil"
+            }
             .clickable(onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,

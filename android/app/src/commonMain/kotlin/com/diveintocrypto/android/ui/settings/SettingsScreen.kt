@@ -21,11 +21,18 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -35,9 +42,12 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.diveintocrypto.android.AppContainer
+import com.diveintocrypto.android.domain.consensus.DEFAULT_F2_WEIGHTS
+import com.diveintocrypto.android.domain.consensus.DEFAULT_FULL_WEIGHTS
 import com.diveintocrypto.android.platform.AppInfo
 import com.diveintocrypto.android.platform.format
 import com.diveintocrypto.android.ui.theme.DiveColors
+import com.diveintocrypto.android.ui.theme.DiveDims
 import com.diveintocrypto.android.ui.theme.DiveFonts
 
 /**
@@ -84,7 +94,14 @@ fun SettingsScreen(container: AppContainer) {
         // 3. Indicator weight coefficients
         WeightsCard(
             weights = state.weights,
-            onUpdateWeight = vm::updateIndicatorWeight
+            onUpdateWeight = vm::updateIndicatorWeight,
+            onResetWeights = {
+                // SIFIRLA: restore EVERY indicator (core + extended) to its canonical
+                // default from DEFAULT_FULL_WEIGHTS via the existing public VM method.
+                DEFAULT_FULL_WEIGHTS.forEach { (key, default) ->
+                    vm.updateIndicatorWeight(key, default)
+                }
+            }
         )
 
         // 4. Scanner engine settings
@@ -164,12 +181,27 @@ private fun ConsensusSettingsCard(
     }
 }
 
+/**
+ * Indicator weight keys, derived from the engine's canonical maps (never hardcoded):
+ *   - CORE (15)      = [DEFAULT_F2_WEIGHTS] keys — the F2 consensus matrix the
+ *                      production engine has always applied.
+ *   - EXTENDED (42)  = [DEFAULT_FULL_WEIGHTS] keys minus the core set — the
+ *                      desktop-reference parity indicators.
+ */
+private val CORE_WEIGHT_KEYS: List<String> = DEFAULT_F2_WEIGHTS.keys.toList()
+private val EXTENDED_WEIGHT_KEYS: List<String> =
+    DEFAULT_FULL_WEIGHTS.keys.filter { it !in DEFAULT_F2_WEIGHTS }
+
 @Composable
 private fun WeightsCard(
     weights: Map<String, Double>,
-    onUpdateWeight: (String, Double) -> Unit
+    onUpdateWeight: (String, Double) -> Unit,
+    onResetWeights: () -> Unit,
 ) {
     SettingsCard(title = "INDICATOR CONSENSUS WEIGHTS") {
+        // Collapsed by default so first paint composes the 15 core steppers only;
+        // expanding adds the 42 extended rows to the (already scrollable) column.
+        var extendedOpen by remember { mutableStateOf(false) }
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(
                 text = "Contribution coefficients of each indicator to the final consensus vote (adjustable in 0.1 steps with the +/- buttons):",
@@ -178,25 +210,103 @@ private fun WeightsCard(
             )
             Spacer(Modifier.height(6.dp))
 
-            val order = listOf("rsi", "macd", "bollinger", "ema_cross", "sma_cross", "ichimoku", "psar", "obv")
-            order.forEach { key ->
-                val currentWeight = weights[key] ?: 1.0
-                val displayName = key.replace("_", " ").uppercase()
-                StepperRow(
-                    label = displayName,
-                    value = currentWeight.format(1),
-                    onDecrease = {
-                        val newVal = (currentWeight - 0.1).coerceAtLeast(0.0)
-                        onUpdateWeight(key, newVal)
-                    },
-                    onIncrease = {
-                        val newVal = (currentWeight + 0.1).coerceAtMost(5.0)
-                        onUpdateWeight(key, newVal)
-                    }
+            // ── CORE (15) ─────────────────────────────────────────────
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "ÇEKİRDEK (${CORE_WEIGHT_KEYS.size})",
+                    color = DiveColors.TextMuted,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 0.8.sp,
+                    fontFamily = DiveFonts.body,
+                    modifier = Modifier.weight(1f),
                 )
+                // SIFIRLA — resets ALL indicators (core + extended) to defaults.
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(DiveDims.RadiusSm))
+                        .background(DiveColors.RedTint15)
+                        .border(1.dp, DiveColors.RedTint25, RoundedCornerShape(DiveDims.RadiusSm))
+                        .semantics { role = Role.Button }
+                        .clickable(onClick = onResetWeights)
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                ) {
+                    Text(
+                        text = "SIFIRLA",
+                        color = DiveColors.Red,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.5.sp,
+                        fontFamily = DiveFonts.body,
+                    )
+                }
+            }
+            CORE_WEIGHT_KEYS.forEach { key ->
+                WeightStepperRow(key = key, weights = weights, onUpdateWeight = onUpdateWeight)
+            }
+
+            // ── EXTENDED (42) — collapsible ───────────────────────────
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 4.dp)
+                    .clip(RoundedCornerShape(DiveDims.RadiusSm))
+                    .background(DiveColors.BgCardHover)
+                    .border(1.dp, DiveColors.Border, RoundedCornerShape(DiveDims.RadiusSm))
+                    .semantics {
+                        role = Role.Button
+                        stateDescription = if (extendedOpen) "Açık" else "Kapalı"
+                    }
+                    .clickable { extendedOpen = !extendedOpen }
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+            ) {
+                Text(
+                    text = if (extendedOpen) "▾ GENİŞLETİLMİŞ (${EXTENDED_WEIGHT_KEYS.size})" else "▸ GENİŞLETİLMİŞ (${EXTENDED_WEIGHT_KEYS.size})",
+                    color = DiveColors.Accent,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 0.5.sp,
+                    fontFamily = DiveFonts.body,
+                )
+            }
+            if (extendedOpen) {
+                Text(
+                    text = "Desktop-reference parity indicators. Lower the weight (or 0.0) to effectively silence one in the consensus.",
+                    color = DiveColors.TextDim,
+                    fontSize = 10.sp,
+                )
+                EXTENDED_WEIGHT_KEYS.forEach { key ->
+                    WeightStepperRow(key = key, weights = weights, onUpdateWeight = onUpdateWeight)
+                }
             }
         }
     }
+}
+
+/** One indicator weight stepper row (reuse of the shared StepperRow). */
+@Composable
+private fun WeightStepperRow(
+    key: String,
+    weights: Map<String, Double>,
+    onUpdateWeight: (String, Double) -> Unit,
+) {
+    val currentWeight = weights[key] ?: 1.0
+    val displayName = key.replace("_", " ").uppercase()
+    StepperRow(
+        label = displayName,
+        value = currentWeight.format(1),
+        onDecrease = {
+            val newVal = (currentWeight - 0.1).coerceAtLeast(0.0)
+            onUpdateWeight(key, newVal)
+        },
+        onIncrease = {
+            val newVal = (currentWeight + 0.1).coerceAtMost(5.0)
+            onUpdateWeight(key, newVal)
+        }
+    )
 }
 
 @Composable

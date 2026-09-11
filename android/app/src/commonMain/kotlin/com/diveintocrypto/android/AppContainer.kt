@@ -9,70 +9,15 @@ import com.diveintocrypto.android.engine.MarketDataEngine
 import com.diveintocrypto.android.engine.exchanges.binance.BinanceConnector
 import com.diveintocrypto.android.domain.consensus.ConsensusConfig
 import com.diveintocrypto.android.domain.consensus.ConsensusEngine
+import com.diveintocrypto.android.domain.consensus.DEFAULT_FULL_WEIGHTS
 import com.diveintocrypto.android.domain.indicator.*
 import com.diveintocrypto.android.domain.model.IndicatorConfig
 
-/** Indicator weights — verbatim from the original Python reference implementation. */
-val ALL_INDICATOR_WEIGHTS: Map<String, Double> = mapOf(
-    "rsi" to 1.5,
-    "macd" to 2.0,
-    "bollinger" to 1.5,
-    "ema_cross" to 1.8,
-    "sma_cross" to 1.8,
-    "stochastic" to 1.2,
-    "adx_di" to 1.5,
-    "cci" to 1.0,
-    "williams_r" to 1.0,
-    "roc" to 1.0,
-    "mfi" to 1.2,
-    "atr_filter" to 0.0,
-    "ichimoku" to 2.0,
-    "psar" to 1.3,
-    "obv" to 1.2,
-    // ── Extended set (parity with the desktop reference engine, 2026-07-20) ──
-    "supertrend" to 2.0,
-    "awesome_oscillator" to 1.2,
-    "cmf" to 1.5,
-    "squeeze" to 2.5,
-    "choppiness" to 1.0,
-    "vwap" to 1.8,
-    "vortex" to 1.5,
-    "keltner_breakout" to 1.5,
-    "donchian_breakout" to 1.5,
-    "chaikin_oscillator" to 1.3,
-    "elder_ray" to 1.2,
-    "klinger_oscillator" to 1.3,
-    "trix" to 1.4,
-    "coppock_curve" to 1.2,
-    "kst" to 1.4,
-    "dpo" to 1.0,
-    "fisher_transform" to 1.2,
-    "connors_rsi" to 1.2,
-    "stoch_rsi" to 1.2,
-    "ultimate_oscillator" to 1.2,
-    "aroon_oscillator" to 1.3,
-    "schaff_trend_cycle" to 1.4,
-    "wavetrend" to 1.5,
-    "relative_vigor_index" to 1.1,
-    "balance_of_power" to 1.0,
-    "accum_dist_line" to 1.3,
-    "mass_index" to 1.0,
-    "cmo" to 1.2,
-    "tsi" to 1.3,
-    "vwma_cross" to 1.4,
-    "qstick" to 1.0,
-    "force_index" to 1.2,
-    "bollinger_percent_b" to 1.2,
-    "zscore_reversion" to 1.0,
-    "linreg_slope" to 1.4,
-    "atr_percentile" to 1.0,
-    "hist_vol_percentile" to 0.8,
-    "hurst" to 1.2,
-    "range_expansion" to 1.0,
-    "kalman_trend" to 1.4,
-    "half_life_reversion" to 1.0,
-    "rolling_sharpe" to 1.2,
-)
+// NOTE: the full 57-name indicator weight map previously lived here as
+// `ALL_INDICATOR_WEIGHTS` but was never consumed — Scorer fell back to `?: 1.0`
+// and every extended indicator scored at weight 1.0. The canonical map now lives
+// in `domain/consensus/Weights.kt` ([DEFAULT_FULL_WEIGHTS]) and IS wired into
+// [SettingsStore] defaults + [ConsensusEngine] construction below.
 
 /**
  * Dependency container for the trimmed (no paper / no bot) app.
@@ -108,7 +53,9 @@ class AppContainer(kv: KeyValueStore) {
     }
 
     val consensus: ConsensusEngine by lazy {
-        ConsensusEngine(settingsStore)
+        // Explicit full-weights wiring: settingsStore carries all 57 default weights
+        // (user overrides on top); DEFAULT_FULL_WEIGHTS is the no-store fallback.
+        ConsensusEngine(settingsStore, DEFAULT_FULL_WEIGHTS)
     }
 
     /**

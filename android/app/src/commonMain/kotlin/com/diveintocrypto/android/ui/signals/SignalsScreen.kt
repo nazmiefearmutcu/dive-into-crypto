@@ -39,6 +39,7 @@ import com.diveintocrypto.android.platform.format
 import com.diveintocrypto.android.ui.panel.components.PageHeader
 import com.diveintocrypto.android.ui.panel.components.RiskBadge
 import com.diveintocrypto.android.ui.panel.components.SignalBadge
+import com.diveintocrypto.android.ui.panel.components.StaleChip
 import com.diveintocrypto.android.ui.panel.components.DiveCard
 import com.diveintocrypto.android.ui.theme.DiveColors
 import com.diveintocrypto.android.ui.theme.DiveDims
@@ -89,6 +90,10 @@ fun SignalsScreen(container: AppContainer) {
                 stale = false,
                 onRefresh = { vm.refresh() },
             )
+
+            // HONESTY: WS staleness chip — "BAĞLANIYOR" before the first frame,
+            // amber "GECİKME · N sn önce" once the live stream goes quiet.
+            StaleChip(isStale = state.isStale, dataAgeMs = state.dataAgeMs)
 
             // 12-Timeframe Grid Selector
             TimeframeGrid(

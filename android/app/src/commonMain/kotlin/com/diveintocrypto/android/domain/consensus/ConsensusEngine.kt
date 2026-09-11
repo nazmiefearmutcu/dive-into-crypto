@@ -51,7 +51,16 @@ val DEFAULT_F2_WEIGHTS: Map<String, Double> = mapOf(
     "atr_filter" to 0.0, // Strict Filter (0 weight)
 )
 
-class ConsensusEngine(private val settingsStore: SettingsStore? = null) {
+class ConsensusEngine(
+    private val settingsStore: SettingsStore? = null,
+    /**
+     * Fallback weights for the no-settings-store path. Defaults to the FULL
+     * 57-name map ([DEFAULT_FULL_WEIGHTS]) so a store-less engine applies the
+     * same weighted consensus as production instead of silently scoring the
+     * 42 extended indicators at weight 1.0.
+     */
+    private val fallbackWeights: Map<String, Double> = DEFAULT_FULL_WEIGHTS,
+) {
 
     private val defaultSettings = SettingsData(
         confidenceThreshold = 25,
@@ -59,7 +68,7 @@ class ConsensusEngine(private val settingsStore: SettingsStore? = null) {
         enableRegimeMatrix = true,
         scanSurvivors = 50,
         scanParallelism = 8,
-        weights = DEFAULT_F2_WEIGHTS,
+        weights = fallbackWeights,
         favorites = emptyList(),
         wsDataSource = "FUTURES",
         chartCandleCount = 30,

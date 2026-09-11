@@ -38,12 +38,14 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.diveintocrypto.android.AppContainer
+import com.diveintocrypto.android.platform.format
 import com.diveintocrypto.android.platform.nowMillis
 import com.diveintocrypto.android.ui.panel.components.LiveTfGrid
 import com.diveintocrypto.android.ui.panel.components.PageHeader
 import com.diveintocrypto.android.ui.panel.components.SignalDistributionCard
 import com.diveintocrypto.android.ui.panel.components.FinalVerdictCard
 import com.diveintocrypto.android.ui.panel.components.StatusBar
+import com.diveintocrypto.android.ui.panel.components.StaleChip
 import com.diveintocrypto.android.ui.panel.components.DiveCard
 import com.diveintocrypto.android.ui.theme.DiveColors
 import com.diveintocrypto.android.ui.theme.DiveDims
@@ -86,6 +88,10 @@ fun PanelScreen(container: AppContainer) {
                 onRefresh = { vm.refresh() },
             )
 
+            // HONESTY: data-freshness chip from the VM's staleness fields —
+            // "BAĞLANIYOR" until the first WS frame, amber "GECİKME · N sn önce" when quiet.
+            StaleChip(isStale = state.isStale, dataAgeMs = state.dataAgeMs)
+
             SymbolSearchBar(
                 state = state,
                 onSearchChange = vm::setSearchQuery,
@@ -112,6 +118,13 @@ fun PanelScreen(container: AppContainer) {
             }
 
             FinalVerdictCard(
+                state = state,
+                modifier = Modifier.alpha(if (state.isLoading) 0.5f else 1f)
+            )
+
+            // STRATEGY OVERLAYS (README's "3 overlays") — ADDITIVE annotations from the
+            // new PanelUiState fields. They NEVER change the verdict; "—" = not computable.
+            StrategyOverlaysCard(
                 state = state,
                 modifier = Modifier.alpha(if (state.isLoading) 0.5f else 1f)
             )
@@ -267,5 +280,69 @@ private fun SymbolSearchBar(
                 }
             }
         }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Strategy overlay annotations — Rejim · MTF-Confluence · Mikroyapı.
+// Rendered straight from the PanelUiState fields; nullable overlay values
+// render an honest "—" (never an invented number).
+// ═══════════════════════════════════════════════════════════════════════
+@Composable
+private fun StrategyOverlaysCard(state: PanelUiState, modifier: Modifier = Modifier) {
+    val dirArrow: (Int) -> String = { d -> when { d > 0 -> "▲"; d < 0 -> "▼"; else -> "·" } }
+    val dirColor: (Int?) -> Color = { d -> when {
+        d != null && d > 0 -> DiveColors.Green
+        d != null && d < 0 -> DiveColors.Red
+        else -> DiveColors.TextMuted
+    } }
+
+    val mtfText = "${dirArrow(state.mtfDirection)} ${state.mtfScore.format(0, plus = true)} · " +
+        "${state.mtfLabel} · kapı ${if (state.mtfGate) "AÇIK ✓" else "KAPALI –"}"
+
+    val microText: String = state.microScore?.let { score ->
+        val label = state.microLabel?.removePrefix("STRONG_") ?: "—"
+        val active = state.microActive?.let { " · $it sinyal" } ?: ""
+        "${dirArrow(state.microDirection ?: 0)} ${score.format(0, plus = true)} · $label$active"
+    } ?: "—"
+
+    DiveCard(title = "STRATEJİ KATMANLARI (verdict'e dokunmaz)", modifier = modifier) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            OverlayRow(
+                label = "REJİM",
+                value = "${state.regime} · skor ${state.regimeAdaptiveScore.format(1, plus = true)}",
+                valueColor = when (state.regime) {
+                    "TREND" -> DiveColors.Cyan
+                    "RANGE" -> DiveColors.Purple
+                    else -> DiveColors.TextMuted
+                },
+            )
+            OverlayRow(label = "MTF", value = mtfText, valueColor = dirColor(state.mtfDirection))
+            OverlayRow(label = "MİKROYAPI", value = microText, valueColor = dirColor(state.microDirection))
+        }
+    }
+}
+
+@Composable
+private fun OverlayRow(label: String, value: String, valueColor: Color) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            color = DiveColors.TextDim,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.SemiBold,
+            letterSpacing = 0.4.sp,
+            modifier = Modifier.width(86.dp),
+        )
+        Text(
+            text = value,
+            color = valueColor,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+            fontFamily = DiveFonts.body,
+        )
     }
 }

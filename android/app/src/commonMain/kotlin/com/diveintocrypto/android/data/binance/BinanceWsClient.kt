@@ -77,6 +77,23 @@ class BinanceWsClient(
         awaitClose { job.cancel() }
     }
 
+    /**
+     * Live kline stream that SURVIVES disconnects. Wraps [klineStream] in
+     * [reconnectingFlow]: exponential backoff with jitter (1s→2s→4s…cap 30s,
+     * reset on the first successful frame), reconnecting on both failures and
+     * graceful server closes. Callers collect once — they no longer need their
+     * own `while(true) { try { collect } catch { delay } }` restart loops, and
+     * no tick is ever fabricated while the socket is down (ViewModels expose
+     * explicit staleness state instead).
+     */
+    fun reconnectingKlineStream(
+        symbol: String,
+        interval: String,
+        customBaseUrl: String? = null,
+    ): Flow<KlineUpdate> = reconnectingFlow(upstream = {
+        klineStream(symbol = symbol, interval = interval, customBaseUrl = customBaseUrl)
+    })
+
     data class KlineUpdate(val candle: Candle, val isClosed: Boolean)
 
     companion object {

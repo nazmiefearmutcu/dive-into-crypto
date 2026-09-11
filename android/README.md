@@ -6,7 +6,7 @@
 ![Kotlin](https://img.shields.io/badge/Kotlin-7F52FF?logo=kotlin&logoColor=white)
 ![Jetpack Compose](https://img.shields.io/badge/Jetpack%20Compose-4285F4?logo=jetpackcompose&logoColor=white)
 
-**Dive Into Crypto is a financial scanner** that watches the entire Binance USDT‑M perpetual‑futures market and tells you, per symbol, whether the evidence leans long, short, or neutral. It runs **15 technical indicators across 12 timeframes**, cross‑checks the result against **whale (top‑trader) positioning**, and collapses everything into a single confidence‑scored consensus verdict. It is a native Android app, it runs entirely **on your device**, and it reads only **public** Binance market data — no account, no API keys, no sign‑up.
+**Dive Into Crypto is a financial scanner** that watches the entire Binance USDT‑M perpetual‑futures market and tells you, per symbol, whether the evidence leans long, short, or neutral. It runs **57 technical indicators across 12 timeframes**, cross‑checks the result against **whale (top‑trader) positioning**, and collapses everything into a single confidence‑scored consensus verdict. It is a native Android app, it runs entirely **on your device**, and it reads only **public** Binance market data — no account, no API keys, no sign‑up.
 
 > ⚠️ Dive Into Crypto is an analysis and research tool, **not financial advice** and **not an automated trader**. It places no orders. Markets are risky; you are responsible for your own decisions.
 
@@ -82,8 +82,8 @@ Top movers by 24 h % change.
 
 ## The multi‑scan system
 
-### 15 indicators
-Every symbol × timeframe runs through 15 independent indicators. Each returns a five‑level signal (`STRONG_BUY = +2 … STRONG_SELL = −2`) plus a human‑readable reason.
+### 57 indicators (15 core + 42 extended)
+Every symbol × timeframe runs through 57 independent indicators. Each returns a five‑level signal (`STRONG_BUY = +2 … STRONG_SELL = −2`) plus a human‑readable reason. The 15 core indicators are:
 
 | # | Indicator | Defaults | Family |
 | --- | --- | --- | --- |
@@ -103,7 +103,7 @@ Every symbol × timeframe runs through 15 independent indicators. Each returns a
 | 14 | ADX + DI | period 14 | Trend strength |
 | 15 | ATR filter | period 14 | Volatility (filter) |
 
-The ATR filter is a **strict filter**: it carries weight 0, so it never votes in the consensus — it only feeds the risk assessment and the on‑screen volatility advisory.
+The ATR filter is a **strict filter**: it carries weight 0, so it never votes in the consensus — it only feeds the risk assessment and the on‑screen volatility advisory. The remaining **42 extended indicators** (Supertrend, Squeeze, Wavetrend, Schaff Trend Cycle, Hurst, Kalman Trend, …) run alongside the core with their desktop‑reference weights; all 57 are fixture‑pinned to the shared Python reference engine.
 
 ### 12 timeframes, scanned in two phases
 `1m · 3m · 5m · 15m · 30m · 1h · 2h · 4h · 6h · 8h · 12h · 1d`
@@ -138,13 +138,21 @@ Dive Into Crypto reads only **public** Binance Futures endpoints. No authenticat
 
 > Binance market data may be geo‑restricted in some regions; that is a network/runtime condition independent of the app.
 
+### Honesty — nothing is synthesised
+Dive Into Crypto **never fabricates market data**. Earlier builds contained two violations, both removed in 0.2.0:
+
+- When the live WebSocket went quiet, the app used to **invent ticks** (random walk around the last close) and even **random OI / long‑short / taker‑ratio points** to keep charts "moving". All random‑data synthesis is deleted.
+- Instead, when the live stream is quiet the last **real** data is kept and the UI state exposes an explicit staleness flag (`isStale` + `dataAgeMs`), rendered as a STALE chip. The same applies when the WebSocket reconnects (exponential backoff with jitter, 1 s → 30 s cap) — silence is labelled, never papered over.
+
+The Scanner likewise reports how many symbols could not be scanned (`failedCount`) instead of silently shrinking the sweep.
+
 ---
 
 ## How the consensus works
 
 The Scanner and Signals screens use an indicator‑voting consensus. The pipeline for one symbol × timeframe is:
 
-**1. Vote.** Each of the 15 indicators produces a signal in `{ +2, +1, 0, −1, −2 }`.
+**1. Vote.** Each of the 57 indicators produces a signal in `{ +2, +1, 0, −1, −2 }`.
 
 **2. Weighted score.** The engine takes a weighted average:
 
@@ -152,7 +160,7 @@ The Scanner and Signals screens use an indicator‑voting consensus. The pipelin
 weightedScore = Σ(signal × weight) / Σ(weight)
 ```
 
-Indicators are weighted by family — for example MACD `2.0`, EMA‑cross `1.8`, RSI `1.5`, Bollinger `1.5`, ADX+DI `1.5`, OBV `1.5`, SMA‑cross `1.5`, Ichimoku `1.5`, Stochastic / PSAR / MFI `1.2`, Williams %R / CCI / ROC `1.0`, and the ATR filter `0.0` (never votes). Weights are user‑adjustable in Settings.
+Indicators are weighted by family — for example MACD `2.0`, EMA‑cross `1.8`, RSI `1.5`, Bollinger `1.5`, ADX+DI `1.5`, OBV `1.5`, SMA‑cross `1.5`, Ichimoku `1.5`, Stochastic / PSAR / MFI `1.2`, Williams %R / CCI / ROC `1.0`, and the ATR filter `0.0` (never votes). **All 57 indicators carry their desktop‑reference weights** (as of 0.2.0 the 42 extended indicators are wired too — previously they silently scored at weight 1.0). Weights are user‑adjustable in Settings.
 
 **3. Verdict thresholds.**
 
@@ -185,6 +193,15 @@ confidence = clamp(
 
 The result is one `ConsensusOutput` per symbol × timeframe carrying the signal, confidence, weighted score, vote counts, full per‑indicator breakdown, a reason string, and the risk assessment.
 
+### The three overlays (annotations, never verdicts)
+The engine also ships three strategy overlays, and since 0.2.0 they are actually **wired into the UI state** as ADDITIVE annotations — they are computed alongside the scan and displayed next to the verdict, but **none of them changes** the parity‑locked consensus vote, the ranking, or the whale‑divergence elimination:
+
+| Overlay | What it says | Where it surfaces |
+| --- | --- | --- |
+| **Regime** | `TREND / RANGE / MIXED` from ADX + Choppiness | Scanner rows (`regime`), Panel (`regime`) |
+| **MTF‑confluence** | Cross‑timeframe agreement score (−100…+100), dominant direction, and a boolean "higher‑TF stack agrees" gate | Scanner rows (`mtfScore/mtfGate/mtfLabel`), Panel |
+| **Microstructure** | Directed bundle over OI / funding / taker / L‑S series (−100…+100 + label) | Scanner head rows (`microScore/microLabel`), Panel |
+
 ### Microstructure consensus (Positions screen)
 Independently of the indicators, Dive Into Crypto computes a **directed** verdict from market microstructure along three axes — **price state**, **open‑interest momentum**, and **taker aggression** — mapped through a 27‑cell (3×3×3) regime table to a score in roughly −95…+50, then adjusted by a whale‑positioning override. That score buckets into the same five‑level signal (`≥ 60 STRONG_BUY · ≥ 20 BUY · ≤ −20 SELL · ≤ −60 STRONG_SELL`) and is what powers the OI · L/S leaderboard.
 
@@ -215,7 +232,9 @@ Offline, compute‑only micro‑benchmarks of the consensus engine (no network, 
 
 The compute cost of the whole market is small; real‑world scan time is dominated by Binance network round‑trips, which the app fans out in parallel.
 
-- **Correctness:** 61/61 indicator/consensus fixture tests pass, pinned to the original Python reference within per‑test tolerances.
+> Scope note: `BENCHMARKS.md` measures the original **15‑core‑indicator F2 consensus path** over synthetic candles. The production pipeline runs all 57 indicators per symbol × timeframe, so absolute throughput differs; the point of the benchmarks is that compute is negligible relative to network latency.
+
+- **Correctness:** the full Kotlin unit + fixture suite (150 tests, 0.2.0) passes; every indicator stays pinned to the original Python reference within per‑test tolerances.
 - **APK size:** 3.6 MB (release, R8‑minified).
 - **Runtime:** ≈ 2.2 s cold start and ≈ 31 MB memory (PSS) on an API 34 emulator; crash‑free with minification on.
 
@@ -225,7 +244,7 @@ Full numbers, methodology, and a one‑command reproduction are in **[BENCHMARKS
 
 ## Install
 
-1. Download `dive-into-crypto-v0.1.0.apk` from the [latest release](../../releases/latest).
+1. Download `dive-into-crypto-v0.2.0.apk` from the [latest release](../../releases/latest).
 2. On your Android device (8.0 / API 26 or newer), allow your browser or file manager to "install unknown apps".
 3. Open the APK and install.
 

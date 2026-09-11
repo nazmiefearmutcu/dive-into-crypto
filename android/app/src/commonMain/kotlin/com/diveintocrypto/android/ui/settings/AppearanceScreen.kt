@@ -44,10 +44,10 @@ import com.diveintocrypto.android.ui.theme.DiveDims
 import com.diveintocrypto.android.ui.theme.DiveFonts
 
 /**
- * Appearance — live theming: pick one of 9 presets and tune the
- * customization axes. Every change applies instantly and persists on-device
- * (via [DiveThemeController]). Reading the controller's state here makes this
- * screen — and the whole app — recompose on each change.
+ * Appearance — live theming: pick one of the bundled presets (count derived from
+ * [PRESETS]) and tune the customization axes. Every change applies instantly and
+ * persists on-device (via [DiveThemeController]). Reading the controller's state
+ * here makes this screen — and the whole app — recompose on each change.
  */
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
@@ -66,7 +66,8 @@ fun AppearanceScreen() {
         DiveCard(title = "THEME") {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
-                    "9 ready-made themes · 3 families × 3 variants. Tap, applies instantly.",
+                    // Derived from PRESETS — the count text can never go stale again.
+                    "${PRESETS.size} ready-made themes · ${PRESETS.map { it.family }.distinct().size} families. Tap, applies instantly.",
                     color = DiveColors.TextDim, fontSize = 11.sp, fontFamily = DiveFonts.body,
                 )
                 PRESETS.groupBy { it.family }.forEach { (family, presets) ->

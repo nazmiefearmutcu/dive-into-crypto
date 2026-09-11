@@ -24,13 +24,16 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlin.math.abs
-import kotlin.random.Random
 
 /**
  * PositionsViewModel handles loading and live updates for market position data.
  * It combines parallel history REST calls on start, high-frequency 5-second polling
- * in the background, and WebSocket live tickers for real-time sub-second price moves
- * and simulated micro-fluctuations.
+ * in the background, and a self-healing WebSocket live ticker for real-time price moves.
+ *
+ * NOTHING IS SYNTHESISED ("Nothing is synthesised" doctrine): when the WebSocket is
+ * quiet the last REAL data is kept and the UI state is flagged via [PositionsUiState.isStale]
+ * / [PositionsUiState.dataAgeMs]. The previous random price/OI/ratio fabrication
+ * ("fallback ticker" + "simulated series") was deleted — never invent market data.
  */
 class PositionsViewModel(private val container: AppContainer) : ViewModel() {
 
@@ -43,7 +46,7 @@ class PositionsViewModel(private val container: AppContainer) : ViewModel() {
     private var loadJob: Job? = null
     private var pollingJob: Job? = null
     private var tickerJob: Job? = null
-    private var fallbackTickerJob: Job? = null
+    private var stalenessJob: Job? = null
     private var flashResetJob: Job? = null
 
     init {
@@ -79,7 +82,7 @@ class PositionsViewModel(private val container: AppContainer) : ViewModel() {
         loadJob?.cancel()
         pollingJob?.cancel()
         tickerJob?.cancel()
-        fallbackTickerJob?.cancel()
+        stalenessJob?.cancel()
         flashResetJob?.cancel()
 
         synchronized(lock) {
@@ -204,40 +207,46 @@ class PositionsViewModel(private val container: AppContainer) : ViewModel() {
 
     private fun startTicker(symbol: String, period: String) {
         tickerJob?.cancel()
-        fallbackTickerJob?.cancel()
+        stalenessJob?.cancel()
 
         var lastWsMessageTime = 0L
 
+        // The repository stream is self-healing (BinanceWsClient.reconnectingKlineStream),
+        // so one collect suffices. NO synthetic prices: when the socket is quiet the last
+        // REAL data stays on screen and the staleness watchdog flags it.
         tickerJob = viewModelScope.launch(Dispatchers.Default) {
-            while (true) {
-                try {
-                    container.repository.liveKlines(symbol, period).collect { update ->
-                        lastWsMessageTime = nowMillis()
-                        processTick(update.candle.close, update.candle.openTime)
-                    }
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (t: Throwable) {
-                    delay(5000)
+            try {
+                container.repository.liveKlines(symbol, period).collect { update ->
+                    lastWsMessageTime = nowMillis()
+                    _ui.update { it.copy(isStale = false, dataAgeMs = 0L) }
+                    processTick(update.candle.close, update.candle.openTime)
                 }
+            } catch (e: CancellationException) {
+                throw e
             }
         }
 
-        fallbackTickerJob = viewModelScope.launch(Dispatchers.Default) {
-            delay(3000)
+        // Clock-only staleness watchdog — reads the wall clock, never fabricates data.
+        // UI renders a STALE chip from [PositionsUiState.isStale] / [PositionsUiState.dataAgeMs].
+        stalenessJob = viewModelScope.launch(Dispatchers.Default) {
+            var lastAgePush = 0L
             while (true) {
+                delay(1_000)
+                val last = lastWsMessageTime
                 val now = nowMillis()
-                if (now - lastWsMessageTime > 3000) {
-                    val state = _ui.value
-                    val lastPrice = state.closePrices.lastOrNull() ?: 0.0
-                    if (lastPrice > 0.0) {
-                        val durationMs = getPeriodDurationMs(period)
-                        val openTime = (nowMillis() / durationMs) * durationMs
-                        val simulatedPrice = lastPrice * (1.0 + Random.nextDouble(-0.0002, 0.0002))
-                        processTick(simulatedPrice, openTime)
+                val age = if (last > 0L) now - last else null
+                val stale = age == null || age > STALE_AFTER_MS
+                _ui.update {
+                    // Push immediately on staleness transitions; refresh the age
+                    // reading at most every STALE_AGE_PUSH_MS to bound recomposition.
+                    val dueAgePush = now - lastAgePush >= STALE_AGE_PUSH_MS
+                    if (it.isStale == stale && !dueAgePush && it.dataAgeMs == age) {
+                        it
+                    } else {
+                        if (dueAgePush || it.isStale != stale) lastAgePush = now
+                        it.copy(isStale = stale, dataAgeMs = age)
                     }
                 }
-                delay(1000)
             }
         }
     }
@@ -293,110 +302,27 @@ class PositionsViewModel(private val container: AppContainer) : ViewModel() {
             updatedCandles = currentCandles
         }
 
+        // HONESTY: only the CANDLES follow the live WebSocket price (real ticks).
+        // The OI / L/S / taker / funding series are NEVER extrapolated or simulated —
+        // they refresh solely from the REST polling loop; while the REST refresh is
+        // in flight the displayed series keep their last REAL points and the staleness
+        // fields in the UI state say so. (The previous per-tick random series
+        // fabrication was removed — "Nothing is synthesised".)
         val state = _ui.value
-        val currentOi = state.openInterest.toMutableList()
-        val currentAcc = state.accountRatio.toMutableList()
-        val currentPos = state.positionRatio.toMutableList()
-        val currentTaker = state.takerRatio.toMutableList()
-        val currentGlobal = state.globalRatio.toMutableList()
-        val currentFunding = state.fundingRate.toMutableList()
-
-        if (currentOi.isNotEmpty() && currentAcc.isNotEmpty() && currentPos.isNotEmpty() && currentTaker.isNotEmpty() && currentGlobal.isNotEmpty() && currentFunding.isNotEmpty()) {
-            val lastOi = currentOi.last()
-            val lastAcc = currentAcc.last()
-            val lastPos = currentPos.last()
-            val lastTaker = currentTaker.last()
-            val lastGlobal = currentGlobal.last()
-            val lastFunding = currentFunding.last()
-
-            val simulatedOiVal = lastOi.sumOpenInterestValue * (1.0 + Random.nextDouble(-0.00005, 0.00005))
-            val newOiPoint = lastOi.copy(timestamp = openTime, sumOpenInterestValue = simulatedOiVal)
-
-            val accDelta = Random.nextDouble(-0.002, 0.002)
-            val simulatedAccRatio = (lastAcc.longShortRatio + accDelta).coerceIn(0.1, 10.0)
-            val accLongFraction = simulatedAccRatio / (simulatedAccRatio + 1.0)
-            val newAccPoint = lastAcc.copy(
-                timestamp = openTime,
-                longShortRatio = simulatedAccRatio,
-                longAccount = accLongFraction,
-                shortAccount = 1.0 - accLongFraction
-            )
-
-            val posDelta = Random.nextDouble(-0.002, 0.002)
-            val simulatedPosRatio = (lastPos.longShortRatio + posDelta).coerceIn(0.1, 10.0)
-            val posLongFraction = simulatedPosRatio / (simulatedPosRatio + 1.0)
-            val newPosPoint = lastPos.copy(
-                timestamp = openTime,
-                longShortRatio = simulatedPosRatio,
-                longAccount = posLongFraction,
-                shortAccount = 1.0 - posLongFraction
-            )
-
-            val globalDelta = Random.nextDouble(-0.002, 0.002)
-            val simulatedGlobalRatio = (lastGlobal.longShortRatio + globalDelta).coerceIn(0.1, 10.0)
-            val globalLongFraction = simulatedGlobalRatio / (simulatedGlobalRatio + 1.0)
-            val newGlobalPoint = lastGlobal.copy(
-                timestamp = openTime,
-                longShortRatio = simulatedGlobalRatio,
-                longAccount = globalLongFraction,
-                shortAccount = 1.0 - globalLongFraction
-            )
-
-            val buyVolDelta = Random.nextDouble(-10.0, 10.0)
-            val sellVolDelta = Random.nextDouble(-10.0, 10.0)
-            val newBuyVol = (lastTaker.buyVol + buyVolDelta).coerceAtLeast(1.0)
-            val newSellVol = (lastTaker.sellVol + sellVolDelta).coerceAtLeast(1.0)
-            val simulatedTakerRatio = newBuyVol / newSellVol
-            val newTakerPoint = lastTaker.copy(
-                timestamp = openTime,
-                buySellRatio = simulatedTakerRatio,
-                buyVol = newBuyVol,
-                sellVol = newSellVol
-            )
-
-            val newFundingPoint = lastFunding.copy(timestamp = openTime)
-
-            if (isNewCandle) {
-                currentOi.add(newOiPoint)
-                while (currentOi.size > limit) currentOi.removeAt(0)
-
-                currentAcc.add(newAccPoint)
-                while (currentAcc.size > limit) currentAcc.removeAt(0)
-
-                currentPos.add(newPosPoint)
-                while (currentPos.size > limit) currentPos.removeAt(0)
-
-                currentTaker.add(newTakerPoint)
-                while (currentTaker.size > limit) currentTaker.removeAt(0)
-
-                currentGlobal.add(newGlobalPoint)
-                while (currentGlobal.size > limit) currentGlobal.removeAt(0)
-
-                currentFunding.add(newFundingPoint)
-                while (currentFunding.size > limit) currentFunding.removeAt(0)
-            } else {
-                currentOi[currentOi.lastIndex] = newOiPoint
-                currentAcc[currentAcc.lastIndex] = newAccPoint
-                currentPos[currentPos.lastIndex] = newPosPoint
-                currentTaker[currentTaker.lastIndex] = newTakerPoint
-                currentGlobal[currentGlobal.lastIndex] = newGlobalPoint
-                currentFunding[currentFunding.lastIndex] = newFundingPoint
-            }
-        }
-
-        val bias = calculateQuantBias(updatedCandles, currentOi, currentAcc, currentPos, currentTaker, currentGlobal, currentFunding)
+        val bias = calculateQuantBias(
+            updatedCandles,
+            state.openInterest,
+            state.accountRatio,
+            state.positionRatio,
+            state.takerRatio,
+            state.globalRatio,
+            state.fundingRate,
+        )
 
         _ui.update {
             it.copy(
                 closePrices = updatedCandles.map { c -> c.close },
                 candles = updatedCandles,
-                openInterest = currentOi,
-                accountRatio = currentAcc,
-                positionRatio = currentPos,
-                takerRatio = currentTaker,
-                globalRatio = currentGlobal,
-                fundingRate = currentFunding,
-                netTakerVolume = currentTaker.map { t -> t.buyVol - t.sellVol },
                 quantBias = bias,
                 priceChangeDirection = direction,
                 lastUpdateMs = nowMillis()
@@ -710,9 +636,17 @@ class PositionsViewModel(private val container: AppContainer) : ViewModel() {
         loadJob?.cancel()
         pollingJob?.cancel()
         tickerJob?.cancel()
-        fallbackTickerJob?.cancel()
+        stalenessJob?.cancel()
         flashResetJob?.cancel()
         super.onCleared()
+    }
+
+    companion object {
+        /** WS-quiet threshold after which the UI state is flagged stale (nothing is fabricated). */
+        const val STALE_AFTER_MS = 3_000L
+
+        /** Minimum interval between staleness-age state pushes (bounds recomposition). */
+        const val STALE_AGE_PUSH_MS = 5_000L
     }
 }
 
@@ -742,6 +676,15 @@ data class PositionsUiState(
     val error: String? = null,
     val lastUpdateMs: Long? = null,
     val priceChangeDirection: String = "NONE",
+    /**
+     * HONESTY FIELDS (replaces the deleted random price/series fabrication):
+     * true once no WebSocket frame has arrived for more than [PositionsViewModel.STALE_AFTER_MS]
+     * (or none ever arrived on this session). The OI/L/S/taker/funding series keep their
+     * last REAL REST points — nothing is extrapolated between refreshes.
+     */
+    val isStale: Boolean = false,
+    /** ms since the last WS frame; null = no frame received yet in this session. */
+    val dataAgeMs: Long? = null,
 ) {
     val periods: List<String> = listOf("5m", "15m", "30m", "1h", "2h", "4h", "6h", "12h", "1d")
 }

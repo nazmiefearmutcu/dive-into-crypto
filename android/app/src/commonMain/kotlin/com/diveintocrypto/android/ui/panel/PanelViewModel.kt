@@ -8,12 +8,18 @@ import com.diveintocrypto.android.data.binance.LongShortRatioPoint
 import com.diveintocrypto.android.data.binance.OpenInterestPoint
 import com.diveintocrypto.android.data.binance.TakerLongShortRatioPoint
 import com.diveintocrypto.android.data.binance.FundingRatePoint
+import com.diveintocrypto.android.domain.consensus.Regime
+import com.diveintocrypto.android.domain.overlay.Microstructure
+import com.diveintocrypto.android.domain.overlay.MtfConfluence
 import com.diveintocrypto.android.platform.logDebug
 import com.diveintocrypto.android.platform.logError
 import com.diveintocrypto.android.platform.nowMillis
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -23,14 +29,20 @@ import kotlinx.coroutines.launch
 /**
  * Paper-free ViewModel for the Panel screen.
  *
- *   - `bootstrap()`        → fetches the active symbol's 1h klines, runs the
- *                            indicators, and populates the UI state with the
- *                            last price + consensus result.
+ *   - `bootstrap()`        → fetches the active symbol's 1h klines + REST series,
+ *                            runs the multimodal consensus, and populates the UI
+ *                            state with the last price + verdict (+ overlays).
  *   - `bootstrapMultiTf()` → runs a separate kline + consensus for each of the
  *                            12 TFs, feeding the 12-cell mini grid.
- *   - `liveTicker()`       → subscribes to the spot WS klines stream; on each
- *                            tick it refreshes currentPrice (it does NOT recompute
- *                            the indicators — that would be wasteful at high frequency).
+ *   - `liveTicker()`       → subscribes to the (self-healing) WS klines stream.
+ *                            Every tick updates currentPrice; the VERDICT is
+ *                            recomputed at most every [LIVE_RECOMPUTE_INTERVAL_MS]
+ *                            (and immediately on candle close) over the cached
+ *                            candles/series. State is re-emitted only when a
+ *                            value actually changed.
+ *
+ * NOTHING IS SYNTHESISED: no random-tick fallback exists; when the WS is quiet the
+ * last REAL data stays and [PanelUiState.isStale] / [PanelUiState.dataAgeMs] say so.
  */
 class PanelViewModel(private val container: AppContainer) : ViewModel() {
 
@@ -39,9 +51,18 @@ class PanelViewModel(private val container: AppContainer) : ViewModel() {
 
     private var candles: List<Candle> = emptyList()
 
+    // Last REAL REST series — reused by the throttled live recompute (never fabricated).
+    private var lastOi: List<OpenInterestPoint> = emptyList()
+    private var lastAcc: List<LongShortRatioPoint> = emptyList()
+    private var lastPos: List<LongShortRatioPoint> = emptyList()
+    private var lastTaker: List<TakerLongShortRatioPoint> = emptyList()
+    private var lastGlob: List<LongShortRatioPoint> = emptyList()
+    private var lastFunding: List<FundingRatePoint> = emptyList()
+
     private var bootstrapJob: kotlinx.coroutines.Job? = null
     private var multiTfJob: kotlinx.coroutines.Job? = null
     private var tickerJob: kotlinx.coroutines.Job? = null
+    private var stalenessJob: kotlinx.coroutines.Job? = null
 
     init {
         viewModelScope.launch {
@@ -81,8 +102,9 @@ class PanelViewModel(private val container: AppContainer) : ViewModel() {
         bootstrapJob?.cancel()
         multiTfJob?.cancel()
         tickerJob?.cancel()
+        stalenessJob?.cancel()
 
-        bootstrapJob = viewModelScope.launch(kotlinx.coroutines.Dispatchers.Default) {
+        bootstrapJob = viewModelScope.launch(Dispatchers.Default) {
             try {
                 logDebug("PanelVM", "bootstrapJob: starting for symbol=$symbol, timeframe=$timeframe")
                 coroutineScope {
@@ -112,10 +134,17 @@ class PanelViewModel(private val container: AppContainer) : ViewModel() {
                     logDebug("PanelVM", "bootstrapJob: fundingRate fetched count=${fundingRate.size}")
 
                     candles = cs
+                    // Cache the REAL REST series for the throttled live recompute.
+                    lastOi = oi
+                    lastAcc = accountRatio
+                    lastPos = positionRatio
+                    lastTaker = taker
+                    lastGlob = globalRatio
+                    lastFunding = fundingRate
                     logDebug("PanelVM", "bootstrapJob: calling recomputeMultimodal")
                     recomputeMultimodal(oi, accountRatio, positionRatio, taker, globalRatio, fundingRate)
                 }
-            } catch (e: kotlinx.coroutines.CancellationException) {
+            } catch (e: CancellationException) {
                 logError("PanelVM", "bootstrapJob cancelled", e)
                 throw e
             } catch (t: Throwable) {
@@ -126,14 +155,97 @@ class PanelViewModel(private val container: AppContainer) : ViewModel() {
             }
         }
 
-        multiTfJob = viewModelScope.launch(kotlinx.coroutines.Dispatchers.Default) {
+        refreshMultiTf(symbol)
+
+        tickerJob = viewModelScope.launch(Dispatchers.Default) {
+            var lastRecomputeMs = 0L
+            try {
+                // Self-healing stream (BinanceWsClient.reconnectingKlineStream) — a single
+                // collect survives disconnects. NO synthetic ticks: quiet periods are
+                // surfaced via the staleness fields instead.
+                container.repository.liveKlines(symbol, timeframe).collect { update ->
+                    lastWsMessageTime.value = nowMillis()
+                    mergeTickCandle(update.candle)
+                    _ui.update {
+                        it.copy(
+                            currentPrice = update.candle.close,
+                            lastUpdateMs = nowMillis(),
+                            isStale = false,
+                            dataAgeMs = 0L,
+                        )
+                    }
+                    val now = nowMillis()
+                    // THROTTLED LIVE RECOMPUTE: rerun indicators over the cached candles
+                    // at most every [LIVE_RECOMPUTE_INTERVAL_MS], plus immediately on
+                    // candle close. Recompose only when a value actually changed.
+                    if (now - lastRecomputeMs >= LIVE_RECOMPUTE_INTERVAL_MS || update.isClosed) {
+                        lastRecomputeMs = now
+                        recomputeVerdictFromCache()
+                    }
+                    // The 12-TF grid refreshes on candle close (grid cells only change
+                    // when a TF's candle settles — keeps network chatter bounded).
+                    if (update.isClosed) refreshMultiTf(symbol)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                // WS is optional — the REST snapshot already provided the last price.
+            }
+        }
+
+        // Clock-only staleness watchdog (reads the wall clock; never fabricates data).
+        stalenessJob = viewModelScope.launch(Dispatchers.Default) {
+            var lastAgePush = 0L
+            while (true) {
+                delay(1_000)
+                val last = lastWsMessageTime.value
+                if (last <= 0L) continue // no frame received yet in this session
+                val now = nowMillis()
+                val age = now - last
+                val stale = age > STALE_AFTER_MS
+                _ui.update {
+                    val dueAgePush = now - lastAgePush >= STALE_AGE_PUSH_MS
+                    if (it.isStale == stale && !dueAgePush && it.dataAgeMs == age) {
+                        it
+                    } else {
+                        if (dueAgePush || it.isStale != stale) lastAgePush = now
+                        it.copy(isStale = stale, dataAgeMs = age)
+                    }
+                }
+            }
+        }
+    }
+
+    /** Time of the last WS frame for the staleness watchdog (0 = none yet). */
+    private val lastWsMessageTime = kotlinx.atomicfu.atomic(0L)
+
+    /** Folds a live WS candle into the cached candle list (real ticks only). */
+    private fun mergeTickCandle(candle: Candle) {
+        val last = candles.lastOrNull()
+        candles = when {
+            last == null -> listOf(candle)
+            candle.openTime == last.openTime -> candles.dropLast(1) + candle
+            candle.openTime > last.openTime -> (candles + candle).takeLast(300)
+            else -> candles
+        }
+    }
+
+    /** Reruns the multimodal consensus + overlays over the CACHED candles/series. */
+    private fun recomputeVerdictFromCache() {
+        recomputeMultimodal(lastOi, lastAcc, lastPos, lastTaker, lastGlob, lastFunding)
+    }
+
+    /** Runs the 12-TF mini grid over freshly (cache-aware) fetched klines. */
+    private fun refreshMultiTf(symbol: String) {
+        multiTfJob?.cancel()
+        multiTfJob = viewModelScope.launch(Dispatchers.Default) {
             try {
                 val results = coroutineScope {
                     ALL_TIMEFRAMES.map { tf ->
                         async {
                             val cs = try {
                                 container.repository.futuresHistory(symbol, tf, limit = 300)
-                            } catch (e: kotlinx.coroutines.CancellationException) {
+                            } catch (e: CancellationException) {
                                 throw e
                             } catch (e: Throwable) {
                                 logError("PanelVM", "multiTfJob: futuresHistory failed for $tf", e)
@@ -149,7 +261,7 @@ class PanelViewModel(private val container: AppContainer) : ViewModel() {
                                     }
                                     val out = container.consensus.evaluate(indResults)
                                     TfSignal(tf = tf, signal = out.finalSignal.name, confidence = out.confidence)
-                                } catch (e: kotlinx.coroutines.CancellationException) {
+                                } catch (e: CancellationException) {
                                     throw e
                                 } catch (e: Throwable) {
                                     logError("PanelVM", "multiTfJob: indicator calc failed for $tf", e)
@@ -160,25 +272,10 @@ class PanelViewModel(private val container: AppContainer) : ViewModel() {
                     }.awaitAll()
                 }
                 _ui.update { it.copy(multiTf = results) }
-            } catch (e: kotlinx.coroutines.CancellationException) {
+            } catch (e: CancellationException) {
                 throw e
             } catch (t: Throwable) {
                 logError("PanelVM", "multiTfJob: error", t)
-            }
-        }
-
-        tickerJob = viewModelScope.launch {
-            try {
-                container.repository.liveKlines(symbol, timeframe).collect { update ->
-                    _ui.update {
-                        it.copy(
-                            currentPrice = update.candle.close,
-                            lastUpdateMs = nowMillis(),
-                        )
-                    }
-                }
-            } catch (_: Throwable) {
-                // WS is optional — the REST snapshot already provided the last price.
             }
         }
     }
@@ -209,22 +306,80 @@ class PanelViewModel(private val container: AppContainer) : ViewModel() {
             _ui.update { it.copy(isLoading = false, errorMessage = "Consensus could not be computed") }
             return
         }
-        _ui.update {
-            it.copy(
-                currentPrice = candles.last().close,
+
+        // ── STRATEGY OVERLAY ANNOTATIONS (README's "3 overlays") — ADDITIVE:
+        //    they are surfaced next to the verdict and NEVER change it. ──────────
+        // REGIME (domain/consensus/Regime.kt): label + adaptively-weighted
+        // observational score from the already-computed ADX/Choppiness raws.
+        val indResults = container.indicators.map { it.calculate(candles) }
+        val regimeEval = Regime.evaluate(indResults, container.settingsStore.getSettings().weights)
+        // MICROSTRUCTURE (domain/overlay/Microstructure.kt): directed bundle over
+        // the REAL aligned series (OI/price/funding/taker/global/whale L-S).
+        val micro = Microstructure.evaluate(
+            Microstructure.Series(
+                oi = oi.map { it.sumOpenInterestValue },
+                price = candles.map { it.close },
+                funding = fundingRate.map { it.fundingRate },
+                taker = taker.map { it.buySellRatio },
+                glob = globalRatio.map { it.longShortRatio },
+                pos = positionRatio.map { it.longShortRatio },
+            )
+        )
+        // MTF-CONFLUENCE (domain/overlay/MtfConfluence.kt): agreement across the
+        // 12-TF mini grid.
+        val mtf = MtfConfluence.confluence(
+            _ui.value.multiTf.map { MtfConfluence.TfVerdict(it.tf, it.signal, it.confidence) }
+        )
+
+        val action = if (consensus.shouldTrade) "OPEN_${consensus.finalSignal.name}" else "HOLD"
+        val lastClose = candles.last().close
+
+        // Emit ONLY when a displayed value actually changed (bounded recomposition).
+        _ui.update { st ->
+            val changed = st.isLoading ||
+                st.currentPrice != lastClose ||
+                st.latestSignal != consensus.finalSignal.name ||
+                st.confidence != consensus.confidence ||
+                st.action != action ||
+                st.reason != consensus.reason ||
+                st.distBuy != consensus.buyCount ||
+                st.distSell != consensus.sellCount ||
+                st.distNeutral != consensus.neutralCount ||
+                st.regime != regimeEval.regime ||
+                st.regimeAdaptiveScore != regimeEval.adaptiveScore ||
+                st.mtfScore != mtf.score ||
+                st.mtfDirection != mtf.direction ||
+                st.mtfGate != mtf.gate ||
+                st.mtfLabel != mtf.label ||
+                st.microScore != micro.score ||
+                st.microDirection != micro.direction ||
+                st.microLabel != micro.label ||
+                st.microActive != micro.active
+            if (!changed) st else st.copy(
+                currentPrice = lastClose,
                 latestSignal = consensus.finalSignal.name,
                 confidence = consensus.confidence,
-                action = if (consensus.shouldTrade) "OPEN_${consensus.finalSignal.name}" else "HOLD",
+                action = action,
                 reason = consensus.reason,
                 distBuy = consensus.buyCount,
                 distSell = consensus.sellCount,
                 distNeutral = consensus.neutralCount,
+                regime = regimeEval.regime,
+                regimeAdaptiveScore = regimeEval.adaptiveScore,
+                mtfScore = mtf.score,
+                mtfDirection = mtf.direction,
+                mtfGate = mtf.gate,
+                mtfLabel = mtf.label,
+                microScore = micro.score,
+                microDirection = micro.direction,
+                microLabel = micro.label,
+                microActive = micro.active,
                 isLoading = false,
                 errorMessage = null,
                 lastUpdateMs = nowMillis(),
             )
         }
-        logDebug("PanelVM", "recomputeMultimodal: UI state updated. Signal=${consensus.finalSignal.name}, Reason=${consensus.reason}")
+        logDebug("PanelVM", "recomputeMultimodal: UI state checked/updated. Signal=${consensus.finalSignal.name}, Reason=${consensus.reason}")
     }
 
     fun refresh() {
@@ -258,5 +413,24 @@ class PanelViewModel(private val container: AppContainer) : ViewModel() {
         if (symbol == _ui.value.activeSymbol) return
         container.activeSymbol.value = symbol
         _ui.update { it.copy(searchQuery = "") }
+    }
+
+    override fun onCleared() {
+        bootstrapJob?.cancel()
+        multiTfJob?.cancel()
+        tickerJob?.cancel()
+        stalenessJob?.cancel()
+        super.onCleared()
+    }
+
+    companion object {
+        /** Cadence of the live verdict recompute over cached candles (≥5s per spec). */
+        const val LIVE_RECOMPUTE_INTERVAL_MS = 5_000L
+
+        /** WS-quiet threshold after which the UI state is flagged stale (nothing is fabricated). */
+        const val STALE_AFTER_MS = 3_000L
+
+        /** Minimum interval between staleness-age state pushes (bounds recomposition). */
+        const val STALE_AGE_PUSH_MS = 5_000L
     }
 }

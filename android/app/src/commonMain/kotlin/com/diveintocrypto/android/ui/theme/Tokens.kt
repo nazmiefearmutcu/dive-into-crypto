@@ -11,8 +11,9 @@ import androidx.compose.ui.unit.dp
  * Dive Into Crypto design tokens — now **live & preset-driven**.
  *
  * Each token is backed by Compose state, so [apply] swaps the entire palette at
- * runtime (any of the 9 presets) and every screen recomposes — without a
- * single screen-code change, since they all still read `DiveColors.X`.
+ * runtime (any of the [com.diveintocrypto.android.ui.theme.PRESETS] presets) and
+ * every screen recomposes — without a single screen-code change, since they all
+ * still read `DiveColors.X`.
  *
  * Defaults are the "Nova Cyber" preset (futuristic neon cyan/magenta).
  */
@@ -50,6 +51,15 @@ object DiveColors {
     var GreenTint25 by mutableStateOf(Color(0xFF22F5A6).copy(alpha = 0.25f))
     var RedTint25 by mutableStateOf(Color(0xFFFF3B6B).copy(alpha = 0.25f))
 
+    /** Warning / caution color (amber family) — "GECİKME" staleness chips, partial-result
+     *  notes, MTF-gate-off accents. Per-preset via [apply] (custom-color aware: the
+     *  controller resolves `warn` before this sees it). Default = term-phosphor. */
+    var Warn by mutableStateOf(Color(0xFFFFC23D))
+
+    /** Dimming scrim behind modal sheets/overlays. Derived per family in [apply]:
+     *  near-black on dark presets, softer black on light presets (Daylight/Paper). */
+    var Scrim by mutableStateOf(Color(0xAA000000))
+
     /** Drives the device chrome (status bar) + Material color scheme. */
     var isDark by mutableStateOf(true)
 
@@ -85,6 +95,12 @@ object DiveColors {
         NeutralTint15 = p.muted.copy(alpha = 0.15f)
         GreenTint25 = p.up.copy(alpha = 0.25f)
         RedTint25 = p.down.copy(alpha = 0.25f)
+        Warn = p.warn
+        // Scrim is deliberately NOT a per-preset token (it would add no signal and the
+        // packed custom-color string must stay stable): derived per family — the classic
+        // 0xAA black for dark presets, a softer 40% black for the light ones so modal
+        // sheets on LEDGER·Daylight / TERMINAL·Paper don't turn pitch black.
+        Scrim = if (p.dark) Color(0xAA000000) else Color(0x66000000)
         isDark = p.dark
         DiveDims.apply(p.radiusDp)
     }

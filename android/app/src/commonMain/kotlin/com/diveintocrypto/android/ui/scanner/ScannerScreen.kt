@@ -22,6 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -35,6 +36,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -95,13 +101,17 @@ fun ScannerScreen(container: AppContainer, onSelectSymbol: (String) -> Unit = {}
     // When OFF (default), the list stays bit-for-bit identical to today's. This is ONLY a
     // presentation re-sort: the pool/elimination/score are UNCHANGED (sortedByDescending is
     // stable → the relative order of sub-threshold rows is preserved).
-    val orderedSurvivors = if (state.divergenceSort) {
-        state.survivors.sortedByDescending { row ->
-            if (abs(row.divergenceScore) >= ScannerViewModel.DIVERGENCE_MIN_SHOWN)
-                abs(row.divergenceScore) else Double.NEGATIVE_INFINITY
+    // remember() keyed on the pool + lens: the re-sort runs when its INPUTS change, not on
+    // every recomposition (progress ticks used to re-sort the whole list each frame).
+    val orderedSurvivors = remember(state.survivors, state.divergenceSort) {
+        if (state.divergenceSort) {
+            state.survivors.sortedByDescending { row ->
+                if (abs(row.divergenceScore) >= ScannerViewModel.DIVERGENCE_MIN_SHOWN)
+                    abs(row.divergenceScore) else Double.NEGATIVE_INFINITY
+            }
+        } else {
+            state.survivors
         }
-    } else {
-        state.survivors
     }
     val displayedRows = when (resultFilter) {
         ResultFilter.ALL -> orderedSurvivors.take(state.displaySize)
@@ -112,12 +122,18 @@ fun ScannerScreen(container: AppContainer, onSelectSymbol: (String) -> Unit = {}
         ResultFilter.DIVERGENCE -> "Whale divergence contradicts the indicator: $eliminatedCount coins eliminated"
     }
     // Number of candidate symbols tried but with no whale data available (coverage==0) — added
-    // to the empty message to honestly surface silent false-negatives.
-    val uncheckableCount = state.crossRanking.count { it.divergenceCoverage == 0 }
+    // to the empty message to honestly surface silent false-negatives. remember()'d: the
+    // recount is O(rows) and only needs to run when the ranking itself changes.
+    val uncheckableCount = remember(state.crossRanking) {
+        state.crossRanking.count { it.divergenceCoverage == 0 }
+    }
+    // Dismissal state for the partial-coverage note. Keyed on the failed count so the
+    // note re-arms whenever the value changes (new scan resets it 0 → n).
+    var failedNoteDismissed by remember(state.failedCount) { mutableStateOf(false) }
 
     PullToRefreshBox(
         isRefreshing = state.scanning,
-        onRefresh = { vm.startDemoScan() },
+        onRefresh = { vm.startScan() },
         modifier = Modifier.fillMaxSize()
     ) {
         LazyColumn(
@@ -135,7 +151,7 @@ fun ScannerScreen(container: AppContainer, onSelectSymbol: (String) -> Unit = {}
             ScanHeroCard(
                 state = state,
                 resultSummary = resultSummary,
-                onStart = vm::startDemoScan,
+                onStart = vm::startScan,
                 onStop = vm::stopDemoScan,
             )
         }
@@ -157,6 +173,17 @@ fun ScannerScreen(container: AppContainer, onSelectSymbol: (String) -> Unit = {}
         // ── 2) Live progress while scanning ───────────────────────────────
         if (state.scanning) {
             item("progress") { ScanProgressBlock(state = state) }
+        }
+
+        // ── 2b) HONESTY: partial-coverage note — N symbols could NOT be scanned.
+        // Dismissible; re-arms whenever the failed count changes (new scan → 0 → n).
+        if (state.failedCount > 0 && !failedNoteDismissed) {
+            item("failed") {
+                FailedScanNote(
+                    count = state.failedCount,
+                    onDismiss = { failedNoteDismissed = true },
+                )
+            }
         }
 
         // Results (survivors after elimination). Also visible during a scan in continuous mode.
@@ -209,16 +236,7 @@ fun ScannerScreen(container: AppContainer, onSelectSymbol: (String) -> Unit = {}
 
         state.error?.let { err ->
             item("err") {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(DiveDims.Radius))
-                        .background(DiveColors.RedTint15)
-                        .border(1.dp, DiveColors.RedTint25, RoundedCornerShape(DiveDims.Radius))
-                        .padding(12.dp),
-                ) {
-                    Text("Error: $err", color = DiveColors.Red, fontSize = 13.sp)
-                }
+                ScanErrorCard(message = err, onRetry = vm::startScan)
             }
         }
 
@@ -244,9 +262,11 @@ private fun ScanHeroCard(
             .clip(RoundedCornerShape(14.dp))
             .background(
                 brush = Brush.linearGradient(
+                    // Theme-aware hero gradient: card base → hover elevation (was a pinned
+                    // dark hex that looked wrong on the light Daylight/Paper presets).
                     colors = listOf(
                         DiveColors.BgCard,
-                        Color(0xFF1E2333),
+                        DiveColors.BgCardHover,
                     ),
                 ),
             )
@@ -307,11 +327,18 @@ private fun PrimaryCtaButton(scanning: Boolean, onStart: () -> Unit, onStop: () 
     val bg = if (scanning) DiveColors.Red else DiveColors.Accent
     val label = if (scanning) "Stop" else "Start Scan"
     val icon = if (scanning) Icons.Rounded.Stop else Icons.Rounded.PlayArrow
+    // onPrimary follows the preset (dark presets → near-black text on the bright accent,
+    // light presets → white on the deep accent) — was pinned Color.White.
+    val onAccent = MaterialTheme.colorScheme.onPrimary
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .background(bg)
+            .semantics {
+                role = Role.Button
+                contentDescription = label
+            }
             .clickable { if (scanning) onStop() else onStart() }
             .padding(vertical = 13.dp),
         horizontalArrangement = Arrangement.Center,
@@ -319,14 +346,14 @@ private fun PrimaryCtaButton(scanning: Boolean, onStart: () -> Unit, onStop: () 
     ) {
         Icon(
             imageVector = icon,
-            contentDescription = label,
-            tint = Color.White,
+            contentDescription = null, // container carries the label (a11y: no double-read)
+            tint = onAccent,
             modifier = Modifier.size(20.dp),
         )
         Spacer(Modifier.width(8.dp))
         Text(
             text = label,
-            color = Color.White,
+            color = onAccent,
             fontSize = 15.sp,
             fontWeight = FontWeight.Bold,
             letterSpacing = 0.5.sp,
@@ -428,7 +455,8 @@ private fun phaseLabel(p: ScanPhase): String = when (p) {
     ScanPhase.PHASE1 -> "PHASE 1 · 1d/12h/8h"
     ScanPhase.PHASE2 -> "PHASE 2 · 9 TF"
     ScanPhase.FINALIZING -> "RANKING"
-    ScanPhase.IDLE -> "SCANNING"
+    // HONESTY: IDLE means no scan is running — saying "SCANNING" was a lie.
+    ScanPhase.IDLE -> "HAZIR"
 }
 
 // ═════════════════════════════════════════════════════════════════════════
@@ -443,15 +471,19 @@ private fun CoinResultCard(row: CrossRankingRow, rank: Int, allTfs: List<String>
         else -> DiveColors.TextMuted
     }
     val cardBg = DiveColors.BgCard
+    // Theme-derived celebration borders (were pinned green/yellow hexes that
+    // ignored the active preset's up/warn colors).
     val borderColor = when {
-        isCommonAll -> Color(0x6600FF80)
-        row.countHit >= row.totalTfs - 1 -> Color(0x66EAB308)
+        isCommonAll -> DiveColors.Green.copy(alpha = 0.4f)
+        row.countHit >= row.totalTfs - 1 -> DiveColors.Yellow.copy(alpha = 0.4f)
         else -> DiveColors.Border
     }
     // Best per-TF confidence — the actual 0-100 number from the consensus engine.
     // Distinct from `row.netNss`, which is the time-weighted cross-rank sort key.
     val bestConfidence = row.perTf.values.maxOfOrNull { it.confidence } ?: 0
-    val riskLevel = riskFromAgreement(row.countHit, row.totalTfs)
+    // Canonical mapping lives in the ViewModel (public) — the screen's private
+    // duplicate was deleted so there is exactly ONE threshold definition.
+    val riskLevel = ScannerViewModel.riskFromAgreement(row.countHit, row.totalTfs)
 
     Column(
         modifier = Modifier
@@ -476,6 +508,13 @@ private fun CoinResultCard(row: CrossRankingRow, rank: Int, allTfs: List<String>
                 isCommonAll = isCommonAll,
                 accentColor = accentColor,
             )
+
+            // ── Row 1b: strategy-overlay tags (Regime · MTF gate · Micro) ──
+            // ADDITIVE display-only annotations from the scan; tiny pills so the
+            // compact card design stays unbloated. Micro renders only when the
+            // annotation was actually computed (null = honest silence).
+            Spacer(Modifier.height(8.dp))
+            OverlayTagRow(row = row)
 
             Spacer(Modifier.height(12.dp))
 
@@ -523,6 +562,76 @@ private fun CoinResultCard(row: CrossRankingRow, rank: Int, allTfs: List<String>
             CoinCardFooterCta(onSelect = onSelect)
         }
     }
+}
+
+/**
+ * Tiny strategy-overlay tags for a CoinResultCard, straight from the CrossRankingRow
+ * annotation fields (lane A). Regime label, MTF gate ✓/– and — only when actually
+ * computed — the microstructure state. Nothing here is invented: no micro annotation
+ * → no micro tag.
+ */
+@Composable
+private fun OverlayTagRow(row: CrossRankingRow) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        TinyTag(
+            text = row.regime,
+            color = when (row.regime) {
+                "TREND" -> DiveColors.Cyan
+                "RANGE" -> DiveColors.Purple
+                else -> DiveColors.TextMuted
+            },
+        )
+        TinyTag(
+            text = if (row.mtfGate) "MTF ✓" else "MTF –",
+            color = if (row.mtfGate) DiveColors.Green else DiveColors.TextDim,
+        )
+        row.microScore?.let {
+            val dir = row.microDirection ?: 0
+            val arrow = when {
+                dir > 0 -> "▲"
+                dir < 0 -> "▼"
+                else -> "·"
+            }
+            TinyTag(
+                text = "MICRO $arrow ${microShortLabel(row.microLabel)}",
+                color = when {
+                    dir > 0 -> DiveColors.Green
+                    dir < 0 -> DiveColors.Red
+                    else -> DiveColors.TextMuted
+                },
+            )
+        }
+    }
+}
+
+/** Compact STRONG_BUY→S.BUY style shortening so the tag stays one-liner on 360dp. */
+private fun microShortLabel(label: String?): String = when (label) {
+    null -> "—"
+    "STRONG_BUY" -> "S.BUY"
+    "STRONG_SELL" -> "S.SELL"
+    "NEUTRAL" -> "NEUT"
+    else -> label
+}
+
+@Composable
+private fun TinyTag(text: String, color: Color) {
+    Text(
+        text = text,
+        color = color,
+        fontSize = 10.sp,
+        fontWeight = FontWeight.Bold,
+        fontFamily = DiveFonts.body,
+        letterSpacing = 0.3.sp,
+        modifier = Modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(color.copy(alpha = 0.12f))
+            .border(1.dp, color.copy(alpha = 0.35f), RoundedCornerShape(4.dp))
+            .padding(horizontal = 6.dp, vertical = 2.dp),
+    )
 }
 
 /**
@@ -584,23 +693,24 @@ private fun WhaleDivergenceBlock(
                 Text(
                     text = "Price $priceSign${(abs(risePct) * 100).format(1)}% · Whale $whaleSign${(whaleDrop * 100).format(1)}%",
                     color = DiveColors.TextMuted,
-                    fontSize = 9.sp,
+                    fontSize = 10.sp,
                     fontFamily = DiveFonts.body,
+                    lineHeight = 13.sp,
                 )
                 Text(
                     text = contrarianNote,
                     color = DiveColors.TextMuted,
-                    fontSize = 8.sp,
+                    fontSize = 10.sp,
                     fontFamily = DiveFonts.body,
-                    lineHeight = 11.sp,
+                    lineHeight = 13.sp,
                 )
                 // Honest holding-horizon hint (descriptive text — does NOT affect signal/ranking logic).
                 Text(
                     text = "Suggested hold: 24–48 hours",
                     color = DiveColors.TextMuted,
-                    fontSize = 8.sp,
+                    fontSize = 10.sp,
                     fontFamily = DiveFonts.body,
-                    lineHeight = 11.sp,
+                    lineHeight = 13.sp,
                 )
             }
         }
@@ -635,7 +745,8 @@ private fun RiskAdvisorBlock(atrPct: Double) {
     val targetPct = 1.5 * stopPct       // reward:risk = 1.5
     val riskPct = 5.0                   // 5% of the account (conservative end of the 5-10 range)
     val maxLev = if (stopPct > 0.0) riskPct / stopPct else 0.0
-    val amber = Color(0xFFF59E0B)
+    // Theme warning token (per-preset amber) — was a pinned 0xFFF59E0B hex.
+    val amber = DiveColors.Warn
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -658,7 +769,7 @@ private fun RiskAdvisorBlock(atrPct: Double) {
             Text(
                 text = "suggestion · not investment advice",
                 color = DiveColors.TextDim,
-                fontSize = 8.sp,
+                fontSize = 10.sp,
                 fontFamily = DiveFonts.body,
             )
         }
@@ -674,9 +785,9 @@ private fun RiskAdvisorBlock(atrPct: Double) {
             text = "⚠ 50x + full-account margin ≈ 100% liquidation risk (even with an edge) — " +
                 "cap leverage relative to the stop %.",
             color = DiveColors.Red,
-            fontSize = 9.sp,
+            fontSize = 10.sp,
             fontFamily = DiveFonts.body,
-            lineHeight = 12.sp,
+            lineHeight = 13.sp,
         )
     }
 }
@@ -843,9 +954,10 @@ private fun ScoreBlock(netNss: Double, countHit: Int, totalTfs: Int) {
         Spacer(modifier = Modifier.weight(1f))
         // Agreement chip — moved out of the footer so the user can see it
         // alongside the score that depends on it.
+        // Theme-derived tints (were pinned green/yellow alpha hexes).
         val (chipBg, chipFg) = when {
-            countHit >= 3 -> Color(0x2600FF80) to DiveColors.Green
-            countHit == 2 -> Color(0x26EAB308) to DiveColors.Yellow
+            countHit >= 3 -> DiveColors.GreenTint15 to DiveColors.Green
+            countHit == 2 -> DiveColors.YellowTint15 to DiveColors.Yellow
             else -> DiveColors.BgCardHover to DiveColors.TextMuted
         }
         Row(
@@ -982,12 +1094,14 @@ private fun CoinCardFooterCta(onSelect: () -> Unit) {
             modifier = Modifier
                 .clip(RoundedCornerShape(8.dp))
                 .background(DiveColors.Accent)
-                .clickable { onSelect() }
+                .clickable(onClick = onSelect)
+                .semantics { role = Role.Button }
                 .padding(horizontal = 18.dp, vertical = 9.dp),
         ) {
             Text(
                 text = "SELECT →",
-                color = Color.White,
+                // Preset-aware on-accent color — was pinned Color.White.
+                color = MaterialTheme.colorScheme.onPrimary,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 0.8.sp,
@@ -1027,6 +1141,80 @@ private fun EmptyStateCard() {
     }
 }
 
+/**
+ * Scan error card with an explicit "TEKRAR DENE" retry — wired to the SAME public
+ * VM entry the pull-to-refresh gesture uses ([ScannerViewModel.startScan]).
+ */
+@Composable
+private fun ScanErrorCard(message: String, onRetry: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(DiveDims.Radius))
+            .background(DiveColors.RedTint15)
+            .border(1.dp, DiveColors.RedTint25, RoundedCornerShape(DiveDims.Radius))
+            .padding(12.dp),
+    ) {
+        Text("Error: $message", color = DiveColors.Red, fontSize = 13.sp)
+        Spacer(Modifier.height(10.dp))
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(DiveDims.RadiusSm))
+                .background(DiveColors.Red)
+                .clickable(onClick = onRetry)
+                .semantics { role = Role.Button }
+                .padding(horizontal = 14.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "⟳ TEKRAR DENE",
+                color = MaterialTheme.colorScheme.onPrimary,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 0.6.sp,
+                fontFamily = DiveFonts.body,
+            )
+        }
+    }
+}
+
+/** Amber partial-result note: "N sembol taranamadı — kısmi sonuç" with a dismiss affordance. */
+@Composable
+private fun FailedScanNote(count: Int, onDismiss: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(DiveDims.Radius))
+            .background(DiveColors.Warn.copy(alpha = 0.10f))
+            .border(1.dp, DiveColors.Warn.copy(alpha = 0.35f), RoundedCornerShape(DiveDims.Radius))
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "⚠ $count sembol taranamadı — kısmi sonuç",
+            color = DiveColors.Warn,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            fontFamily = DiveFonts.body,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            text = "×",
+            color = DiveColors.Warn,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier
+                .clip(RoundedCornerShape(6.dp))
+                .clickable(onClick = onDismiss)
+                .semantics {
+                    role = Role.Button
+                    contentDescription = "Kısmi sonuç uyarısını kapat"
+                }
+                .padding(horizontal = 8.dp, vertical = 2.dp),
+        )
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────
@@ -1035,19 +1223,11 @@ private fun formatTs(ms: Long): String {
 }
 
 /**
- * Risk derived from cross-TF agreement count, NOT from the (mis-scaled) NSS.
- * Same thresholds as the ViewModel's `riskFromCount`:
- *   ≥ total-1  → LOW    (almost all TFs aligned)
- *   ≥ total/2  → MEDIUM (majority aligned)
- *   > 0        → HIGH   (only a few TFs aligned)
- *   else       → N/A
+ * Risk mapping note: the screen previously carried a PRIVATE duplicate of the
+ * ViewModel's `riskFromAgreement` (and referenced the long-deleted `riskFromCount`).
+ * The duplicate is gone — `ScannerViewModel.riskFromAgreement` is the single
+ * canonical definition (≥ total-1 → LOW · ≥ total/2 → MEDIUM · > 0 → HIGH · else N/A).
  */
-private fun riskFromAgreement(countHit: Int, totalTfs: Int): String = when {
-    countHit >= totalTfs - 1 -> "LOW"
-    countHit >= totalTfs / 2 -> "MEDIUM"
-    countHit > 0 -> "HIGH"
-    else -> "N/A"
-}
 
 /**
  * Format the cross-rank net NSS for compact display. The raw integer is huge
@@ -1100,7 +1280,7 @@ private fun ResultFilterToggle(
         FilterPill(
             label = if (flaggedCount > 0) "✕ Eliminated ($flaggedCount)" else "✕ Eliminated",
             selected = selected == ResultFilter.DIVERGENCE,
-            accent = Color(0xFFF59E0B),
+            accent = DiveColors.Warn,
             modifier = Modifier.weight(1f),
             onClick = { onSelect(ResultFilter.DIVERGENCE) },
         )
@@ -1151,7 +1331,7 @@ private fun ScanControlsRow(
         FilterPill(
             label = if (divergenceSort) "◆ DIVERGENCE SORT ON" else "DIVERGENCE SORT OFF",
             selected = divergenceSort,
-            accent = Color(0xFFF59E0B),
+            accent = DiveColors.Warn,
             modifier = Modifier.fillMaxWidth(),
             onClick = { onDivergenceSort(!divergenceSort) },
         )
@@ -1193,6 +1373,11 @@ private fun FilterPill(
             .clip(RoundedCornerShape(8.dp))
             .background(bg)
             .border(1.dp, border, RoundedCornerShape(8.dp))
+            // A11y: exposed as a button whose selection state is announced.
+            .semantics {
+                role = Role.Button
+                stateDescription = if (selected) "Seçili" else "Seçili değil"
+            }
             .clickable { onClick() }
             .padding(vertical = 9.dp),
         contentAlignment = Alignment.Center,
@@ -1210,7 +1395,8 @@ private fun FilterPill(
 /** Info card that explains the "Divergence" lens concept once (discoverability). */
 @Composable
 private fun DivergenceLensInfo() {
-    val amber = Color(0xFFF59E0B)
+    // Theme warning token — was a pinned 0xFFF59E0B amber that clashed with light presets.
+    val amber = DiveColors.Warn
     Column(
         modifier = Modifier
             .fillMaxWidth()

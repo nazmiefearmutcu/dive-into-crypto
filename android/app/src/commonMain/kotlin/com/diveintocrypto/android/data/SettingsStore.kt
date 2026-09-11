@@ -1,5 +1,6 @@
 package com.diveintocrypto.android.data
 
+import com.diveintocrypto.android.domain.consensus.DEFAULT_FULL_WEIGHTS
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -51,25 +52,11 @@ class SettingsStore(private val kv: KeyValueStore) {
         val weightWhaleLs = kv.getFloat("weight_whale_ls", 0.20f).toDouble()
         val weightAccountLs = kv.getFloat("weight_account_ls", 0.15f).toDouble()
 
-        val defaultWeights = mapOf(
-            "rsi" to 1.5,
-            "stochastic" to 1.2,
-            "williams_r" to 1.0,
-            "cci" to 1.0,
-            "macd" to 2.0,
-            "ema_cross" to 1.8,
-            "sma_cross" to 1.5,
-            "ichimoku" to 1.5,
-            "psar" to 1.2,
-            "bollinger" to 1.5,
-            "mfi" to 1.2,
-            "obv" to 1.5,
-            "roc" to 1.0,
-            "adx_di" to 1.5,
-            "atr_filter" to 0.0
-        )
-
-        val weights = defaultWeights.mapValues { (key, defVal) ->
+        // FULL 57-name default weights (15 core F2 values + 42 extended
+        // desktop-reference values). Previously only 15 names were listed here,
+        // so the 42 extended indicators silently scored at weight 1.0 in the
+        // engine. User overrides persist per key ("weight_<name>") and win.
+        val weights = DEFAULT_FULL_WEIGHTS.mapValues { (key, defVal) ->
             kv.getFloat("weight_$key", defVal.toFloat()).toDouble()
         }
 
