@@ -267,6 +267,76 @@ body::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:60;opa
 .rank th[aria-sort] .thbtn{color:var(--accent)}
 .rank tbody tr:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 
+/* ── wave 2 · scanbar + universe chips (TARA) ──────────────────────────────── */
+.scanbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:14px;padding:10px 12px;border:1px solid var(--line2);background:var(--panel)}
+.chip{font-family:var(--font-d);font-size:10px;font-weight:700;letter-spacing:.08em;color:var(--dim);
+  background:transparent;border:1px solid var(--line2);padding:6px 12px;cursor:pointer}
+.chip:hover:not(:disabled){color:var(--ink);border-color:var(--accent-dim)}
+.chip.on{color:var(--accent-ink);background:var(--accent);border-color:var(--accent)}
+.chip:disabled{opacity:.45;cursor:not-allowed}
+.scanbar .sbcap{font-family:var(--font-m);font-size:9.5px;color:var(--faint);margin-left:auto;text-align:right}
+.scanbar .sbmsg{font-family:var(--font-m);font-size:10px;color:var(--up);max-width:60%;overflow-wrap:anywhere}
+.scanbar .sbmsg.bad{color:var(--down)}
+
+/* ── async deep-scan progress ──────────────────────────────────────────────── */
+.prog{padding:14px 16px;display:flex;flex-direction:column;gap:9px}
+.prog .prow{display:flex;align-items:baseline;gap:12px;font-family:var(--font-m);font-size:11.5px;flex-wrap:wrap}
+.prog .phase{font-family:var(--font-d);font-size:11px;font-weight:800;letter-spacing:.14em;color:var(--accent)}
+.prog .pnum{font-variant-numeric:tabular-nums;color:var(--dim)}
+.prog .peta{margin-left:auto;font-variant-numeric:tabular-nums;color:var(--ink);font-weight:600}
+.prog .pbar{position:relative;height:3px;background:var(--line);overflow:hidden}
+.prog .pbar i{position:absolute;left:0;top:0;bottom:0;background:var(--accent);box-shadow:var(--glow);transition:width .6s linear}
+.prog .perr{font-family:var(--font-m);font-size:11px;color:var(--down);border:1px solid var(--line2);
+  background:var(--panel);padding:8px 12px;overflow-wrap:anywhere}
+.prog .pbtns{display:flex;gap:8px;flex-wrap:wrap}
+.prog .pcap{font-family:var(--font-m);font-size:9px;color:var(--faint)}
+.rank td.beta{white-space:nowrap;font-size:11.5px}
+.rank td.beta .tag.cluster{margin-left:8px}
+
+/* ── KANIT (evidence) — report-only self-grading dashboard ─────────────────── */
+.evcards{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:14px}
+@media(max-width:1150px){.evcards{grid-template-columns:1fr}}
+.evcard{position:relative;background:linear-gradient(180deg,var(--panel2),var(--panel));border:1px solid var(--line2);
+  padding:13px 14px;display:flex;flex-direction:column;gap:10px}
+.evcard::before{content:"";position:absolute;top:-1px;left:-1px;width:9px;height:9px;
+  border-top:2px solid var(--accent);border-left:2px solid var(--accent)}
+.evcard .evh{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.evcard .evn{font-family:var(--font-m);font-size:10.5px;color:var(--dim)}
+.evrow{display:flex;justify-content:space-between;align-items:baseline;gap:10px;font-family:var(--font-m);
+  font-size:11px;color:var(--dim);border-top:1px solid var(--line);padding-top:7px}
+.evrow b{font-variant-numeric:tabular-nums;color:var(--ink);font-size:12.5px}
+.evrow b.up{color:var(--up)}.evrow b.dn{color:var(--down)}
+.evtab tbody tr{cursor:default}
+.evtab tbody tr:hover{background:transparent}
+.evtab td{font-variant-numeric:tabular-nums}
+.evtab td.l{font-family:var(--font-d);font-size:9.5px;font-weight:700;letter-spacing:.06em;color:var(--ink)}
+
+/* ── PANEL candlestick chart ───────────────────────────────────────────────── */
+.chartbox{position:relative}
+.chartbox canvas{display:block;width:100%;cursor:crosshair}
+.ch-legend{display:flex;gap:14px;align-items:center;font-family:var(--font-d);font-size:8.5px;font-weight:700;
+  letter-spacing:.12em;color:var(--dim);padding:8px 13px;border-bottom:1px solid var(--line)}
+.ch-legend i{display:inline-block;width:14px;height:2px;margin-right:5px;vertical-align:middle}
+.ch-read{position:absolute;top:8px;right:66px;z-index:2;display:flex;gap:12px;align-items:baseline;
+  background:color-mix(in srgb,var(--bg) 88%,transparent);border:1px solid var(--line2);padding:4px 10px;
+  font-family:var(--font-m);font-size:10px;color:var(--dim);pointer-events:none;white-space:nowrap}
+.ch-read b{color:var(--ink);font-variant-numeric:tabular-nums}
+.ch-read .up b{color:var(--up)}.ch-read .dn b{color:var(--down)}
+.ch-read .t{color:var(--faint)}
+
+/* ── OI·L/S · CVD card ─────────────────────────────────────────────────────── */
+.cvd-big{font-family:var(--font-d);font-size:26px;font-weight:800;font-variant-numeric:tabular-nums;padding:12px 13px 4px}
+.cvd-big small{font-size:11px;color:var(--dim);font-weight:600;letter-spacing:.1em;margin-left:6px}
+.cvd .split{padding:4px 13px 12px}
+.splitbar{display:flex;height:8px;overflow:hidden;background:var(--line)}
+.splitbar .b{background:var(--up)}
+.splitbar .s{background:var(--down)}
+.splitlab{display:flex;justify-content:space-between;font-family:var(--font-m);font-size:10px;margin-top:5px;font-variant-numeric:tabular-nums}
+.cvdh{display:flex;align-items:center;gap:1px;height:46px;margin:2px 13px 10px;border-bottom:1px solid var(--line2)}
+.cvdh i{flex:1;min-width:1px;background:var(--up)}
+.cvdh i.d{background:var(--down)}
+@media (prefers-reduced-motion:reduce){.prog .pbar i{transition:none}}
+
 /* ── accessibility ─────────────────────────────────────────────────────────── */
 :focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .stale-banner :focus-visible{outline-color:#fff}
