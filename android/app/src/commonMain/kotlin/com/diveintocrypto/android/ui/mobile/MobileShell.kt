@@ -8,13 +8,17 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.diveintocrypto.android.AppContainer
+import com.diveintocrypto.android.ui.alerts.AlertBannerHost
+import com.diveintocrypto.android.ui.alerts.AlertsScreen
 import com.diveintocrypto.android.ui.logs.LogsScreen
 import com.diveintocrypto.android.ui.nav.NavRoute
 import com.diveintocrypto.android.ui.panel.PanelScreen
@@ -27,15 +31,16 @@ import com.diveintocrypto.android.ui.scanner.ScannerScreen
 import com.diveintocrypto.android.ui.theme.DiveColors
 
 /**
- * Mobile shell — 7-screen scanner + market-data app after paper-mode
+ * Mobile shell — 8-screen scanner + market-data app after paper-mode
  * removal. Each non-scanner screen consumes Binance public APIs:
- *   - Panel       → live klines + 12-TF consensus on active symbol
+ *   - Panel       → live klines + 12-TF consensus + candlestick chart
  *   - Scanner     → multi-TF cross-rank scanner (existing)
  *   - Positions   → Open Interest + Top Long/Short Ratio
  *   - Signals     → 15 indicators detail table for active symbol
- *   - Performance → 24h gainers/losers leaderboard
+ *   - Alarmlar    → alert rules + fired history (More sheet)
+ *   - Performance → 24h gainers/losers leaderboard + engine evidence
  *   - Logs        → live HTTP activity log
- *   - Settings    → theme + about
+ *   - Settings    → theme + notifications + about
  */
 @Composable
 fun MobileShell(container: AppContainer) {
@@ -89,11 +94,21 @@ fun MobileShell(container: AppContainer) {
                 }
                 composable(NavRoute.POSITIONS.slug) { PositionsScreen(container) }
                 composable(NavRoute.SIGNALS.slug) { SignalsScreen(container) }
+                composable(NavRoute.ALERTS.slug) { AlertsScreen(container) }
                 composable(NavRoute.PERFORMANCE.slug) { PerformanceScreen(container) }
                 composable(NavRoute.LOGS.slug) { LogsScreen(container) }
                 composable(NavRoute.APPEARANCE.slug) { AppearanceScreen() }
                 composable(NavRoute.SETTINGS.slug) { SettingsScreen(container) }
             }
+
+            // In-app alert banner — overlays the top of WHICHEVER screen is showing
+            // (Task 2b); dismissed via container.dismissAlertBanner().
+            AlertBannerHost(
+                container = container,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+            )
         }
     }
 }

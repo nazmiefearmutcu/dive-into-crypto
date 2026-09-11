@@ -10,6 +10,7 @@ import io.ktor.http.appendPathSegments
 import io.ktor.http.isSuccess
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -283,6 +284,38 @@ class BinanceFuturesClient(
         }
     }
 
+    /**
+     * Aggregate trades — public endpoint `GET /fapi/v1/aggTrades`.
+     *
+     * `m` (isBuyerMaker) is the aggressor flag: `true` = the buyer was the maker,
+     * i.e. the TAKER SOLD (sell-side volume); `false` = the taker bought.
+     * This is what the rolling CVD is built from. `limit` is capped at 1000 by
+     * the venue — for the most liquid symbols 1000 trades can span less than the
+     * full 15-minute CVD window; the snapshot is then honest about the span it
+     * actually covers (see [CvdAggregator]).
+     */
+    suspend fun aggTrades(symbol: String, limit: Int = 1000): List<AggTrade> {
+        val response = client.get(baseUrl) {
+            url {
+                appendPathSegments("fapi", "v1", "aggTrades")
+                parameters.append("symbol", symbol)
+                parameters.append("limit", limit.coerceIn(1, 1000).toString())
+            }
+        }
+        if (!response.status.isSuccess()) throw IllegalStateException("aggTrades HTTP ${response.status.value}")
+        val raw = response.bodyAsText()
+        return Json.parseToJsonElement(raw).jsonArray.mapNotNull { entry ->
+            val o = entry.jsonObject
+            AggTrade(
+                aggTradeId = o["a"]?.jsonPrimitive?.longOrNull ?: return@mapNotNull null,
+                price = o["p"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: 0.0,
+                quantity = o["q"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: 0.0,
+                timestamp = o["T"]?.jsonPrimitive?.longOrNull ?: return@mapNotNull null,
+                isBuyerMaker = o["m"]?.jsonPrimitive?.booleanOrNull ?: false,
+            )
+        }
+    }
+
     companion object {
         const val DEFAULT_BASE_URL = "https://fapi.binance.com"
 
@@ -306,6 +339,18 @@ data class Ticker24h(
     val quoteVolume: Double,
     val highPrice: Double,
     val lowPrice: Double,
+)
+
+/**
+ * One aggregate trade from `/fapi/v1/aggTrades`. `isBuyerMaker=true` means the
+ * taker SOLD (aggressor on the bid side); `false` means the taker bought.
+ */
+data class AggTrade(
+    val aggTradeId: Long,
+    val price: Double,
+    val quantity: Double,
+    val timestamp: Long,
+    val isBuyerMaker: Boolean,
 )
 
 /** One bucket of /futures/data/openInterestHist. */

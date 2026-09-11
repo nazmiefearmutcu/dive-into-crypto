@@ -36,6 +36,8 @@ class AppContainer(kv: KeyValueStore) {
         com.diveintocrypto.android.ui.theme.DiveThemeController.init(kv)
     }
 
+    private val kvStore: KeyValueStore = kv
+
     val settingsStore = SettingsStore(kv)
 
     val activeSymbol = kotlinx.coroutines.flow.MutableStateFlow("BTCUSDT")
@@ -51,6 +53,73 @@ class AppContainer(kv: KeyValueStore) {
             settingsStore = settingsStore,
         )
     }
+
+    /**
+     * App-scoped live last-price engine: ONE all-market mini-ticker socket
+     * (reconnecting) + a 60s REST 24h refresh, merged into a single
+     * symbol→[com.diveintocrypto.android.engine.LiveTickerEngine.LiveTicker] map.
+     * Lazy + idempotent [ensureStarted] — the socket comes up on first use
+     * (watchlist rows, scanner, price alerts).
+     */
+    val liveTickerEngine: com.diveintocrypto.android.engine.LiveTickerEngine by lazy {
+        val connector = repository.binanceConnector()
+        com.diveintocrypto.android.engine.LiveTickerEngine(
+            futures = connector.futuresClient(),
+            spot = connector.spotClient(),
+            ws = connector.wsClient(),
+            settingsStore = settingsStore,
+        )
+    }
+
+    /**
+     * Verdict-evidence archive (bounded JSONL in KeyValueStore) + the pure
+     * grader live in domain/evidence; the Performance screen drives grading.
+     */
+    val evidenceStore: com.diveintocrypto.android.domain.evidence.EvidenceStore by lazy {
+        com.diveintocrypto.android.domain.evidence.EvidenceStore(kvStore)
+    }
+
+    /**
+     * Local alert engine. lazily created; the ticker-observation loop is armed
+     * only when a PRICE_* rule exists (created or restored), so a user who never
+     * sets alerts pays nothing.
+     */
+    val alertEngine: com.diveintocrypto.android.domain.alerts.AlertEngine by lazy {
+        com.diveintocrypto.android.domain.alerts.AlertEngine(
+            settingsStore = settingsStore,
+            notifier = com.diveintocrypto.android.domain.alerts.createAlertNotifier(),
+            tickerSource = liveTickerEngine.tickers,
+        )
+    }
+
+    // ── PUBLIC ALERT API (the UI lane renders rules/history/banner from these) ──
+
+    /** All alert rules (persisted). */
+    val rules: kotlinx.coroutines.flow.StateFlow<List<com.diveintocrypto.android.domain.alerts.AlertRule>>
+        get() = alertEngine.rules
+
+    /** Fired-alert ring, newest first (last [com.diveintocrypto.android.domain.alerts.AlertEngine.HISTORY_CAP] events). */
+    val firedHistory: kotlinx.coroutines.flow.StateFlow<List<com.diveintocrypto.android.domain.alerts.FiredAlert>>
+        get() = alertEngine.firedHistory
+
+    /** Latest fired alert for the in-app banner (null = nothing pending). */
+    val alertBanner: kotlinx.coroutines.flow.StateFlow<com.diveintocrypto.android.domain.alerts.FiredAlert?>
+        get() = alertEngine.banner
+
+    fun addRule(
+        symbol: String,
+        kind: com.diveintocrypto.android.domain.alerts.AlertKind,
+        direction: String = com.diveintocrypto.android.domain.alerts.AlertRule.DIRECTION_ANY,
+        threshold: Double = 0.0,
+        oneShot: Boolean = false,
+    ): com.diveintocrypto.android.domain.alerts.AlertRule =
+        alertEngine.addRule(symbol, kind, direction, threshold, oneShot)
+
+    fun removeRule(id: String) = alertEngine.removeRule(id)
+
+    fun toggleRule(id: String, enabled: Boolean? = null) = alertEngine.toggleRule(id, enabled)
+
+    fun dismissAlertBanner() = alertEngine.dismissBanner()
 
     val consensus: ConsensusEngine by lazy {
         // Explicit full-weights wiring: settingsStore carries all 57 default weights

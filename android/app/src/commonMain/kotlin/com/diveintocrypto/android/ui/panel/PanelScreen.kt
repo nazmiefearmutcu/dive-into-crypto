@@ -40,6 +40,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.diveintocrypto.android.AppContainer
 import com.diveintocrypto.android.platform.format
 import com.diveintocrypto.android.platform.nowMillis
+import com.diveintocrypto.android.ui.panel.components.CandleChartCard
 import com.diveintocrypto.android.ui.panel.components.LiveTfGrid
 import com.diveintocrypto.android.ui.panel.components.PageHeader
 import com.diveintocrypto.android.ui.panel.components.SignalDistributionCard
@@ -107,6 +108,15 @@ fun PanelScreen(container: AppContainer) {
 
             StatusBar(
                 state = state,
+                modifier = Modifier.alpha(if (state.isLoading) 0.5f else 1f)
+            )
+
+            // CANDLESTICK CHART — engine-cached candles + EMA20/50 + Bollinger fill
+            // + volume + last-price line + CVD delta strip (all from the SAME series
+            // the verdict was computed over). Empty data → honest "VERİ YOK — yenile".
+            CandleChartCard(
+                state = state,
+                onRefresh = { vm.refresh() },
                 modifier = Modifier.alpha(if (state.isLoading) 0.5f else 1f)
             )
 

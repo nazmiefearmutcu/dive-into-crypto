@@ -49,8 +49,14 @@ class MarketDataEngine(
     private val globalLongShortAccountCache = mutableMapOf<String, CachedData<LongShortRatioPoint>>()
     private val takerLongShortCache = mutableMapOf<String, CachedData<TakerLongShortRatioPoint>>()
     private val fundingRateCache = mutableMapOf<String, CachedData<FundingRatePoint>>()
+    // CVD snapshots (nullable → a FAILED fetch is cached too, briefly, so an
+    // unavailable endpoint is surfaced honestly without hammering it).
+    private val cvdCache = mutableMapOf<String, CachedSingle<com.diveintocrypto.android.domain.cvd.CvdSnapshot?>>()
 
     private data class CachedData<T>(val data: List<T>, val timestamp: Long)
+
+    /** Single-value cache entry (CVD snapshots — nullable: failures cached briefly too). */
+    private data class CachedSingle<T>(val data: T, val timestamp: Long)
 
     private fun getIntervalMs(interval: String): Long {
         val number = interval.takeWhile { it.isDigit() }.toLongOrNull() ?: 1L
@@ -154,6 +160,34 @@ class MarketDataEngine(
 
     suspend fun futuresUniverse(): List<String> = binance.futuresClient().universe24hSortedByVolume()
     suspend fun ticker24hAll(): List<Ticker24h> = binance.futuresClient().ticker24hAll()
+
+    /**
+     * Rolling CVD over the trailing ~15 minutes for one symbol, from the public
+     * aggTrades REST endpoint (cached 10s per symbol). HONEST UNAVAILABILITY:
+     * returns `null` on any fetch/parse failure — the caller must surface that
+     * instead of showing a stale/zero CVD as if it were live.
+     */
+    suspend fun cvdSnapshot(symbol: String): com.diveintocrypto.android.domain.cvd.CvdSnapshot? {
+        synchronized(restCacheLock) {
+            cvdCache[symbol]?.let { cached ->
+                if (nowMillis() - cached.timestamp < CVD_CACHE_MS) return cached.data
+            }
+        }
+        val snapshot: com.diveintocrypto.android.domain.cvd.CvdSnapshot? = try {
+            val now = nowMillis()
+            val trades = binance.futuresClient().aggTrades(symbol, CVD_AGG_TRADE_LIMIT)
+            com.diveintocrypto.android.domain.cvd.CvdAggregator.aggregate(symbol, trades, now)
+        } catch (t: Throwable) {
+            null // honest unavailability — also cached briefly so we don't hammer
+        }
+        synchronized(restCacheLock) {
+            cvdCache[symbol] = CachedSingle(snapshot, nowMillis())
+        }
+        return snapshot
+    }
+
+    /** Connector access for app-scoped services (live-ticker engine) in the same module. */
+    internal fun binanceConnector(): BinanceConnector = binance
 
     suspend fun openInterestHist(symbol: String, period: String = "1h", limit: Int = 30): List<OpenInterestPoint> {
         val key = "$symbol:$period:$limit"
@@ -279,5 +313,11 @@ class MarketDataEngine(
          * regardless of universe size.
          */
         const val CANDLE_CACHE_MAX_KEYS = 96
+
+        /** CVD snapshot cache TTL per symbol (spec: 10s). */
+        const val CVD_CACHE_MS = 10_000L
+
+        /** aggTrades page size for the CVD snapshot (venue max = 1000). */
+        const val CVD_AGG_TRADE_LIMIT = 1000
     }
 }

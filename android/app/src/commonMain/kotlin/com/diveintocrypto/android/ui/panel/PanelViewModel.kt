@@ -9,6 +9,8 @@ import com.diveintocrypto.android.data.binance.OpenInterestPoint
 import com.diveintocrypto.android.data.binance.TakerLongShortRatioPoint
 import com.diveintocrypto.android.data.binance.FundingRatePoint
 import com.diveintocrypto.android.domain.consensus.Regime
+import com.diveintocrypto.android.domain.cvd.CvdSnapshot
+import com.diveintocrypto.android.domain.math.Series
 import com.diveintocrypto.android.domain.overlay.Microstructure
 import com.diveintocrypto.android.domain.overlay.MtfConfluence
 import com.diveintocrypto.android.platform.logDebug
@@ -143,6 +145,7 @@ class PanelViewModel(private val container: AppContainer) : ViewModel() {
                     lastFunding = fundingRate
                     logDebug("PanelVM", "bootstrapJob: calling recomputeMultimodal")
                     recomputeMultimodal(oi, accountRatio, positionRatio, taker, globalRatio, fundingRate)
+                    refreshCvd(symbol, force = true)
                 }
             } catch (e: CancellationException) {
                 logError("PanelVM", "bootstrapJob cancelled", e)
@@ -181,6 +184,9 @@ class PanelViewModel(private val container: AppContainer) : ViewModel() {
                     if (now - lastRecomputeMs >= LIVE_RECOMPUTE_INTERVAL_MS || update.isClosed) {
                         lastRecomputeMs = now
                         recomputeVerdictFromCache()
+                        // CVD rides the same throttle; the engine's 10s cache makes
+                        // the actual REST cadence ≥10s per symbol.
+                        refreshCvd(symbol)
                     }
                     // The 12-TF grid refreshes on candle close (grid cells only change
                     // when a TF's candle settles — keeps network chatter bounded).
@@ -233,6 +239,58 @@ class PanelViewModel(private val container: AppContainer) : ViewModel() {
     /** Reruns the multimodal consensus + overlays over the CACHED candles/series. */
     private fun recomputeVerdictFromCache() {
         recomputeMultimodal(lastOi, lastAcc, lastPos, lastTaker, lastGlob, lastFunding)
+    }
+
+    // ── CHART + CVD plumbing (additive; UI lane renders [PanelUiState] fields) ──
+
+    private var cvdJob: kotlinx.coroutines.Job? = null
+    private var lastCvdFetchMs = 0L
+
+    /**
+     * Rolling CVD for the active symbol. Fire-and-forget on the VM scope; the
+     * engine caches 10s per symbol (plus [CVD_FETCH_INTERVAL_MS] local guard) so
+     * the REST cadence stays polite. On failure the headline fields keep the
+     * last real values and [PanelUiState.cvdUnavailable] flips true — nothing
+     * is zero-filled or fabricated.
+     */
+    private fun refreshCvd(symbol: String, force: Boolean = false) {
+        val now = nowMillis()
+        if (!force && now - lastCvdFetchMs < CVD_FETCH_INTERVAL_MS) return
+        lastCvdFetchMs = now
+        cvdJob?.cancel()
+        cvdJob = viewModelScope.launch(Dispatchers.Default) {
+            val snap = try {
+                container.repository.cvdSnapshot(symbol)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                null
+            }
+            _ui.update { st ->
+                if (snap == null) {
+                    if (st.cvdUnavailable) st else st.copy(cvdUnavailable = true)
+                } else st.copy(
+                    cvd = snap.cvd,
+                    cvdBuyVol = snap.buyVol,
+                    cvdSellVol = snap.sellVol,
+                    deltaSeries = snap.buckets,
+                    cvdUnavailable = false,
+                )
+            }
+        }
+    }
+
+    /** Cheap fingerprint to decide whether the chart series actually moved. */
+    private fun chartChanged(st: PanelUiState, chart: ChartSeries): Boolean {
+        val oldLast = st.chartCandles.lastOrNull()
+        val newLast = chart.candles.lastOrNull()
+        return st.chartCandles.size != chart.candles.size ||
+            oldLast?.openTime != newLast?.openTime ||
+            oldLast?.close != newLast?.close ||
+            st.ema20.size != chart.ema20.size ||
+            st.ema20.lastOrNull() != chart.ema20.lastOrNull() ||
+            st.bbUpper.size != chart.bbUpper.size ||
+            st.bbUpper.lastOrNull() != chart.bbUpper.lastOrNull()
     }
 
     /** Runs the 12-TF mini grid over freshly (cache-aware) fetched klines. */
@@ -334,6 +392,11 @@ class PanelViewModel(private val container: AppContainer) : ViewModel() {
         val action = if (consensus.shouldTrade) "OPEN_${consensus.finalSignal.name}" else "HOLD"
         val lastClose = candles.last().close
 
+        // CHART SERIES: computed FROM THE SAME cached candles via the indicator
+        // engine's own math (Series.ewmAdjustFalse / rollingMean / rollingStd).
+        // Recomputed on this (≤5s) throttle; pushed only when something moved.
+        val chart = computeChartSeries(candles)
+
         // Emit ONLY when a displayed value actually changed (bounded recomposition).
         _ui.update { st ->
             val changed = st.isLoading ||
@@ -354,7 +417,8 @@ class PanelViewModel(private val container: AppContainer) : ViewModel() {
                 st.microScore != micro.score ||
                 st.microDirection != micro.direction ||
                 st.microLabel != micro.label ||
-                st.microActive != micro.active
+                st.microActive != micro.active ||
+                chartChanged(st, chart)
             if (!changed) st else st.copy(
                 currentPrice = lastClose,
                 latestSignal = consensus.finalSignal.name,
@@ -374,6 +438,11 @@ class PanelViewModel(private val container: AppContainer) : ViewModel() {
                 microDirection = micro.direction,
                 microLabel = micro.label,
                 microActive = micro.active,
+                chartCandles = chart.candles,
+                ema20 = chart.ema20,
+                ema50 = chart.ema50,
+                bbUpper = chart.bbUpper,
+                bbLower = chart.bbLower,
                 isLoading = false,
                 errorMessage = null,
                 lastUpdateMs = nowMillis(),
@@ -420,8 +489,18 @@ class PanelViewModel(private val container: AppContainer) : ViewModel() {
         multiTfJob?.cancel()
         tickerJob?.cancel()
         stalenessJob?.cancel()
+        cvdJob?.cancel()
         super.onCleared()
     }
+
+    /** Chart-ready overlay series over one candle list (PURE, unit-testable). */
+    internal data class ChartSeries(
+        val candles: List<Candle>,
+        val ema20: List<Double?>,
+        val ema50: List<Double?>,
+        val bbUpper: List<Double?>,
+        val bbLower: List<Double?>,
+    )
 
     companion object {
         /** Cadence of the live verdict recompute over cached candles (≥5s per spec). */
@@ -432,5 +511,47 @@ class PanelViewModel(private val container: AppContainer) : ViewModel() {
 
         /** Minimum interval between staleness-age state pushes (bounds recomposition). */
         const val STALE_AGE_PUSH_MS = 5_000L
+
+        /** Local guard for CVD REST fetches (the engine adds its own 10s cache). */
+        const val CVD_FETCH_INTERVAL_MS = 10_000L
+
+        private fun maskWarmup(values: List<Double>, warmup: Int): List<Double?> =
+            values.mapIndexed { i, v -> if (i < warmup) null else v }
+
+        /**
+         * Computes EMA(20), EMA(50) and Bollinger(20,2) bands over [candles]
+         * using the indicator engine's own Series math (NO duplicated formulas).
+         * Warm-up positions are null (honest: the series simply is not defined
+         * there yet). When a period is not yet covered, the whole series is null.
+         */
+        internal fun computeChartSeries(candles: List<Candle>): ChartSeries {
+            val closes = candles.map { it.close }
+            if (closes.isEmpty()) {
+                return ChartSeries(emptyList(), emptyList(), emptyList(), emptyList(), emptyList())
+            }
+            val ema20 = if (closes.size >= 20) maskWarmup(Series.ewmAdjustFalse(closes, 20), 19)
+            else List(closes.size) { null }
+            val ema50 = if (closes.size >= 50) maskWarmup(Series.ewmAdjustFalse(closes, 50), 49)
+            else List(closes.size) { null }
+
+            val bbUpper: List<Double?>
+            val bbLower: List<Double?>
+            if (closes.size >= 20) {
+                val mean = Series.rollingMean(closes, 20)
+                val std = Series.rollingStd(closes, 20)
+                bbUpper = List(closes.size) { i ->
+                    val m = mean[i]; val s = std[i]
+                    if (m != null && s != null) m + 2.0 * s else null
+                }
+                bbLower = List(closes.size) { i ->
+                    val m = mean[i]; val s = std[i]
+                    if (m != null && s != null) m - 2.0 * s else null
+                }
+            } else {
+                bbUpper = List(closes.size) { null }
+                bbLower = List(closes.size) { null }
+            }
+            return ChartSeries(candles, ema20, ema50, bbUpper, bbLower)
+        }
     }
 }

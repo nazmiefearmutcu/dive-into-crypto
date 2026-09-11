@@ -18,6 +18,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -49,6 +50,7 @@ import com.diveintocrypto.android.platform.format
 import com.diveintocrypto.android.ui.theme.DiveColors
 import com.diveintocrypto.android.ui.theme.DiveDims
 import com.diveintocrypto.android.ui.theme.DiveFonts
+import com.diveintocrypto.android.ui.notifications.rememberNotificationPermission
 
 /**
  * Enriched Settings screen (2026-05-24).
@@ -128,6 +130,9 @@ fun SettingsScreen(container: AppContainer) {
             account = state.weightAccountLs,
             onWeightsChange = vm::updateQuantBiasWeights
         )
+
+        // 4.3 Notification permission (API 33+ runtime grant) — Task 2d
+        NotificationsCard()
 
         // 5. Theme & About
         ThemeCard()
@@ -828,6 +833,72 @@ private fun QuantBiasSettingsCard(
                     onWeightsChange(taker, oi, whale, newVal)
                 }
             )
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// BİLDİRİMLER (Task 2d) — honest POST_NOTIFICATIONS runtime-permission card.
+// The actual request is wired platform-side (rememberNotificationPermission:
+// ActivityResultContracts.RequestPermission on Android, API 33+). In-app
+// banners + alarm history work regardless of the OS grant — said explicitly.
+// ═══════════════════════════════════════════════════════════════════════
+@Composable
+private fun NotificationsCard() {
+    val perm = rememberNotificationPermission()
+    SettingsCard(title = "BİLDİRİMLER") {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                text = "Alarm kuralları tetiklendiğinde sistem bildirimi gönderilir " +
+                    "(FİYAT kuralları canlı akışta, KARAR/GÜVEN/OI kuralları tarama döngüsünde).",
+                color = DiveColors.TextMuted,
+                fontSize = 11.sp,
+                lineHeight = 15.sp,
+            )
+
+            when {
+                // Platform doesn't require a runtime grant (API < 33): nothing to ask.
+                !perm.needed -> Text(
+                    text = "✓ Bu cihazda bildirim izni zorunlu değil — bildirimler çalışır.",
+                    color = DiveColors.Green,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                perm.granted -> Text(
+                    text = "✓ İZİN VERİLDİ — sistem bildirimleri açık.",
+                    color = DiveColors.Green,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                else -> {
+                    Text(
+                        text = "⚠ İZİN YOK — sistem bildirimleri sessiz. Uygulama içi alarm " +
+                            "bandı ve tetiklenme geçmişi yine de çalışır.",
+                        color = DiveColors.Warn,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        lineHeight = 16.sp,
+                    )
+                    // Request button — the OS dialog fires from the platform launcher.
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(DiveColors.Accent)
+                            .semantics { role = Role.Button }
+                            .clickable { perm.request() }
+                            .padding(horizontal = 16.dp, vertical = 9.dp),
+                    ) {
+                        Text(
+                            text = "BİLDİRİM İZNİ İSTE",
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 0.8.sp,
+                            fontFamily = DiveFonts.body,
+                        )
+                    }
+                }
+            }
         }
     }
 }

@@ -10,6 +10,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 
@@ -51,5 +52,33 @@ class BinanceSpotClient(
 
     companion object {
         const val DEFAULT_BASE_URL = "https://api.binance.com"
+    }
+
+    /**
+     * Full 24h ticker payload for every spot symbol (`GET /api/v3/ticker/24hr`).
+     * Same field shape as the futures variant — used by the live-ticker engine's
+     * 60s REST refresh when the data source setting is SPOT (the `!miniTicker@arr`
+     * socket covers the venue, but the 24h change% comes from REST).
+     */
+    suspend fun ticker24hAll(): List<Ticker24h> {
+        val response = client.get(baseUrl) {
+            url {
+                appendPathSegments("api", "v3", "ticker", "24hr")
+            }
+        }
+        if (!response.status.isSuccess()) throw IllegalStateException("ticker/24hr HTTP ${response.status.value}")
+        val raw = response.bodyAsText()
+        return Json.parseToJsonElement(raw).jsonArray.mapNotNull { entry ->
+            val o = entry.jsonObject
+            val sym = o["symbol"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+            Ticker24h(
+                symbol = sym,
+                lastPrice = o["lastPrice"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: 0.0,
+                priceChangePercent = o["priceChangePercent"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: 0.0,
+                quoteVolume = o["quoteVolume"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: 0.0,
+                highPrice = o["highPrice"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: 0.0,
+                lowPrice = o["lowPrice"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: 0.0,
+            )
+        }
     }
 }

@@ -1,5 +1,8 @@
 package com.diveintocrypto.android.ui.panel
 
+import com.diveintocrypto.android.domain.cvd.CvdBucket
+import com.diveintocrypto.android.domain.model.Candle
+
 /**
  * Panel screen state — paper / bot couplings removed (2026-05-23).
  * Feeds only the active symbol's live view:
@@ -73,6 +76,32 @@ data class PanelUiState(
     val isStale: Boolean = false,
     /** ms since the last WS frame; null = no frame received yet in this session. */
     val dataAgeMs: Long? = null,
+
+    // ── CHART SERIES (ADDITIVE — sparkline-friendly; the UI lane renders) ──
+    // Everything here is computed FROM THE SAME cached candles the verdict uses
+    // (Series.ewmAdjustFalse / rollingMean / rollingStd — the indicator engine's
+    // own math, not duplicated formulas), and recomputed on the existing 5s throttle.
+
+    /** The exact candle list the verdict was computed over (engine-cached). */
+    val chartCandles: List<Candle> = emptyList(),
+    /** EMA(20) over the closes; null during the warm-up (first 19 bars). */
+    val ema20: List<Double?> = emptyList(),
+    /** EMA(50) over the closes; null during the warm-up (first 49 bars). */
+    val ema50: List<Double?> = emptyList(),
+    /** Bollinger(20,2) upper band; null during warm-up. */
+    val bbUpper: List<Double?> = emptyList(),
+    /** Bollinger(20,2) lower band; null during warm-up. */
+    val bbLower: List<Double?> = emptyList(),
+    /** Rolling CVD headline (Σ buy − sell, base-asset units, ~15min window); null = unavailable. */
+    val cvd: Double? = null,
+    /** Taker-bought volume inside the CVD window; null = unavailable. */
+    val cvdBuyVol: Double? = null,
+    /** Taker-sold volume inside the CVD window; null = unavailable. */
+    val cvdSellVol: Double? = null,
+    /** Per-minute delta buckets (chronological) for the CVD sparkline. */
+    val deltaSeries: List<CvdBucket> = emptyList(),
+    /** HONESTY: true when the last CVD fetch FAILED (no fabricated zeros). */
+    val cvdUnavailable: Boolean = false,
 )
 
 /** Per-TF signal cell. */

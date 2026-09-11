@@ -1,5 +1,7 @@
 package com.diveintocrypto.android.ui.scanner
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -19,6 +21,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AddAlert
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material3.Icon
@@ -27,6 +30,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -49,9 +53,13 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.diveintocrypto.android.AppContainer
+import com.diveintocrypto.android.domain.alerts.AlertKind
 import com.diveintocrypto.android.domain.model.Signal
 import com.diveintocrypto.android.platform.format
 import com.diveintocrypto.android.platform.formatTime
+import com.diveintocrypto.android.ui.alerts.AlertAddSheet
+import com.diveintocrypto.android.ui.alerts.AlertLabels
+import kotlinx.coroutines.delay
 import kotlin.math.abs
 import com.diveintocrypto.android.ui.theme.DiveColors
 import com.diveintocrypto.android.ui.theme.DiveDims
@@ -92,6 +100,17 @@ fun ScannerScreen(container: AppContainer, onSelectSymbol: (String) -> Unit = {}
     // with a whale-L/S bearish divergence, by divergence score). Presents divergence as a
     // discoverable lens without polluting the consensus order (reviewer P0).
     var resultFilter by remember { mutableStateOf(ResultFilter.ALL) }
+
+    // ── Watchlist live prices + favorites (Task 4 — client-side in the Screen).
+    // ScannerViewModel exposes no favorites/live-ticker API, so the Screen consumes
+    // AppContainer directly: the app-scoped all-market mini-ticker map for the live
+    // price overlay, and SettingsStore favorites for the ★ İZLEME lens.
+    val liveTickers by container.liveTickerEngine.tickers.collectAsStateWithLifecycle()
+    val settings by container.settingsStore.settingsState.collectAsStateWithLifecycle()
+    val favoriteSet = remember(settings.favorites) { settings.favorites.map { it.uppercase() }.toSet() }
+    var watchOnly by remember { mutableStateOf(false) }
+    // Quick-add alert sheet (🔔 on a result row): the symbol it opens for.
+    var alertSheetSymbol by remember { mutableStateOf<String?>(null) }
     // ALL = survivors after elimination (as many as the table size); DIVERGENCE = eliminated.
     val eliminatedCount = state.eliminated.size
     // OPT-IN "Divergence Sort": when ON, the SAME survivor pool (state.survivors) is re-sorted
@@ -113,10 +132,12 @@ fun ScannerScreen(container: AppContainer, onSelectSymbol: (String) -> Unit = {}
             state.survivors
         }
     }
-    val displayedRows = when (resultFilter) {
+    val lensRows = when (resultFilter) {
         ResultFilter.ALL -> orderedSurvivors.take(state.displaySize)
         ResultFilter.DIVERGENCE -> state.eliminated
     }
+    // ★ İZLEME lens: client-side filter of the DISPLAYED list to SettingsStore favorites.
+    val displayedRows = if (watchOnly) lensRows.filter { it.symbol.uppercase() in favoriteSet } else lensRows
     val resultSummary = when (resultFilter) {
         ResultFilter.ALL -> "${state.universeSize} symbols · ✓ ${state.survivors.size} kept · ✕ $eliminatedCount eliminated"
         ResultFilter.DIVERGENCE -> "Whale divergence contradicts the indicator: $eliminatedCount coins eliminated"
@@ -170,6 +191,16 @@ fun ScannerScreen(container: AppContainer, onSelectSymbol: (String) -> Unit = {}
             )
         }
 
+        // ── 1c) Universe depth status (honest, read-only) + rolling ETA ──
+        item("universe") {
+            UniverseInfoRow(
+                universeMode = state.universeMode,
+                universeSize = state.universeSize,
+                etaSeconds = state.etaSeconds.takeIf { state.scanning },
+                onSelectMode = vm::setUniverseMode,
+            )
+        }
+
         // ── 2) Live progress while scanning ───────────────────────────────
         if (state.scanning) {
             item("progress") { ScanProgressBlock(state = state) }
@@ -197,6 +228,22 @@ fun ScannerScreen(container: AppContainer, onSelectSymbol: (String) -> Unit = {}
                 )
             }
 
+            // ── ★ İZLEME lens: only SettingsStore favorites (client-side) ──
+            item("watch") {
+                FilterPill(
+                    label = "★ İZLEME (${favoriteSet.size})",
+                    selected = watchOnly,
+                    accent = DiveColors.Yellow,
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = { watchOnly = !watchOnly },
+                )
+            }
+            if (watchOnly && displayedRows.isEmpty()) {
+                item("nowatch") {
+                    NoWatchlistCard(hasFavorites = favoriteSet.isNotEmpty())
+                }
+            }
+
             // ── Divergence lens explanation (only when there are results; one message when empty) ──
             if (resultFilter == ResultFilter.DIVERGENCE && displayedRows.isNotEmpty()) {
                 item("divinfo") { DivergenceLensInfo() }
@@ -210,7 +257,14 @@ fun ScannerScreen(container: AppContainer, onSelectSymbol: (String) -> Unit = {}
                     items = displayedRows,
                     key = { _, row -> row.symbol },
                 ) { idx, row ->
-                    CoinResultCard(row = row, rank = idx + 1, allTfs = state.timeframes, onSelect = { onSelectSymbol(row.symbol) })
+                    CoinResultCard(
+                        row = row,
+                        rank = idx + 1,
+                        allTfs = state.timeframes,
+                        livePrice = liveTickers[row.symbol]?.price,
+                        onAlert = { alertSheetSymbol = row.symbol },
+                        onSelect = { onSelectSymbol(row.symbol) },
+                    )
                 }
             }
 
@@ -243,6 +297,17 @@ fun ScannerScreen(container: AppContainer, onSelectSymbol: (String) -> Unit = {}
         // Bottom spacer so the last card isn't kissed by the bottom nav bar
         item("spacer") { Spacer(modifier = Modifier.height(16.dp)) }
     }
+    }
+
+    // ── Quick-add alert sheet (Task 2c) — the SAME authoring sheet the Alarmlar
+    //    screen uses; the row's symbol is prefilled, kind defaults to VERDICT.
+    alertSheetSymbol?.let { symbol ->
+        AlertAddSheet(
+            container = container,
+            presetSymbol = symbol,
+            presetKind = AlertKind.VERDICT,
+            onDismiss = { alertSheetSymbol = null },
+        )
     }
 }
 
@@ -463,7 +528,14 @@ private fun phaseLabel(p: ScanPhase): String = when (p) {
 // Coin result card — ONE coin, ALL info, no horizontal scroll
 // ═════════════════════════════════════════════════════════════════════════
 @Composable
-private fun CoinResultCard(row: CrossRankingRow, rank: Int, allTfs: List<String>, onSelect: () -> Unit) {
+private fun CoinResultCard(
+    row: CrossRankingRow,
+    rank: Int,
+    allTfs: List<String>,
+    livePrice: Double?,
+    onAlert: () -> Unit,
+    onSelect: () -> Unit,
+) {
     val isCommonAll = row.countHit == row.totalTfs
     val accentColor = when {
         row.dominantDir.score > 0 -> DiveColors.Green
@@ -501,12 +573,14 @@ private fun CoinResultCard(row: CrossRankingRow, rank: Int, allTfs: List<String>
         )
 
         Column(modifier = Modifier.padding(14.dp)) {
-            // ── Row 1: Rank · Symbol · Signal · Price ─────────────────────
+            // ── Row 1: Rank · Symbol · Signal · 🔔 · Price ────────────────
             CoinCardHeader(
                 row = row,
                 rank = rank,
                 isCommonAll = isCommonAll,
                 accentColor = accentColor,
+                livePrice = livePrice,
+                onAlert = onAlert,
             )
 
             // ── Row 1b: strategy-overlay tags (Regime · MTF gate · Micro) ──
@@ -798,6 +872,8 @@ private fun CoinCardHeader(
     rank: Int,
     isCommonAll: Boolean,
     accentColor: Color,
+    livePrice: Double?,
+    onAlert: () -> Unit,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -856,12 +932,165 @@ private fun CoinCardHeader(
             )
         }
         Spacer(modifier = Modifier.weight(1f))
-        // Price
+        // Quick-add alert affordance (Task 2c) — opens the shared KURAL EKLE sheet.
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(6.dp))
+                .background(DiveColors.BgCardHover)
+                .border(1.dp, DiveColors.Border, RoundedCornerShape(6.dp))
+                .semantics {
+                    role = Role.Button
+                    contentDescription = "${row.symbol} için alarm ekle"
+                }
+                .clickable(onClick = onAlert)
+                .padding(horizontal = 6.dp, vertical = 4.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.AddAlert,
+                contentDescription = null, // container carries the a11y label
+                tint = DiveColors.Warn,
+                modifier = Modifier.size(16.dp),
+            )
+        }
+        Spacer(Modifier.width(8.dp))
+        LivePriceCell(symbol = row.symbol, rowPrice = row.price, livePrice = livePrice)
+    }
+}
+
+/**
+ * Live-price cell (Task 4) — overlays the watchlist engine's real-time price on
+ * the scan-time price and flashes a brief tint on every change (300ms
+ * animateColorAsState, subtle by design). No ticker yet → the scan price stays.
+ */
+@Composable
+private fun LivePriceCell(symbol: String, rowPrice: Double, livePrice: Double?) {
+    val price = livePrice ?: rowPrice
+    var displayed by remember(symbol) { mutableStateOf(price) }
+    var flash by remember(symbol) { mutableStateOf(0) } // +1 up · −1 down · 0 none
+    LaunchedEffect(price) {
+        if (price != displayed) {
+            flash = if (price > displayed) 1 else -1
+            displayed = price
+        }
+        if (flash != 0) {
+            delay(300)
+            flash = 0
+        }
+    }
+    val flashColor by animateColorAsState(
+        targetValue = when {
+            flash > 0 -> DiveColors.GreenTint25
+            flash < 0 -> DiveColors.RedTint25
+            else -> Color.Transparent
+        },
+        animationSpec = tween(durationMillis = 300),
+        label = "priceFlash",
+    )
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(flashColor)
+            .padding(horizontal = 4.dp, vertical = 1.dp),
+    ) {
         Text(
-            text = "${'$'}${row.price.format(2, grouped = true)}",
+            text = "${'$'}${displayed.format(2, grouped = true)}",
             color = DiveColors.Text,
             fontSize = 14.sp,
             fontWeight = FontWeight.SemiBold,
+            fontFamily = DiveFonts.body,
+        )
+    }
+}
+
+/**
+ * TARAMA EVRENİ status row (Task 3 — HONEST READ-ONLY). ScannerViewModel exposes
+ * NO public universe setter, so the UI renders the CURRENT mode (what the next
+ * scan will use, read from the persisted SettingsStore) plus the rolling ETA —
+ * never a fabricated countdown. Changing the mode requires a VM setter (noted in
+ * the campaign report); this row is intentionally not clickable.
+ */
+@Composable
+private fun UniverseInfoRow(
+    universeMode: String,
+    universeSize: Int,
+    etaSeconds: Long?,
+    onSelectMode: (String) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(DiveDims.Radius))
+            .background(DiveColors.BgCard)
+            .border(1.dp, DiveColors.Border, RoundedCornerShape(DiveDims.Radius))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "TARAMA EVRENİ",
+                color = DiveColors.TextMuted,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.2.sp,
+                fontFamily = DiveFonts.body,
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = AlertLabels.universeLabel(universeMode) +
+                    if (universeSize > 0) " · $universeSize sembol" else "",
+                color = DiveColors.Accent,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = DiveFonts.body,
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = "ETA ${AlertLabels.etaLabel(etaSeconds)}",
+                color = DiveColors.TextMuted,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                fontFamily = DiveFonts.body,
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf("TOP20", "TOP50", "TOP100", "TOP250", "ALL").forEach { mode ->
+                FilterPill(
+                    label = AlertLabels.universeLabel(mode),
+                    selected = universeMode == mode,
+                    accent = DiveColors.Accent,
+                    onClick = { if (universeMode != mode) onSelectMode(mode) },
+                )
+            }
+        }
+        if (AlertLabels.isFullUniverse(universeMode)) {
+            Text(
+                text = "⚠ ~500 sembol · birkaç dk sürer · yeni taramada geçerli",
+                color = DiveColors.Warn,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.SemiBold,
+                fontFamily = DiveFonts.body,
+            )
+        }
+    }
+}
+
+/** Honest empty state for the ★ İZLEME lens. */
+@Composable
+private fun NoWatchlistCard(hasFavorites: Boolean) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(DiveColors.BgCard)
+            .border(1.dp, DiveColors.Border, RoundedCornerShape(12.dp))
+            .padding(20.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = if (hasFavorites) "★ İzleme listesinde bu taramadan sonuç yok."
+            else "★ İzleme listen boş — Ayarlar > Favori Coinler'e ekle.",
+            color = DiveColors.TextMuted,
+            fontSize = 13.sp,
             fontFamily = DiveFonts.body,
         )
     }

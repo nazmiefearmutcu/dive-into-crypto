@@ -63,6 +63,14 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
     private val _ui = MutableStateFlow(ScannerUiState())
     val ui: StateFlow<ScannerUiState> = _ui.asStateFlow()
 
+    init {
+        // App-scoped services that scans (and the watchlist) rely on. Both are
+        // idempotent: the all-market mini-ticker socket feeds live prices, and
+        // the alert engine arms its price-rule observation if rules exist.
+        container.liveTickerEngine.ensureStarted()
+        runCatching { container.alertEngine.startTickerObservation() }
+    }
+
     /** Toggle CONTINUOUS (back-to-back) scanning. When on, a new scan starts as soon as one finishes. */
     fun setContinuous(on: Boolean) { _ui.update { it.copy(continuous = on) } }
 
@@ -76,6 +84,14 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
      *  elimination/candidate-pool are UNCHANGED; when OFF, behavior is bit-for-bit identical to today. */
     fun setDivergenceSort(on: Boolean) { _ui.update { it.copy(divergenceSort = on) } }
 
+    /** Persist a new phase-1 universe mode (scanner depth chips). Takes effect on the next scan. */
+    fun setUniverseMode(label: String) {
+        val mode = com.diveintocrypto.android.data.ScanUniverseMode.fromLabel(label)
+        val s = container.settingsStore.getSettings()
+        container.settingsStore.updateSettings(s.copy(scanUniverse = mode.label))
+        _ui.update { it.copy(universeMode = mode.label) }
+    }
+
     fun startScan() {
         if (_ui.value.scanning) return
         // A new scan does NOT clear previous results — they stay on screen until new ones arrive.
@@ -87,6 +103,7 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
                 cycle = 0,
                 completedCount = 0,
                 totalCount = 0,
+                etaSeconds = null,
                 currentSymbol = null,
                 currentPhase = ScanPhase.UNIVERSE,
                 error = null,
@@ -141,7 +158,7 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
             )
         }
         run {
-            val universe = try {
+            val fullUniverse = try {
                 container.repository.futuresUniverse()
             } catch (t: Throwable) {
                 _ui.update {
@@ -153,7 +170,7 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
                 }
                 return false
             }
-            if (universe.isEmpty()) {
+            if (fullUniverse.isEmpty()) {
                 _ui.update {
                     it.copy(
                         universeLoading = false,
@@ -165,17 +182,29 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
             }
 
             val settings = container.settingsStore.getSettings()
-            val totalTfScans = universe.size * PHASE1_TFS.size + settings.scanSurvivors * PHASE2_TFS.size
+
+            // ── FULL-UNIVERSE MODE: phase-1 slice of the volume-sorted universe ──
+            val universeMode = com.diveintocrypto.android.data.ScanUniverseMode.fromLabel(settings.scanUniverse)
+            val universe = fullUniverse.take(universeMode.limit ?: fullUniverse.size)
+            // Phase-2 survivor pool N (scan_depth_top, default 50).
+            val phase2N = settings.scanDepthTop.coerceAtLeast(1)
+
+            val totalTfScans = universe.size * PHASE1_TFS.size + phase2N * PHASE2_TFS.size
+            val scanStartedMs = nowMillis()
             _ui.update {
                 it.copy(
                     universeLoading = false,
                     universeSize = universe.size,
+                    universeMode = universeMode.label,
                     totalCount = totalTfScans,
+                    etaSeconds = null,
                     currentPhase = ScanPhase.PHASE1,
                 )
             }
 
-            val sem = Semaphore(settings.scanParallelism)
+            // ── ADAPTIVE CONCURRENCY: big universes get more in-flight requests ──
+            val parallelism = adaptiveParallelism(settings.scanParallelism, universe.size)
+            val sem = Semaphore(parallelism)
             val mutex = Mutex()
             val tfResults: MutableMap<String, MutableList<SymbolTfResult>> = mutableMapOf()
             // HONESTY: symbols whose kline fetch FAILED (network error) — previously the
@@ -238,7 +267,13 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
                     mutex.withLock {
                         completed += 1
                         val snap = completed
-                        _ui.update { it.copy(completedCount = snap) }
+                        // HONEST PROGRESS: rolling throughput → ETA (null until the
+                        // first completions give a rate).
+                        _ui.update { s ->
+                            val eta = estimateEtaSeconds(snap, s.totalCount, nowMillis() - scanStartedMs)
+                            if (s.completedCount == snap && s.etaSeconds == eta) s
+                            else s.copy(completedCount = snap, etaSeconds = eta)
+                        }
                     }
                 }
             }
@@ -256,7 +291,7 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
 
             if (_ui.value.stopRequested) return false
 
-            // ── Determine phase-2 survivors: top scanSurvivors by Σ phase-1 finalScore
+            // ── Determine phase-2 survivors: top scanDepthTop by Σ phase-1 finalScore ──
             val p1Scores = mutableMapOf<String, Double>()
             for (tf in PHASE1_TFS) {
                 for (r in tfResults[tf] ?: emptyList()) {
@@ -265,7 +300,7 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
             }
             val survivors = p1Scores.entries
                 .sortedByDescending { it.value }
-                .take(settings.scanSurvivors)
+                .take(phase2N)
                 .map { it.key }
 
             _ui.update { it.copy(currentPhase = ScanPhase.PHASE2) }
@@ -312,7 +347,7 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
             // A SEPARATE semaphore for the divergence phase — we don't tie up the scan sem. (P0 fix:
             // 18 sequential network calls under a single permit serialized the phase.) All
             // candidate × TF requests share this gate → real bounded parallelism.
-            val divGate = Semaphore(settings.scanParallelism)
+            val divGate = Semaphore(parallelism)
             coroutineScope {
                 candidates.map { row ->
                     async {
@@ -368,7 +403,7 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
             // (bounded by [MICRO_ANNOTATION_LIMIT] to cap the extra REST calls; the engine's
             // 30s series caches absorb repeats in continuous mode). Any fetch failure → no
             // annotation (fields stay null). NEVER enters score/elimination.
-            val microGate = Semaphore(settings.scanParallelism)
+            val microGate = Semaphore(parallelism)
             val microLimit = survivorRows.size.coerceAtMost(MICRO_ANNOTATION_LIMIT)
             val microResults: Map<String, Microstructure.Result> =
                 if (microLimit > 0 && !_ui.value.stopRequested) {
@@ -404,6 +439,67 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
                         error = null,
                     )
                 }
+
+            // ── ALERT HOOK (domain/alerts/AlertEngine): VERDICT + CONFIDENCE rules
+            //    evaluated over the survivor head. Bounded to [ALERT_SCAN_LIMIT]
+            //    rows; the OI series is only fetched for symbols with an OI rule.
+            //    Failure-tolerant: alerts must never break the scan. ──
+            runCatching {
+                val alertRows = annotatedSurvivorRows.take(ALERT_SCAN_LIMIT)
+                val verdicts = alertRows.associate { row ->
+                    row.symbol to com.diveintocrypto.android.domain.alerts.AlertVerdict(
+                        signal = row.dominantDir.name,
+                        confidence = row.perTf.values.maxOfOrNull { it.confidence } ?: 0,
+                        price = row.price,
+                    )
+                }
+                val oiRules = container.alertEngine.rules.value.filter {
+                    it.enabled && it.kind == com.diveintocrypto.android.domain.alerts.AlertKind.OI_SPIKE_PCT
+                }
+                val oiSpike = if (oiRules.isEmpty()) emptyMap() else {
+                    val gate = Semaphore(parallelism)
+                    val wanted = oiRules.map { it.symbol }.toSet()
+                        .intersect(alertRows.map { it.symbol }.toSet())
+                    coroutineScope {
+                        wanted.map { sym ->
+                            async {
+                                gate.withPermit {
+                                    try {
+                                        val oi = container.repository.openInterestHist(sym, "1h", limit = 30)
+                                        sym to (com.diveintocrypto.android.domain.alerts.AlertEvaluator
+                                            .oiSpikePct(oi.map { it.sumOpenInterestValue }) ?: Double.NaN)
+                                    } catch (_: Throwable) {
+                                        sym to Double.NaN
+                                    }
+                                }
+                            }
+                        }.awaitAll().toMap().filterValues { !it.isNaN() }
+                    }
+                }
+                container.alertEngine.onScanResultsAsync(verdicts, oiSpike)
+            }
+
+            // ── VERDICT EVIDENCE (domain/evidence): archive the survivor head for
+            //    the Performance screen's self-grading. Failure-tolerant; capped. ──
+            runCatching {
+                val now = nowMillis()
+                val records = annotatedSurvivorRows.take(EVIDENCE_APPEND_LIMIT).map { row ->
+                    com.diveintocrypto.android.domain.evidence.VerdictRecord(
+                        ts = now,
+                        symbol = row.symbol,
+                        verdict = row.dominantDir.name,
+                        confidence = row.perTf.values.maxOfOrNull { it.confidence } ?: 0,
+                        risk = riskFromAgreement(row.countHit, row.totalTfs),
+                        price = row.price,
+                        dominantDir = when {
+                            row.dominantDir == Signal.BUY || row.dominantDir == Signal.STRONG_BUY -> 1
+                            row.dominantDir == Signal.SELL || row.dominantDir == Signal.STRONG_SELL -> -1
+                            else -> 0
+                        },
+                    )
+                }
+                container.evidenceStore.appendAll(records)
+            }
 
             _ui.update {
                 it.copy(
@@ -523,6 +619,40 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
         val DEFAULT_TFS: List<String> = ALL_TFS
 
         // ── Pure scan-logic helpers (unit-testable, no VM state) ─────────
+
+        /**
+         * ADAPTIVE CONCURRENCY: universes larger than 100 symbols bump the base
+         * parallelism to at least 12 (phase-1 is latency-bound on 3×universe
+         * kline fetches), hard-capped at [MAX_SCAN_PARALLELISM] to stay polite
+         * to the venue's rate limits.
+         */
+        fun adaptiveParallelism(base: Int, universeSize: Int): Int {
+            val effective = if (universeSize > 100) maxOf(base, 12) else base
+            return effective.coerceIn(1, MAX_SCAN_PARALLELISM)
+        }
+
+        /** Hard cap on in-flight scan requests. */
+        const val MAX_SCAN_PARALLELISM = 16
+
+        /**
+         * ETA estimator from rolling throughput (PURE): rate = completed/elapsed,
+         * eta = remaining/rate. null while there is no rate yet (no completions,
+         * zero elapsed) or nothing remains — the UI shows "—" rather than a fake 0.
+         */
+        fun estimateEtaSeconds(completed: Int, total: Int, elapsedMs: Long): Long? {
+            if (completed <= 0 || total <= 0 || elapsedMs <= 0L || completed >= total) return null
+            val elapsedSec = elapsedMs / 1000.0
+            if (elapsedSec <= 0.0) return null
+            val ratePerSec = completed / elapsedSec
+            if (ratePerSec <= 0.0) return null
+            return Math.ceil((total - completed) / ratePerSec).toLong()
+        }
+
+        /** Rows handed to the alert engine per scan cycle (bounded REST for OI rules). */
+        const val ALERT_SCAN_LIMIT = 40
+
+        /** Verdict records archived per scan cycle. */
+        const val EVIDENCE_APPEND_LIMIT = 40
 
         /**
          * CANONICAL risk-from-TF-agreement mapping (identical to the private
@@ -831,6 +961,10 @@ data class ScannerUiState(
     val failedCount: Int = 0,
     /** Universe size (full Binance USDT-M futures set after stablecoin filter). */
     val universeSize: Int = 0,
+    /** FULL-UNIVERSE MODE label for this scan: TOP20/TOP50/TOP100/TOP250/ALL. */
+    val universeMode: String = "TOP50",
+    /** HONEST ETA from rolling scan throughput; null = not enough samples yet. */
+    val etaSeconds: Long? = null,
     val universeLoading: Boolean = false,
     val lastScanAtMs: Long? = null,
     val error: String? = null,
