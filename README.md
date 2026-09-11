@@ -9,6 +9,7 @@
 └────────────────────────────────────────────────────────────────┘
 ```
 
+[![CI](https://github.com/nazmiefearmutcu/dive-into-crypto/actions/workflows/ci.yml/badge.svg)](https://github.com/nazmiefearmutcu/dive-into-crypto/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-39ff9e?style=flat-square)](LICENSE)
 [![Last commit](https://img.shields.io/github/last-commit/nazmiefearmutcu/dive-into-crypto?style=flat-square&color=39ff9e)](https://github.com/nazmiefearmutcu/dive-into-crypto/commits)
 ![Python](https://img.shields.io/badge/python-3.12+-1c7a52?style=flat-square)
@@ -165,11 +166,13 @@ per-value markers render whenever demo mode is on.
 
 ```
 dive-into-crypto/
+├─ .github/          CI workflow (backend · UI · android jobs)
 ├─ android/          native Kotlin/Compose edition (Gradle)
 ├─ desktop/
 │  ├─ backend/       Python · FastAPI · the reference engine (57 indicators + overlays)
 │  └─ ui/            React "Depth Terminal" — prebuilt bundle + design reference
-└─ docs/             specs · screenshots
+├─ tests/            root E2E suite (offline, opaque-box tiers 1–4)
+└─ docs/             specs · api reference · screenshots
 ```
 
 ---
