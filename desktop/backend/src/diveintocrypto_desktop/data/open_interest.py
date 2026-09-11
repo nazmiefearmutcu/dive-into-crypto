@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
+from typing import Any
 
 from crypcodile.exchanges.binance.backfill import _live_fetch_open_interest_hist, parse_open_interest_hist
 
-_FAPI_DATA = "https://fapi.binance.com"
+from diveintocrypto_desktop.data.http import FAPI_DATA, TransientUpstreamError, run_with_retries
+
 _VENUE = "binance-usdm"
 
 # Binance publishes openInterestHist for these periods only.
@@ -18,13 +21,20 @@ async def fetch_oi_hist(symbol: str, period: str = "5m", limit: int = 48) -> lis
     if period not in OI_PERIODS:
         period = "5m"
     now_ms = int(time.time() * 1000)
-    raw = await _live_fetch_open_interest_hist(
-        symbol=symbol,
-        period=period,
-        start_time_ms=None,
-        end_time_ms=now_ms,
-        limit=limit,
-        rest_base=_FAPI_DATA,
+
+    async def send() -> Any:
+        return await _live_fetch_open_interest_hist(
+            symbol=symbol,
+            period=period,
+            start_time_ms=None,
+            end_time_ms=now_ms,
+            limit=limit,
+            rest_base=FAPI_DATA,
+        )
+
+    raw = await run_with_retries(
+        send,
+        should_retry=lambda e: isinstance(e, TransientUpstreamError) or isinstance(e, asyncio.TimeoutError),
     )
     local_ts = now_ms * 1_000_000
     recs = parse_open_interest_hist(raw, _VENUE, symbol, local_ts)

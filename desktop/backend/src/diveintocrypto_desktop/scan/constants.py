@@ -11,13 +11,7 @@ TIME_WEIGHTS: dict[str, int] = {
 }
 
 ALL_TFS: list[str] = ["1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d"]
-PHASE1_TFS: list[str] = ["1d", "12h", "8h"]
-PHASE2_TFS: list[str] = ["1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h"]
 
-# Binance futures-data publishes long/short for these 9 periods only (no 1m, 3m, 8h).
-DIVERGENCE_TFS: list[str] = ["5m", "15m", "30m", "1h", "2h", "4h", "6h", "12h", "1d"]
-
-PHASE2_TOP_N = 50          # survivors carried from phase 1 into phase 2
 DIVERGENCE_CANDIDATES = 40  # symbols divergence is computed for (rate-limit bound)
 DIVERGENCE_RANK_WEIGHT = 0.35  # divergence share of the table ranking blend
 DIVERGENCE_MIN_SHOWN = 5.0  # |divergence score| below this is treated as none

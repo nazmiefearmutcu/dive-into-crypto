@@ -69,10 +69,22 @@ def test_leaders_endpoint():
 
 
 def test_websocket_live_endpoint_happy_path():
+    """Default-symbol frame on connect, then a frame for the newly selected symbol.
+
+    Root cause of the historical flake (two cross-thread races, both fixed here):
+    (1) the stub return value was set AFTER ``send_text`` — the TestClient serves
+    the app through a portal on another thread, which can consume the symbol
+    message and start the rebuild before the test thread's next statement runs,
+    so the frame could legitimately be built with the OLD stub; the stub is now
+    armed before the message is sent. (2) the loop-terminating mock used to raise
+    on the same event-loop pass that sent the final frame — anyio streams are
+    closed with the handler and deliver no buffered frames afterwards, so the
+    terminal raise now waits briefly, letting the client drain the last frame.
+    """
     app = create_app()
     with patch("diveintocrypto_desktop.api.app.sb.build_symbol", new_callable=AsyncMock) as mock_build:
         mock_build.return_value = {"s": "BTCUSDT", "finalSignal": "NEUTRAL", "confidence": 23}
-        
+
         original_sleep = asyncio.sleep
         calls = 0
         async def mock_sleep(seconds, *args, **kwargs):
@@ -80,13 +92,17 @@ def test_websocket_live_endpoint_happy_path():
             if seconds == 5:
                 calls += 1
                 if calls == 1:
-                    # Wait briefly to let the loop execute and check for received text
-                    await original_sleep(0.01)
+                    # Let the client's symbol change cross the portal before the
+                    # server opens its next receive window.
+                    await original_sleep(0.05)
                 else:
+                    # Grace before tearing the session down: the final frame must
+                    # be delivered to the (already blocked) client receive.
+                    await original_sleep(0.05)
                     raise WebSocketDisconnect()
             else:
                 await original_sleep(seconds, *args, **kwargs)
-                
+
         with patch("diveintocrypto_desktop.api.app.asyncio.sleep", side_effect=mock_sleep):
             with TestClient(app) as test_client:
                 with test_client.websocket_connect("/api/live") as websocket:
@@ -94,12 +110,12 @@ def test_websocket_live_endpoint_happy_path():
                     data = websocket.receive_json()
                     assert data["s"] == "BTCUSDT"
                     assert data["finalSignal"] == "NEUTRAL"
-                    
-                    # Update symbol to ETHUSDT
-                    websocket.send_text("ETHUSDT")
-                    
-                    # Second frame should query for ETHUSDT
+
+                    # Arm the stub BEFORE triggering the rebuild, then switch symbol.
                     mock_build.return_value = {"s": "ETHUSDT", "finalSignal": "BUY", "confidence": 80}
+                    websocket.send_text("ETHUSDT")
+
+                    # Second frame should query for ETHUSDT
                     data = websocket.receive_json()
                     assert data["s"] == "ETHUSDT"
                     assert data["finalSignal"] == "BUY"

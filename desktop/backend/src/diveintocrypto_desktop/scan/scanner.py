@@ -9,6 +9,7 @@ limited); the expensive futures/data divergence is computed for the top
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from diveintocrypto_desktop.data import binance_klines as kl
 from diveintocrypto_desktop.data import ratios as rat
@@ -25,6 +26,8 @@ from diveintocrypto_desktop.scan.constants import (
 
 _MAX_PARALLEL = 8
 
+logger = logging.getLogger("trading_bot.scan.scanner")
+
 
 def net_nss(multi_tf: list[dict]) -> tuple[int, float]:
     """(dominantDir, netNss) — winning side's Σ(confidence²·timeWeight/100)."""
@@ -39,18 +42,22 @@ def net_nss(multi_tf: list[dict]) -> tuple[int, float]:
     return (1, buy) if buy >= sell else (-1, sell)
 
 
-async def _row(symbol: str, name: str, price: float, ch: float, sem: asyncio.Semaphore) -> dict | None:
+async def _row(symbol: str, name: str, price: float, ch: float, sem: asyncio.Semaphore) -> tuple[dict | None, str | None]:
+    """Build one scan row. Returns ``(row, None)`` or ``(None, failure_reason)``."""
     async with sem:
         try:
             candles_by_tf = await kl.fetch_all_tf(symbol, limit=300)
-        except Exception:
-            return None
-    row = sb.assemble(symbol, name, ch, price, candles_by_tf, series_data={}, divergence_inputs={})
+        except Exception as e:
+            return None, str(e)[:120]
+    # assemble() is pure pandas — keep it off the event loop.
+    row = await asyncio.to_thread(
+        sb.assemble, symbol, name, ch, price, candles_by_tf, {}, {}
+    )
     row["_candles_by_tf"] = candles_by_tf  # kept transiently for the divergence phase
     dom, nss = net_nss(row["multiTf"])
     row["dominantDir"] = dom
     row["netNss"] = round(nss, 2)
-    return row
+    return row, None
 
 
 async def _attach_divergence(row: dict, sem: asyncio.Semaphore) -> None:
@@ -72,12 +79,10 @@ async def _attach_divergence(row: dict, sem: asyncio.Semaphore) -> None:
     sym_div = dv.for_symbol(per_tf_res)
     coverage = sum(1 for r in per_tf_res.values() if r.detected)
     dir_ind = row["dominantDir"]
-    adverse = abs(sym_div.score) >= DIVERGENCE_MIN_SHOWN and sym_div.direction == -dir_ind
+    whale_regime, adverse = dv.whale_regime_for(sym_div, dir_ind, DIVERGENCE_MIN_SHOWN)
     row["quantBias"] = round(sym_div.score, 1)
     row["divergence"] = {"score": round(sym_div.score, 1), "tf": sym_div.best_tf, "coverage": coverage}
-    row["whaleRegime"] = "adverse" if adverse else (
-        "confirm" if sym_div.direction == dir_ind and abs(sym_div.score) >= DIVERGENCE_MIN_SHOWN else "neutral"
-    )
+    row["whaleRegime"] = whale_regime
     row["_adverse"] = adverse
 
 
@@ -91,11 +96,22 @@ def _rank_score(row: dict, max_net: float) -> float:
 
 
 async def scan(size: int = 10, universe_limit: int = 30) -> dict:
-    """Run the scan. Returns ``{survivors, eliminated, universeCount, scanned}``."""
+    """Run the scan. Returns ``{survivors, eliminated, universeCount, scanned,
+    scannedCount, droppedCount}`` — symbols whose data fetch failed are counted
+    in ``droppedCount`` (and logged with the reason), never silently folded into
+    the universe count.
+    """
     universe = await uni.list_universe(limit=universe_limit)
     sem = asyncio.Semaphore(_MAX_PARALLEL)
-    rows = await asyncio.gather(*(_row(u["s"], u["name"], u["price"], u["ch"], sem) for u in universe))
-    rows = [r for r in rows if r is not None]
+    results = await asyncio.gather(*(_row(u["s"], u["name"], u["price"], u["ch"], sem) for u in universe))
+    rows: list[dict] = []
+    dropped = 0
+    for (row, reason), u in zip(results, universe):
+        if row is None:
+            dropped += 1
+            logger.warning("scan: dropped %s — %s", u["s"], reason)
+            continue
+        rows.append(row)
     rows.sort(key=lambda r: r["netNss"], reverse=True)
 
     # Divergence only for the top candidates. Each candidate makes 3 rate-limited
@@ -121,4 +137,6 @@ async def scan(size: int = 10, universe_limit: int = 30) -> dict:
         "eliminated": eliminated,
         "universeCount": len(universe),
         "scanned": len(rows) * 12,
+        "scannedCount": len(rows),
+        "droppedCount": dropped,
     }

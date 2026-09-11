@@ -195,5 +195,23 @@ def align(
     return price, whale, matched
 
 
+def whale_regime_for(sym_div: SymbolResult, dir_ind: int, min_shown: float) -> tuple[str, bool]:
+    """(whaleRegime, adverse) — the single classification shared by the scanner and
+    the symbol builder: "adverse" when the divergence opposes the dominant
+    direction (elimination), "confirm" when it supports it (ranking lift),
+    "neutral" below the display threshold or without a whale direction.
+    """
+    adverse = abs(sym_div.score) >= min_shown and sym_div.direction == -dir_ind
+    if abs(sym_div.score) < min_shown or sym_div.direction == 0:
+        regime = "neutral"
+    elif adverse:
+        regime = "adverse"
+    elif sym_div.direction == dir_ind:
+        regime = "confirm"
+    else:
+        regime = "neutral"
+    return regime, adverse
+
+
 def _sign(x: float) -> float:
     return (x > 0) - (x < 0)

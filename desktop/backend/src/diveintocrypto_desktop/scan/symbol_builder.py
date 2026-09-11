@@ -5,6 +5,9 @@ The canonical (parity-locked) engine produces the per-timeframe verdicts and the
 shaped into the object the SGS screens already read (spec §8). All numbers are real
 — nothing is synthesised. Where a microstructure value is derived (e.g. per-step
 bias from the whale L/S series) it is a transform of real data, not a fabrication.
+
+``assemble`` is pure CPU (pandas): async callers run it via ``asyncio.to_thread``
+so a full scan never stalls the event loop.
 """
 
 from __future__ import annotations
@@ -56,16 +59,16 @@ def _action(signal: str) -> str:
     return "AL" if "BUY" in signal else "SAT" if "SELL" in signal else "BEKLE"
 
 
-def _num(raw: dict | None, key: str) -> float:
+def _num(raw: dict | None, key: str) -> float | None:
+    """Primary raw value for the 15-row table. ``None`` when missing — the UI
+    renders an empty cell; a fabricated number (e.g. a period) never lies here.
+    """
     if not raw:
-        return 0.0
+        return None
     v = raw.get(key)
     if isinstance(v, (int, float)):
         return round(float(v), 4)
-    for x in raw.values():  # fallback: first numeric raw value
-        if isinstance(x, (int, float)):
-            return round(float(x), 4)
-    return 0.0
+    return None
 
 
 def assemble(
@@ -135,15 +138,7 @@ def assemble(
     coverage = sum(1 for r in per_tf_res.values() if r.detected)
 
     dir_ind = _dir(final_signal)
-    adverse = abs(sym_div.score) >= DIVERGENCE_MIN_SHOWN and sym_div.direction == -dir_ind
-    if abs(sym_div.score) < DIVERGENCE_MIN_SHOWN or sym_div.direction == 0:
-        whale_regime = "neutral"
-    elif adverse:
-        whale_regime = "adverse"
-    elif sym_div.direction == dir_ind:
-        whale_regime = "confirm"
-    else:
-        whale_regime = "neutral"
+    whale_regime, _adverse = dv.whale_regime_for(sym_div, dir_ind, DIVERGENCE_MIN_SHOWN)
 
     # ── series (real; bias derived from the real whale-position lean) ─────────
     pos = series_data.get("pos", [])
@@ -252,4 +247,6 @@ async def build_symbol(
     ch = ch if ch is not None else meta.get("ch", 0.0)
     name = name or symbol.replace("USDT", "")
 
-    return assemble(symbol, name, ch, price, candles_by_tf, series_data, div_inputs, primary_tf)
+    return await asyncio.to_thread(
+        assemble, symbol, name, ch, price, candles_by_tf, series_data, div_inputs, primary_tf
+    )

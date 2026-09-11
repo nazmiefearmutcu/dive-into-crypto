@@ -3,12 +3,15 @@
 Localhost-only. Serves the built UI (if present) and a small JSON API backed by the
 Crypcodile-fed scanner. A request-log ring buffer feeds the Network Log screen with
 real activity; scan results are cached briefly to respect Binance rate limits.
+Logging is configured once at startup so engine/scan log records reach stdout.
 """
 
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
 import asyncio
+import logging
+import sys
 import time
 from collections import deque
 from pathlib import Path
@@ -30,17 +33,100 @@ _LOG: deque[dict] = deque(maxlen=200)
 
 # Brief scan cache to avoid hammering Binance on rapid refreshes.
 _scan_cache: dict[str, tuple[float, dict]] = {}
-_scan_lock = asyncio.Lock()
 _SCAN_TTL = 20.0
+
+# Per-symbol detail TTL (10s): /api/symbol costs ~21 upstream calls.
+_SYMBOL_TTL = 10.0
+_SYMBOL_CACHE_MAX = 128
+
+# Live-feed sharing: one rebuild per symbol is shared across all connected
+# clients (a fresh object is reused for _LIVE_FRESH_TTL seconds), and a symbol
+# whose build keeps failing backs off exponentially instead of retrying every 5s.
+_LIVE_FRESH_TTL = 4.0
+_LIVE_BACKOFF_BASE = 2.0  # seconds after 1st failure; doubles per extra failure
+_LIVE_BACKOFF_CAP = 60.0
+
+
+class _PerKeyLocks:
+    """Per-key asyncio locks, created per running loop.
+
+    Loop-keyed because the TestClient (and ASGI transports in general) may serve
+    successive requests on different event loops; a bare ``asyncio.Lock`` would
+    stay bound to the first loop that awaited it.
+    """
+
+    def __init__(self) -> None:
+        self._by_loop: dict[asyncio.AbstractEventLoop, dict[str, asyncio.Lock]] = {}
+
+    def lock(self, key: str) -> asyncio.Lock:
+        loop = asyncio.get_running_loop()
+        return self._by_loop.setdefault(loop, {}).setdefault(key, asyncio.Lock())
+
+
+_scan_locks = _PerKeyLocks()
+logger = logging.getLogger("trading_bot.api")
 
 
 def _log(msg: str, status: int = 200, ms: int = 0) -> None:
     _LOG.appendleft({"t": time.strftime("%H:%M:%S"), "m": msg, "s": status, "ms": ms})
 
 
+def _configure_logging() -> None:
+    """Once-per-process stdout logging (no files — the UI owns the log screen)."""
+    root = logging.getLogger()
+    if not root.handlers:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s | %(levelname)-8s | %(name)-25s | %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+            stream=sys.stdout,
+        )
+    logging.getLogger("trading_bot").setLevel(logging.INFO)
+
+
 def create_app() -> FastAPI:
+    # Live-feed + symbol state is per-app so tests (and restarts) start clean.
+    _live_cache: dict[str, tuple[float, dict]] = {}
+    _live_fails: dict[str, int] = {}
+    _live_next_attempt: dict[str, float] = {}
+    _live_locks = _PerKeyLocks()
+    _symbol_cache: dict[str, tuple[float, dict]] = {}
+
+    async def _live_snapshot(symbol: str) -> dict:
+        """Build (or reuse) the data-contract object for one /api/live frame.
+
+        Concurrent watchers of the same symbol share a single rebuild via a
+        per-symbol lock + freshness window; persistent failures back off
+        exponentially (capped at 60s) and the backoff resets on success.
+        """
+        async with _live_locks.lock(symbol):
+            now = time.monotonic()
+            cached = _live_cache.get(symbol)
+            if cached and "error" not in cached[1] and now - cached[0] < _LIVE_FRESH_TTL:
+                return cached[1]
+            if now < _live_next_attempt.get(symbol, 0.0):
+                # Backoff window: resend the last (error) frame, do NOT re-hit upstream.
+                if cached is not None:
+                    return cached[1]
+            try:
+                obj = await sb.build_symbol(symbol)
+            except Exception as e:
+                streak = _live_fails.get(symbol, 0) + 1
+                _live_fails[symbol] = streak
+                delay = min(_LIVE_BACKOFF_CAP, _LIVE_BACKOFF_BASE * (2 ** (streak - 1)))
+                _live_next_attempt[symbol] = time.monotonic() + delay
+                logger.warning("live: %s failed (%s) — backing off %.0fs", symbol, str(e)[:80], delay)
+                frame = {"error": "live_fetch_failed", "symbol": symbol}
+                _live_cache[symbol] = (time.monotonic(), frame)
+                return frame
+            _live_fails.pop(symbol, None)
+            _live_next_attempt.pop(symbol, None)
+            _live_cache[symbol] = (time.monotonic(), obj)
+            return obj
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        _configure_logging()
         yield
         await close_session()
 
@@ -68,26 +154,39 @@ def create_app() -> FastAPI:
         cached = _scan_cache.get(key)
         if cached and now - cached[0] < _SCAN_TTL:
             return cached[1]
-        async with _scan_lock:
+        async with _scan_locks.lock(key):  # per-key: different keys never serialize
             cached = _scan_cache.get(key)
             if cached and time.monotonic() - cached[0] < _SCAN_TTL:
                 return cached[1]
             t0 = time.monotonic()
             res = await scanner.scan(size=size, universe_limit=universe_limit)
             ms = int((time.monotonic() - t0) * 1000)
-            _log(f"Scan complete · {res['universeCount']} symbols · {len(res['survivors'])} survivors", 200, ms)
+            _log(
+                f"Scan complete · {res['universeCount']} universe · {res['scannedCount']} scanned · "
+                f"{res['droppedCount']} dropped · {len(res['survivors'])} survivors",
+                200, ms,
+            )
             _scan_cache[key] = (time.monotonic(), res)
             return res
 
     @app.get("/api/symbol/{symbol}")
     async def symbol(symbol: str) -> JSONResponse:
+        key = symbol.upper()
         t0 = time.monotonic()
+        hit = _symbol_cache.get(key)
+        if hit and t0 - hit[0] < _SYMBOL_TTL:
+            _log(f"Built {key} · {hit[1].get('finalSignal', '?')} (cache)", 200, int((time.monotonic() - t0) * 1000))
+            return JSONResponse(hit[1])
         try:
-            obj = await sb.build_symbol(symbol.upper())
-        except Exception as e:  # surface honestly, do not fabricate
+            obj = await sb.build_symbol(key)
+        except Exception as e:  # surface honestly, do not fabricate (and do not cache)
             _log(f"GET symbol {symbol} FAILED: {str(e)[:60]}", 502, int((time.monotonic() - t0) * 1000))
             return JSONResponse({"error": "symbol_fetch_failed", "symbol": symbol}, status_code=502)
-        _log(f"Built {symbol.upper()} · {obj['finalSignal']} ({obj['confidence']}%)", 200, int((time.monotonic() - t0) * 1000))
+        if len(_symbol_cache) >= _SYMBOL_CACHE_MAX:
+            oldest = min(_symbol_cache, key=lambda k: _symbol_cache[k][0])
+            _symbol_cache.pop(oldest, None)
+        _symbol_cache[key] = (time.monotonic(), obj)
+        _log(f"Built {key} · {obj['finalSignal']} ({obj['confidence']}%)", 200, int((time.monotonic() - t0) * 1000))
         return JSONResponse(obj)
 
     @app.get("/api/leaders")
@@ -113,15 +212,10 @@ def create_app() -> FastAPI:
                         symbol = msg.strip().upper()
                 except asyncio.TimeoutError:
                     pass
-                try:
-                    obj = await sb.build_symbol(symbol)
-                    await ws.send_json(obj)
-                except Exception:
-                    await ws.send_json({"error": "live_fetch_failed", "symbol": symbol})
+                await ws.send_json(await _live_snapshot(symbol))
                 await asyncio.sleep(5)
         except WebSocketDisconnect:
             return
-
 
     if _UI_DIST.exists():
         app.mount("/", StaticFiles(directory=str(_UI_DIST), html=True), name="ui")

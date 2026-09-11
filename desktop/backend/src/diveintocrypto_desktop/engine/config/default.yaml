@@ -1,7 +1,11 @@
-active_symbol_path: runtime/active_symbol.txt
-auto_scan_enabled: false
-auto_select_enabled: false
-candle_limit: 300
+# Canonical engine configuration. Every key here is consumed by the code:
+# - indicator_thresholds / indicator_weights: keyed by real indicator names
+#   (enforced by tests/test_config_integrity.py)
+# - consensus / no_trade / risk: ConsensusEngine + risk module
+# - microstructure: strategy overlay switch
+# - regime: Regime-Adaptive Weighting thresholds (matches regime.py defaults)
+# The old bot-service blocks (mode/paper/leverage/cooldown/...) were removed —
+# nothing in the scanner reads them; this service is a scanner, not a bot.
 consensus:
   buy_threshold: 0.4
   conflict_ratio_threshold: 0.6
@@ -9,16 +13,12 @@ consensus:
   sell_threshold: -0.4
   strong_buy_threshold: 1.2
   strong_sell_threshold: -1.2
-cooldown:
-  min_candles_between_trades: 3
-  reentry_cooldown_seconds: 180
-  trade_cooldown_seconds: 60
 indicator_thresholds:
   adx_di:
     period: 14
     strong_trend: 25
     weak_trend: 15
-  atr:
+  atr_filter:
     high_volatility_multiplier: 2.0
     period: 14
   awesome_oscillator:
@@ -164,13 +164,6 @@ indicator_weights:
   kalman_trend: 1.4
   half_life_reversion: 1.0
   rolling_sharpe: 1.2
-leverage:
-  enabled: true
-  min_leverage: 2
-  scale_ratio: 0.8
-log_path: runtime/bot.log
-market_type: futures
-mode: paper
 microstructure:
   enabled: true
   window: 24
@@ -178,10 +171,14 @@ no_trade:
   adx_min: 15.0
   atr_high_percentile: 95.0
   min_confidence: 30.0
-paper:
-  fee_pct: 0.001
-  starting_balance: 10000.0
-polling_interval_seconds: 1
+# Regime-Adaptive Weighting (engine/consensus/regime.py). These mirror the
+# module's fallback defaults exactly — making them explicit so the overlay is
+# tunable without code edits.
+regime:
+  strong_adx: 25.0
+  weak_adx: 20.0
+  chop_trend: 38.2
+  chop_range: 61.8
 risk:
   break_even_trigger_pct: 0.025
   confidence_threshold: 25
@@ -194,6 +191,3 @@ risk:
   take_profit_pct: 0.1
   trailing_stop_activation_pct: 0.04
   trailing_stop_pct: 0.03
-state_path: runtime/state.json
-timeframe: 4h
-trading_mode: long_term
