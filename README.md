@@ -121,6 +121,15 @@ uv run dive-desktop          # serves 127.0.0.1:8780 and opens the terminal UI
 Nothing leaves your machine except public Binance requests. Details:
 **[desktop/README.md](desktop/README.md)**. Android: **[android/README.md](android/README.md)**.
 
+> **Full-universe scans are real work.** The scanner can sweep the whole Binance USDT-M
+> universe (`/api/scan?universe_limit=500`, cap 500). That is ~2000+ public requests
+> (a coarse 4h/12h/1d sweep of all 500, then the remaining 9 timeframes for the top
+> `depth_top` rows) and takes **minutes** — use `&async=1` and poll
+> `/api/scan/progress?scan_id=…` for large universes. Concurrency adapts automatically
+> to Binance rate-limit pressure (429/451). Every verdict is also archived to
+> `desktop/backend/runtime/evidence.jsonl` so the engine can grade itself later
+> (`GET /api/evidence`, `POST /api/evidence/grade`); delete the folder to reset it.
+
 ---
 
 ## Parity

@@ -1,1 +1,3 @@
 .agents/
+# Evidence layer runtime archive (append-only JSONL) — local data, never committed
+runtime/

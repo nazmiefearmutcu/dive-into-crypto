@@ -3,10 +3,13 @@
 The desktop backend is a localhost-only FastAPI service (started by `uv run dive-desktop`,
 serving **127.0.0.1:8780**). Source of truth:
 `desktop/backend/src/diveintocrypto_desktop/api/app.py`, with response assembly in
-`scan/symbol_builder.py` and `scan/scanner.py`.
+`scan/symbol_builder.py` and `scan/scanner.py`; depth features live in `scan/evidence.py`
+(grading archive), `scan/structure.py` (BTC-beta/clusters), `scan/progress.py` (scan
+progress) and `data/cvd.py` (cumulative volume delta).
 
-- **CORS**: `GET` only, restricted to `http://127.0.0.1`, `http://localhost` and their
-  sub-ports. There are no authenticated endpoints and no write methods.
+- **CORS**: `GET` and `POST` (the latter only for `POST /api/evidence/grade`),
+  restricted to `http://127.0.0.1`, `http://localhost` and their
+  sub-ports. There are no authenticated endpoints and no other write methods.
 - **Static UI**: when `desktop/ui/dist/` exists it is mounted at `/` (that bundle is committed
   on purpose; see [Contributing](../CONTRIBUTING.md)).
 - **Error contract — nothing is synthesised**: every field in every response is derived from
@@ -57,13 +60,18 @@ Backed by `fapi/v1/exchangeInfo` + `fapi/v1/ticker/24hr`.
 
 ## GET /api/scan
 
-Runs the full scanner sweep and returns the ranked survivor table plus the whale-eliminated
-rows.
+Runs the scanner sweep and returns the ranked survivor table plus the whale-eliminated
+rows. Full-universe scans run in two phases: a coarse sweep (4h/12h/1d) over the whole
+requested universe with adaptive concurrency (width halves and a global cooldown starts
+on any 429/451 signal), then a full 12-timeframe depth pass over the top `depth_top`
+rows only.
 
 | Param | Default | Meaning |
 |---|---|---|
-| `size` | `10` | max survivors returned |
-| `universe_limit` | `30` | how many top-volume symbols to scan |
+| `size` | `10` | max survivors returned (1–100) |
+| `universe_limit` | `30` | how many top-volume symbols to scan (**1–500**; values outside are rejected with 422) |
+| `depth_top` | `50` | top-N rows that get the full 12-TF depth pass (1–200) |
+| `async` | `false` | `async=1` enqueues the scan and returns a `scan_id` immediately instead of blocking |
 
 Response:
 
@@ -72,16 +80,157 @@ Response:
 | `survivors` | list | top `size` rows whose whale flow does not contradict the indicator verdict |
 | `eliminated` | list | rows eliminated by the whale-divergence filter (kept for transparency) |
 | `universeCount` | int | symbols considered |
-| `scanned` | int | timeframes evaluated (`symbols × 12`) |
+| `scanned` | int | timeframes evaluated for fully-scanned rows (`scannedCount × 12`) |
+| `scannedCount` | int | symbols that received the full 12-TF assembly (phase 2) |
+| `droppedCount` | int | symbols whose data fetch failed (coarse or depth phase), logged with reason |
+| `coarseCount` | int | symbols that completed the phase-1 coarse sweep |
+| `depthTop` | int | the effective depth cap applied |
 
 Each row is the full [symbol object](#the-symbol-object) (same shape as `GET
-/api/symbol/{symbol}`) plus two ranking fields: `dominantDir` (`1` buy-side, `-1` sell-side)
-and `netNss` (winning side's Σ(confidence² · timeWeight/100) across timeframes). Rows are
-ranked by `netNss` + 0.35 · divergence aligned to the dominant direction.
+/api/symbol/{symbol}`) plus these ranking/structure fields:
 
-**Caching**: results are cached in memory for **20 seconds** keyed on
-`size:universe_limit`; concurrent identical requests share one computation (single-flight
-lock). A refresh within the TTL returns the cached response unchanged.
+| Field | Type | Meaning |
+|---|---|---|
+| `dominantDir` | int | `1` buy-side, `-1` sell-side |
+| `netNss` | float | winning side's Σ(confidence² · timeWeight/100) across timeframes |
+| `beta` | float \| null | rolling 90-bar 1h-return OLS beta vs BTCUSDT (null when there is not enough aligned data) |
+| `corr_btc` | float \| null | Pearson correlation of 1h returns vs BTCUSDT |
+| `cluster_id` | int \| null | sector-cluster id (greedy single-link clustering at corr > 0.6, top 8 clusters labeled by their largest member); null when unclustered |
+
+Rows are ranked by `netNss` + 0.35 · divergence aligned to the dominant direction.
+
+**Caching**: synchronous results are cached in memory for **20 seconds** keyed on
+`size:universe_limit:depth_top`; concurrent identical requests share one computation
+(single-flight lock). A refresh within the TTL returns the cached response unchanged.
+
+**Honest cost note**: a 500-symbol scan makes ~2000+ public kline requests (500 × 3
+coarse + top-N × 9 detail) and takes **minutes** — use `async=1` + the progress
+endpoint for large universes.
+
+**Async mode** — `GET /api/scan?async=1` returns immediately:
+
+```json
+{
+  "scan_id": "9f2c1a7b3d4e",
+  "status": "started",
+  "mode": "async",
+  "poll": "/api/scan/progress?scan_id=9f2c1a7b3d4e",
+  "result": "/api/scan/result?scan_id=9f2c1a7b3d4e"
+}
+```
+
+The synchronous path is unchanged for compatibility.
+
+## GET /api/scan/progress
+
+Progress surface for a running (or finished) scan. Pass `scan_id` for a specific scan,
+omit it for the most recent one. Works while a big async scan runs in its task.
+
+| Param | Default | Meaning |
+|---|---|---|
+| `scan_id` | *(latest)* | scan to inspect |
+
+Response (404 `{"error": "scan_not_found"}` for unknown ids):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `scan_id` | string | the scan this record belongs to |
+| `status` | string | `running` / `done` / `error` |
+| `phase` | string | `starting` → `universe` → `phase1_coarse` → `phase2_detail` → `divergence` → `structure` → `done`/`error` |
+| `completed` / `total` | int | phase-level work counter |
+| `eta_seconds` | float \| null | rolling-rate estimate (last ~15s); null when idle/finished |
+| `started_at` | string | ISO-8601 UTC |
+| `finished_at` / `duration_seconds` | string / float | present once finished |
+| `meta` | object | request parameters (`mode`, `size`, `universe_limit`, `depth_top`) |
+| `error` | string | present when `status` is `error` |
+| `summary` | object | survivor/dropped counters + `duration_ms` when done |
+| `result_available` | bool | whether `GET /api/scan/result` currently holds this scan's result |
+
+## GET /api/scan/result
+
+The full scan response for a finished async scan (same shape as the synchronous
+`GET /api/scan` body). Results are kept in memory for **10 minutes** (max 8 scans).
+404 `{"error": "scan_not_found"}` when unknown, 410 `{"error": "scan_expired"}` when
+the retention window has passed.
+
+| Param | Default | Meaning |
+|---|---|---|
+| `scan_id` | — (required) | scan to fetch |
+
+## GET /api/evidence
+
+The evidence layer: every scan verdict is archived to a local JSONL file
+(`desktop/backend/runtime/evidence.jsonl`, override with `DIVE_EVIDENCE_PATH`) and the
+engine grades itself — once a verdict is older than the horizon, forward returns are
+backfilled from public 1h klines and reported as hit-rate/expectancy per bucket.
+Read-only aggregation; grades are computed by `POST /api/evidence/grade`.
+
+| Param | Default | Meaning |
+|---|---|---|
+| `horizon` | `4h` | grading horizon — `1h`, `4h` or `24h` |
+
+Response:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `horizon` | string | the horizon this summary is computed for |
+| `archived_count` | int | verdicts in the archive |
+| `gradable_count` | int | verdicts older than the horizon (matured) |
+| `graded_count` | int | matured verdicts with a backfilled outcome |
+| `coverage` | float | `graded_count / gradable_count` (0.0 when nothing is gradable yet) |
+| `stale` | bool | `true` when matured verdicts are still awaiting grading |
+| `by_verdict` | object | `LONG` / `SHORT` / `NEUTRAL` → `{n, hit_rate, avg_forward, median_forward}` |
+| `by_confidence` | list | buckets `0-25`, `25-50`, `50-75`, `75-100` → `{bucket, n, hit_rate, avg_forward, median_forward}` |
+| `by_indicator` | object | per-indicator association: `{name: {n, agree: {n, hit_rate}, disagree: {n, hit_rate}}}` — report-only, never used to refit weights |
+| `generated_at` | string | ISO-8601 UTC |
+| `engine_version` | string | archive writer version |
+
+Grading semantics (documented, deterministic):
+
+- a verdict **hits** when price moves ≥1% in the dominant direction before moving ≥1%
+  against it within the horizon (both in one candle → conservative miss; no decisive
+  move → miss);
+- `forward` is the direction-signed return at horizon end (raw/unsigned for `NEUTRAL`;
+  a NEUTRAL verdict "hits" when price stayed within ±1%);
+- a verdict whose kline backfill fails is listed as failed by the grading call and
+  stays ungraded — nothing is imputed.
+
+## POST /api/evidence/grade
+
+Explicitly backfill outcomes for matured, not-yet-graded verdicts. Work is capped at
+**40 symbols per call** (oldest verdicts first) and **resumable** — grades are appended
+to `runtime/evidence_grades.jsonl` (override with `DIVE_EVIDENCE_GRADES_PATH`), so
+repeated calls eventually cover the archive. Offline/failing fetches are reported, not
+hidden.
+
+| Param | Default | Meaning |
+|---|---|---|
+| `horizon` | `4h` | grading horizon — `1h`, `4h` or `24h` |
+
+Response: `{horizon, archived, gradable, graded, symbols_graded, failed: [{symbol, reason}], remaining, summary}`.
+
+## GET /api/structure
+
+Market-structure map: BTC-beta/correlation plus sector clusters over the top universe.
+Computed from 1h returns — scan-cached klines when warm, else a fetch cached for 10
+minutes. Symbols whose fetch fails are listed under `unavailable`, never substituted.
+
+| Param | Default | Meaning |
+|---|---|---|
+| `limit` | `60` | universe size to map (1–250) |
+
+Response:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `generated_at` | string | ISO-8601 UTC |
+| `count` | int | symbols considered |
+| `btc_symbol` | string | beta reference (`BTCUSDT`) |
+| `window_bars` | int | rolling 1h-return window (90) |
+| `cluster_threshold` | float | greedy clustering cut (0.6) |
+| `clusters` | list | `{cluster_id, label, size, members: [{s, beta, corr_btc}]}` — id 1..8, labeled by the largest member |
+| `unclustered` | list | `[{s, beta, corr_btc}]` with no cluster assignment |
+| `unavailable` | list | symbols whose 1h data could not be fetched |
 
 ## GET /api/symbol/{symbol}
 
@@ -122,6 +271,7 @@ funding history, the 24h ticker, and the whale-divergence inputs.
 | `microstructure` | object | futures-native overlay bundle (OI-price divergence, funding z-score fade, taker aggression, L/S crowding, smart-vs-dumb spread) — annotates, never alters, the consensus |
 | `regime` | object | ADX/choppiness regime-adaptive weighting annotation |
 | `mtfConfluence` | object | multi-timeframe confluence gate result |
+| `cvd` | object | rolling **cumulative volume delta** over the last ≤1000 public aggTrades (15-minute window): `{window_trades, cvd, buy_vol, sell_vol, delta_series, first_t, last_t, window_seconds}`; on failure `{unavailable: reason}` — never zeros |
 
 ## GET /api/leaders
 

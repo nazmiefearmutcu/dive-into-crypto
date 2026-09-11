@@ -39,9 +39,15 @@ async def test_scan_counts_and_logs_dropped_symbols(caplog):
     async def no_divergence(symbol, candles_by_tf):
         return {}
 
+    async def no_structure_fetch(symbol, candles_1h=None):
+        # BTCUSDT is absent from this mock universe; keep the structure module
+        # from attempting a (real) 1h fetch — offline test.
+        return []
+
     with patch.object(scanner.uni, "list_universe", fake_universe), \
          patch.object(scanner.kl, "fetch_all_tf", fetch_all_tf), \
-         patch.object(scanner.sb, "_divergence_inputs", no_divergence):
+         patch.object(scanner.sb, "_divergence_inputs", no_divergence), \
+         patch.object(scanner.st, "_one_hour_returns", no_structure_fetch):
         with caplog.at_level(logging.WARNING, logger="trading_bot.scan.scanner"):
             res = await scanner.scan(size=5, universe_limit=2)
 
@@ -69,9 +75,13 @@ async def test_scan_with_no_drops_reports_zero():
     async def no_divergence(symbol, candles_by_tf):
         return {}
 
+    async def no_structure_fetch(symbol, candles_1h=None):
+        return []  # keep offline: no BTC 1h fetch for symbols outside the mock
+
     with patch.object(scanner.uni, "list_universe", fake_universe), \
          patch.object(scanner.kl, "fetch_all_tf", fetch_all_tf), \
-         patch.object(scanner.sb, "_divergence_inputs", no_divergence):
+         patch.object(scanner.sb, "_divergence_inputs", no_divergence), \
+         patch.object(scanner.st, "_one_hour_returns", no_structure_fetch):
         res = await scanner.scan(size=5, universe_limit=1)
 
     assert res["droppedCount"] == 0 and res["scannedCount"] == 1

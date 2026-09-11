@@ -50,6 +50,23 @@ async def _fetch_raw(symbol: str, interval: str, limit: int, end_time_ms: int) -
     )
 
 
+async def _fetch_raw_range(symbol: str, interval: str, start_ms: int, end_ms: int, limit: int) -> Any:
+    async def send() -> Any:
+        return await _live_fetch_klines(
+            symbol=symbol,
+            interval=interval,
+            start_time_ms=start_ms,
+            end_time_ms=end_ms,
+            limit=limit,
+            rest_base=FAPI_V1,
+        )
+
+    return await run_with_retries(
+        send,
+        should_retry=lambda e: isinstance(e, TransientUpstreamError) or isinstance(e, asyncio.TimeoutError),
+    )
+
+
 def _drop_unfinished(recs: list, interval: str, now_ns: int) -> list:
     """Drop trailing candles whose close time is in the future (they still repaint).
 
@@ -75,6 +92,26 @@ async def fetch_klines(symbol: str, interval: str, limit: int = 300) -> list[dic
     return [
         {"t": r.exchange_ts, "o": r.open, "h": r.high, "l": r.low, "c": r.close, "v": r.volume}
         for r in recs[-limit:]
+    ]
+
+
+async def fetch_klines_range(
+    symbol: str, interval: str, start_ms: int, end_ms: int, limit: int = 1000
+) -> list[dict]:
+    """FINISHED candles for ``symbol`` at ``interval`` covering ``[start_ms, end_ms]``.
+
+    Used by the evidence grader to backfill forward returns after an archived
+    verdict. Same anti-repaint rule as :func:`fetch_klines` (the trailing
+    unfinished candle is dropped).
+    """
+    now_ms = int(time.time() * 1000)
+    raw = await _fetch_raw_range(symbol, interval, start_ms, min(end_ms, now_ms), limit)
+    local_ts = now_ms * 1_000_000
+    recs = parse_klines_page(raw, _VENUE, symbol, interval, local_ts)
+    recs = _drop_unfinished(list(recs), interval, local_ts)
+    return [
+        {"t": r.exchange_ts, "o": r.open, "h": r.high, "l": r.low, "c": r.close, "v": r.volume}
+        for r in recs
     ]
 
 

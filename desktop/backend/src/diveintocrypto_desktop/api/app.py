@@ -4,6 +4,12 @@ Localhost-only. Serves the built UI (if present) and a small JSON API backed by 
 Crypcodile-fed scanner. A request-log ring buffer feeds the Network Log screen with
 real activity; scan results are cached briefly to respect Binance rate limits.
 Logging is configured once at startup so engine/scan log records reach stdout.
+
+Depth surfaces: full-universe scans run as a two-phase sweep with an in-memory
+progress record (``/api/scan/progress``) and an optional async mode
+(``/api/scan?async=1`` returns a ``scan_id`` immediately). Every verdict is
+appended to the evidence archive (``scan/evidence.py``) and market-structure
+annotations (BTC beta / correlation / clusters) ride along on scan rows.
 """
 
 from __future__ import annotations
@@ -16,14 +22,17 @@ import time
 from collections import deque
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from diveintocrypto_desktop.data import universe as uni
 from diveintocrypto_desktop.data.http import close_session
+from diveintocrypto_desktop.scan import evidence
+from diveintocrypto_desktop.scan import progress as progress_mod
 from diveintocrypto_desktop.scan import scanner
+from diveintocrypto_desktop.scan import structure as st
 from diveintocrypto_desktop.scan import symbol_builder as sb
 
 _UI_DIST = Path(__file__).resolve().parents[4] / "ui" / "dist"
@@ -38,6 +47,15 @@ _SCAN_TTL = 20.0
 # Per-symbol detail TTL (10s): /api/symbol costs ~21 upstream calls.
 _SYMBOL_TTL = 10.0
 _SYMBOL_CACHE_MAX = 128
+
+# Async scans: the fire-and-forget task keeps a strong reference via this set
+# (a bare create_task can be garbage-collected mid-flight); results are parked
+# here for the progress/result endpoints with a generous TTL.
+_ASYNC_RESULT_TTL = 600.0
+_ASYNC_RESULT_MAX = 8
+
+# Evidence grading horizon validation pattern.
+_HORIZON_PATTERN = r"^(1h|4h|24h)$"
 
 # Live-feed sharing: one rebuild per symbol is shared across all connected
 # clients (a fresh object is reused for _LIVE_FRESH_TTL seconds), and a symbol
@@ -91,6 +109,18 @@ def create_app() -> FastAPI:
     _live_next_attempt: dict[str, float] = {}
     _live_locks = _PerKeyLocks()
     _symbol_cache: dict[str, tuple[float, dict]] = {}
+    _async_tasks: set[asyncio.Task] = set()
+    _async_results: dict[str, tuple[float, dict]] = {}
+
+    def _park_result(scan_id: str, res: dict) -> None:
+        now = time.monotonic()
+        _async_results[scan_id] = (now, res)
+        # prune expired / oldest-overflow entries
+        for sid in [s for s, (ts, _) in _async_results.items() if now - ts > _ASYNC_RESULT_TTL]:
+            _async_results.pop(sid, None)
+        while len(_async_results) > _ASYNC_RESULT_MAX:
+            oldest = min(_async_results, key=lambda s: _async_results[s][0])
+            _async_results.pop(oldest, None)
 
     async def _live_snapshot(symbol: str) -> dict:
         """Build (or reuse) the data-contract object for one /api/live frame.
@@ -133,7 +163,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title="Dive Into Crypto — Desktop", version="0.1.0", lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware, allow_origins=["http://127.0.0.1", "http://localhost"],
-        allow_origin_regex=r"http://(127\.0\.0\.1|localhost):\d+", allow_methods=["GET"], allow_headers=["*"],
+        allow_origin_regex=r"http://(127\.0\.0\.1|localhost):\d+", allow_methods=["GET", "POST"], allow_headers=["*"],
     )
 
     @app.get("/api/health")
@@ -147,9 +177,72 @@ def create_app() -> FastAPI:
         _log(f"GET /fapi/v1/exchangeInfo + ticker/24hr ({len(rows)} perps)", 200, int((time.monotonic() - t0) * 1000))
         return rows
 
+    def _scan_summary(res: dict, ms: int) -> dict:
+        return {
+            "survivors": len(res.get("survivors") or []),
+            "eliminated": len(res.get("eliminated") or []),
+            "universeCount": res.get("universeCount"),
+            "scannedCount": res.get("scannedCount"),
+            "droppedCount": res.get("droppedCount"),
+            "duration_ms": ms,
+        }
+
+    async def _run_and_archive(
+        rec: "progress_mod.ScanProgress", size: int, universe_limit: int, depth_top: int
+    ) -> dict:
+        t0 = time.monotonic()
+        try:
+            res = await scanner.scan(size=size, universe_limit=universe_limit, depth_top=depth_top, progress=rec)
+        except Exception as e:
+            rec.fail(str(e))
+            raise
+        ms = int((time.monotonic() - t0) * 1000)
+        _log(
+            f"Scan complete · {res['universeCount']} universe · {res['scannedCount']} scanned · "
+            f"{res['droppedCount']} dropped · {len(res['survivors'])} survivors",
+            200, ms,
+        )
+        try:  # evidence must never break scanning
+            await asyncio.to_thread(evidence.archive_scan, res)
+        except Exception as e:  # pragma: no cover - archive_scan already swallows
+            logger.warning("evidence archive hook failed: %s", str(e)[:80])
+        rec.finish(_scan_summary(res, ms))
+        return res
+
     @app.get("/api/scan")
-    async def scan(size: int = 10, universe_limit: int = 30) -> dict:
-        key = f"{size}:{universe_limit}"
+    async def scan(
+        size: int = Query(10, ge=1, le=100),
+        universe_limit: int = Query(30, ge=1, le=500),
+        depth_top: int = Query(scanner.DEFAULT_DEPTH_TOP, ge=1, le=scanner.MAX_DEPTH_TOP),
+        async_mode: bool = Query(False, alias="async"),
+    ) -> dict:
+        # Fire-and-forget mode: enqueue the scan, answer with a scan_id immediately.
+        # Progress lives at /api/scan/progress, the result at /api/scan/result.
+        if async_mode:
+            rec = progress_mod.start(meta={
+                "mode": "async", "size": size, "universe_limit": universe_limit, "depth_top": depth_top,
+            })
+            scan_id = rec.scan_id
+
+            async def _task() -> None:
+                try:
+                    res = await _run_and_archive(rec, size, universe_limit, depth_top)
+                    _park_result(scan_id, res)
+                except Exception as e:
+                    _log(f"Async scan {scan_id} FAILED: {str(e)[:60]}", 502, 0)
+
+            task = asyncio.create_task(_task())
+            _async_tasks.add(task)
+            task.add_done_callback(_async_tasks.discard)
+            return {
+                "scan_id": scan_id,
+                "status": "started",
+                "mode": "async",
+                "poll": f"/api/scan/progress?scan_id={scan_id}",
+                "result": f"/api/scan/result?scan_id={scan_id}",
+            }
+
+        key = f"{size}:{universe_limit}:{depth_top}"
         now = time.monotonic()
         cached = _scan_cache.get(key)
         if cached and now - cached[0] < _SCAN_TTL:
@@ -158,16 +251,66 @@ def create_app() -> FastAPI:
             cached = _scan_cache.get(key)
             if cached and time.monotonic() - cached[0] < _SCAN_TTL:
                 return cached[1]
-            t0 = time.monotonic()
-            res = await scanner.scan(size=size, universe_limit=universe_limit)
-            ms = int((time.monotonic() - t0) * 1000)
-            _log(
-                f"Scan complete · {res['universeCount']} universe · {res['scannedCount']} scanned · "
-                f"{res['droppedCount']} dropped · {len(res['survivors'])} survivors",
-                200, ms,
-            )
+            rec = progress_mod.start(meta={
+                "mode": "sync", "size": size, "universe_limit": universe_limit, "depth_top": depth_top,
+            })
+            res = await _run_and_archive(rec, size, universe_limit, depth_top)
             _scan_cache[key] = (time.monotonic(), res)
             return res
+
+    @app.get("/api/scan/progress")
+    async def scan_progress(scan_id: str | None = None) -> JSONResponse:
+        rec = progress_mod.get(scan_id)
+        if rec is None:
+            return JSONResponse({"error": "scan_not_found"}, status_code=404)
+        snap = rec.snapshot()
+        snap["result_available"] = rec.scan_id in _async_results
+        return JSONResponse(snap)
+
+    @app.get("/api/scan/result")
+    async def scan_result(scan_id: str) -> JSONResponse:
+        hit = _async_results.get(scan_id)
+        if hit is None:
+            return JSONResponse({"error": "scan_not_found"}, status_code=404)
+        ts, res = hit
+        if time.monotonic() - ts > _ASYNC_RESULT_TTL:
+            _async_results.pop(scan_id, None)
+            return JSONResponse({"error": "scan_expired"}, status_code=410)
+        return JSONResponse(res)
+
+    @app.get("/api/evidence")
+    async def evidence_summary(horizon: str = Query(evidence.DEFAULT_HORIZON, pattern=_HORIZON_PATTERN)) -> dict:
+        try:
+            return await asyncio.to_thread(evidence.summary, horizon)
+        except Exception as e:  # honest failure, never fabricated stats
+            _log(f"GET /api/evidence FAILED: {str(e)[:60]}", 502, 0)
+            return JSONResponse({"error": "evidence_unavailable", "detail": str(e)[:80]}, status_code=502)
+
+    @app.post("/api/evidence/grade")
+    async def evidence_grade(horizon: str = Query(evidence.DEFAULT_HORIZON, pattern=_HORIZON_PATTERN)) -> dict:
+        try:
+            out = await evidence.grade(horizon)
+        except Exception as e:
+            _log(f"POST /api/evidence/grade FAILED: {str(e)[:60]}", 502, 0)
+            return JSONResponse({"error": "grading_failed", "detail": str(e)[:80]}, status_code=502)
+        _log(f"Graded {out['graded']} verdicts @ {out['horizon']} ({out['remaining']} remaining)", 200, 0)
+        try:
+            out["summary"] = await asyncio.to_thread(evidence.summary, horizon)
+        except Exception:
+            pass
+        return out
+
+    @app.get("/api/structure")
+    async def structure(limit: int = Query(60, ge=1, le=250)) -> dict:
+        t0 = time.monotonic()
+        try:
+            out = await st.structure_summary(limit=limit)
+        except Exception as e:
+            _log(f"GET /api/structure FAILED: {str(e)[:60]}", 502, int((time.monotonic() - t0) * 1000))
+            return JSONResponse({"error": "structure_unavailable", "detail": str(e)[:80]}, status_code=502)
+        _log(f"Market structure · {out['count']} symbols · {len(out['clusters'])} clusters", 200,
+             int((time.monotonic() - t0) * 1000))
+        return out
 
     @app.get("/api/symbol/{symbol}")
     async def symbol(symbol: str) -> JSONResponse:

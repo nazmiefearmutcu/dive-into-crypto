@@ -1,10 +1,17 @@
 import sys
 import os
+import tempfile
 # Clear proxy settings for local testing to avoid routing loopback requests through the sandbox proxy
 for var in ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy']:
     os.environ.pop(var, None)
 os.environ['NO_PROXY'] = '127.0.0.1,localhost'
 os.environ['no_proxy'] = '127.0.0.1,localhost'
+# Evidence layer: keep the offline suites hermetic — archive/grades go to a
+# throwaway temp dir, never the repo's runtime/ directory. Read lazily by the
+# evidence module, so setting it before app creation is sufficient.
+_EVIDENCE_TMP = tempfile.mkdtemp(prefix="dive-evidence-")
+os.environ['DIVE_EVIDENCE_PATH'] = os.path.join(_EVIDENCE_TMP, 'evidence.jsonl')
+os.environ['DIVE_EVIDENCE_GRADES_PATH'] = os.path.join(_EVIDENCE_TMP, 'evidence_grades.jsonl')
 from pathlib import Path
 
 # Add backend src to sys.path. Derived from this file's location so the suite
@@ -42,6 +49,7 @@ sys.modules['aiolimiter'] = mock_limiter
 
 # Import modules to patch
 import diveintocrypto_desktop.data.binance_klines as kl
+import diveintocrypto_desktop.data.cvd as cvd_mod
 import diveintocrypto_desktop.data.open_interest as oi_mod
 import diveintocrypto_desktop.data.ratios as rat
 import diveintocrypto_desktop.data.funding as fnd
@@ -162,6 +170,7 @@ _orig_premium_index = fnd.premium_index
 _orig_funding_hist = fnd.funding_hist
 _orig_list_universe = uni.list_universe
 _orig_ticker_24hr = sb._ticker_24hr
+_orig_fetch_agg_trades = cvd_mod.fetch_agg_trades
 
 def generate_mock_candles(symbol: str, interval: str, limit: int = 300) -> list[dict]:
     now_ns = int(time.time() * 1000) * 1_000_000
@@ -306,6 +315,24 @@ def generate_mock_funding_hist(symbol: str, limit: int = 48) -> list[dict]:
         })
     return out
 
+def generate_mock_agg_trades(symbol: str, limit: int = 1000) -> list:
+    """Fake /fapi/v1/aggTrades page: alternating buy/sell aggression so CVD math
+    has real structure to aggregate."""
+    now_ms = int(time.time() * 1000)
+    out = []
+    for i in range(200):
+        out.append({
+            "a": 1000 + i,
+            "p": "100.5",
+            "q": "0.25",
+            "nq": "0.25",
+            "f": 2000 + i,
+            "l": 2000 + i,
+            "T": now_ms - (200 - i) * 1000,
+            "m": i % 2 == 1,  # every other trade is a sell-taker
+        })
+    return out
+
 async def mock_list_universe(limit: int | None = None) -> list[dict]:
     return [
         {"s": "BTCUSDT", "name": "BTC", "price": 95000.0, "ch": 1.2, "quote_volume": 100000000.0},
@@ -351,6 +378,10 @@ def mock_data_layer():
         check_symbol(symbol)
         return generate_mock_funding_hist(symbol, limit)
 
+    async def mock_fetch_agg_trades(symbol, limit=1000):
+        check_symbol(symbol)
+        return generate_mock_agg_trades(symbol, limit)
+
     kl.fetch_klines = mock_fetch_klines
     oi_mod.fetch_oi_hist = mock_fetch_oi_hist
     rat.global_account_ls = mock_global_account_ls
@@ -362,7 +393,8 @@ def mock_data_layer():
     fnd.funding_hist = mock_funding_hist
     uni.list_universe = mock_list_universe
     sb._ticker_24hr = mock_ticker_24hr
-    
+    cvd_mod.fetch_agg_trades = mock_fetch_agg_trades
+
     yield
     
     kl.fetch_klines = _orig_fetch_klines
@@ -376,6 +408,7 @@ def mock_data_layer():
     fnd.funding_hist = _orig_funding_hist
     uni.list_universe = _orig_list_universe
     sb._ticker_24hr = _orig_ticker_24hr
+    cvd_mod.fetch_agg_trades = _orig_fetch_agg_trades
 
 def get_free_port():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:

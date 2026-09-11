@@ -17,6 +17,7 @@ from functools import lru_cache
 import asyncio
 
 from diveintocrypto_desktop.data import binance_klines as kl
+from diveintocrypto_desktop.data import cvd as cvd_mod
 from diveintocrypto_desktop.data import funding as fnd
 from diveintocrypto_desktop.data import open_interest as oi_mod
 from diveintocrypto_desktop.data import ratios as rat
@@ -80,6 +81,7 @@ def assemble(
     series_data: dict[str, list[float]],
     divergence_inputs: dict[str, tuple[list[float], list[float]]],
     primary_tf: str = "1h",
+    cvd: dict | None = None,
 ) -> dict:
     cfg, signal_svc, consensus = _engine()
     weights = cfg.get("indicator_weights", {})
@@ -161,7 +163,7 @@ def assemble(
 
     primary_candles = candles_by_tf.get(primary_tf) or next((c for c in candles_by_tf.values() if c), [])
 
-    return {
+    out = {
         "s": symbol,
         "name": name,
         "price": price,
@@ -185,6 +187,10 @@ def assemble(
         "regime": regime,
         "mtfConfluence": mtf_conf,
     }
+    # CVD snapshot (rolling cumulative volume delta from public aggTrades) —
+    # an honest {"unavailable": reason} object when the feed fails. Additive.
+    out["cvd"] = cvd if cvd is not None else {"unavailable": "not_fetched"}
+    return out
 
 
 async def _divergence_inputs(symbol: str, candles_by_tf: dict[str, list[dict]]) -> dict[str, tuple[list[float], list[float]]]:
@@ -223,12 +229,13 @@ async def build_symbol(
     primary_tf: str = "1h",
 ) -> dict:
     """Fetch all real inputs for ``symbol`` and assemble its data-contract object."""
-    candles_by_tf, oi, ratio_series, funding_rows, meta = await asyncio.gather(
+    candles_by_tf, oi, ratio_series, funding_rows, meta, cvd_snap = await asyncio.gather(
         kl.fetch_all_tf(symbol, limit=300),
         oi_mod.fetch_oi_hist(symbol, "5m", limit=48),
         rat.fetch_ratio_series(symbol, "5m", limit=48),
         fnd.funding_hist(symbol, limit=48),
         _ticker_24hr(symbol),
+        cvd_mod.snapshot(symbol),
     )
     div_inputs = await _divergence_inputs(symbol, candles_by_tf)
 
@@ -248,5 +255,5 @@ async def build_symbol(
     name = name or symbol.replace("USDT", "")
 
     return await asyncio.to_thread(
-        assemble, symbol, name, ch, price, candles_by_tf, series_data, div_inputs, primary_tf
+        assemble, symbol, name, ch, price, candles_by_tf, series_data, div_inputs, primary_tf, cvd_snap
     )
