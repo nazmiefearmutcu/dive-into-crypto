@@ -6,7 +6,9 @@
    unavailable" state. It NEVER falls back to fabricated data: the embedded demo
    market (mock.js) is manual-only, and while it is active a permanent banner plus
    a per-value DEMO marker make every fabricated number impossible to mistake for
-   a live quote. Themed via [data-theme] on <html>.
+   a live quote. Mid-session staleness (failed poll or >90s without a successful
+   fetch) raises its own dismissible banner — mock data plays no part in it.
+   Themed via [data-theme] on <html>.
    ========================================================================== */
 const { useState, useEffect, useRef, useCallback } = React;
 
@@ -112,6 +114,19 @@ function DataSourceDown({error,onRetry}){
   </div>;
 }
 
+/* Mid-session honesty: the LIVE feed went quiet. Distinct from demo mode — this
+   never involves mock data; it only reports that real polls stopped succeeding. */
+function StaleBanner({stale,onRetry,onDismiss}){
+  if(!stale || stale.hidden) return null;
+  return <div className="stale-banner" role="alert" data-testid="stale-banner">
+    <b>VERİ GÜNCEL DEĞİL · DATA STALE</b>
+    <span>— {stale.reason}</span>
+    <span className="sgrow"/>
+    <button className="sbtn" onClick={onRetry}>TEKRAR DENE · RETRY</button>
+    <button className="sbtn" aria-label="Uyarıyı kapat · Dismiss stale-data warning" onClick={onDismiss}>✕</button>
+  </div>;
+}
+
 /* Boot the symbol universe. Extracted so the no-fabrication guarantee is directly
    testable: on failure this returns an error and MUST NOT touch window.DIVE_MOCK. */
 async function bootUniverse(api){
@@ -133,9 +148,27 @@ function Gauge({name,score,cap}){const p=Math.max(-100,Math.min(100,score||0));c
   </div>;}
 
 /* ── SCANNER ─────────────────────────────────────────────────────────────── */
+const VERDICT_RANK={STRONG_BUY:2,BUY:1,NEUTRAL:0,SELL:-1,STRONG_SELL:-2};
+const SORT_COLS=[
+  {k:"sym",   label:"SEMBOL",  get:(d,w)=>String(d.s||"")},
+  {k:"verdict",label:"KARAR",  get:(d)=>VERDICT_RANK[d.finalSignal]??0},
+  {k:"ch",    label:"FİYAT·24S",get:(d)=>d.ch, r:true},
+  {k:"conf",  label:"GÜVEN",   get:(d)=>d.confidence},
+  {k:"score", label:"PUAN",    get:(d,w)=>w.score||d.netNss||d.quantBias||0, r:true},
+];
 function Scanner({onPick}){
   const scan = window.SGS_SCAN || {survivors:[]};
-  const rows = scan.survivors || [];
+  const [sort,setSort]=useState(null);   // null = server rank order
+  const toggleSort=(k)=>setSort(s=> s&&s.k===k ? {k,dir:-s.dir} : {k,dir:-1});
+  let rows=(scan.survivors||[]).map((w,i)=>({w,i}));
+  if(sort){ const def=SORT_COLS.find(c=>c.k===sort.k);
+    rows=rows.slice().sort((a,b)=>{
+      const da=a.w.d||a.w, db=b.w.d||b.w;
+      const va=def.get(da,a.w), vb=def.get(db,b.w);
+      const c=typeof va==="string" ? String(va).localeCompare(String(vb))
+                                   : ((va==null||isNaN(va))?-Infinity:va)-((vb==null||isNaN(vb))?-Infinity:vb);
+      return c*sort.dir || a.i-b.i; });   // stable: ties keep server rank
+  }
   return <>
     <div className="vhead"><span className="kicker">MANUEL TARAMA</span><h1>Piyasa Süpürmesi</h1>
       <div className="meta">TÜM BINANCE USDT-M · 12 TF<br/>KONSENSÜS · 57 İNDİKATÖR + 3 OVERLAY</div></div>
@@ -145,13 +178,20 @@ function Scanner({onPick}){
         {rows.length===0
           ? <div className="state" style={{height:220}}><div className="spin"/><div>Tarama çalışıyor…</div></div>
           : <table className="rank"><thead><tr>
-              <th>#</th><th>SEMBOL</th><th>KARAR</th><th className="r">FİYAT</th><th>GÜVEN</th>
-              <th className="r">PUAN</th><th className="r">UYUM</th><th>12 ZAMAN DİLİMİ</th>
-            </tr></thead><tbody>{rows.map((w,i)=>{
+              <th scope="col">#</th>
+              {SORT_COLS.map(c=>{ const on=sort&&sort.k===c.k;
+                return <th key={c.k} scope="col" className={c.r?"r":""}
+                  aria-sort={on?(sort.dir>0?"ascending":"descending"):undefined}>
+                  <button className="thbtn" onClick={()=>toggleSort(c.k)}
+                    aria-label={`${c.label} sütununa göre sırala`}>{c.label}{on?(sort.dir>0?" ▲":" ▼"):""}</button></th>;})}
+              <th scope="col" className="r">UYUM</th><th scope="col">12 ZAMAN DİLİMİ</th>
+            </tr></thead><tbody>{rows.map(({w,i})=>{
               const d=w.d||w; const dir=sgn(d.finalSignal?.includes("BUY")?1:d.finalSignal?.includes("SELL")?-1:0);
               const hit=(d.multiTf||[]).filter(m=>sgn(m.signal?.includes("BUY")?1:m.signal?.includes("SELL")?-1:0)===dir).length;
               const score=w.score||d.netNss||d.quantBias||0;
-              return <tr key={d.s} onClick={()=>onPick(d.s)}>
+              return <tr key={d.s} tabIndex={0} onClick={()=>onPick(d.s)}
+                onKeyDown={(e)=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();onPick(d.s);}}}
+                aria-label={`${d.s} panelini aç`}>
                 <td className="rk">{String(i+1).padStart(2,"0")}</td>
                 <td><div className="sym">{d.s.replace("USDT","")}<small>{d.name||d.s}</small></div></td>
                 <td><Pill sig={d.finalSignal||"NEUTRAL"}/><DemoMark row={d}/></td>
@@ -230,9 +270,139 @@ function Panel({sym}){
     </div>
   </>;}
 
+/* ── series stats (real transforms over the backend's raw series; no invention) */
+const sLast=(a)=>Array.isArray(a)&&a.length?a[a.length-1]:null;
+const sFirst=(a)=>Array.isArray(a)&&a.length?a[0]:null;
+const sMean=(a)=>Array.isArray(a)&&a.length?a.reduce((x,y)=>x+(+y||0),0)/a.length:null;
+const sDelta=(a)=>{const f=sFirst(a),l=sLast(a);return (f==null||l==null||!f)?null:(l-f)/Math.abs(f)*100;};
+const fPct=(v,d=4)=>(v==null||isNaN(v))?"—":((v>=0?"+":"")+(v*100).toFixed(d)+"%");
+const MS_STATE=(v)=> v==null?null : v>0.55?"STRONG_BUY" : v>0.05?"BUY" : v<-0.55?"STRONG_SELL" : v<-0.05?"SELL" : "NEUTRAL";
+const MS_LABEL={oi_price_divergence:"OI·FİYAT UYUMSUZLUĞU",oi_breakout_confirm:"OI KIRILIM TEYİDİ",
+  funding_fade:"FONLAMA TERSİNE",taker_aggression:"TAKER SALDIRGANLIĞI",
+  ls_crowding_fade:"KALABALIK TERSİNE",smart_dumb_spread:"AKILLI–EMU FARKI"};
+
+/* One labelled stat row. A missing field renders an explicit "—", never a guess. */
+function Stat({k,v,sub}){return <div className="stat"><span className="k">{k}</span>
+  <span className="v">{v==null||v===""?"—":v}{sub?<small className="sub"> {sub}</small>:null}</span></div>;}
+
+/* Microstructure overlay signal → one row: state pill · name · strength · reason. */
+function MsigRow({s}){
+  const state=MS_STATE(s.score); const c=mcls(state);
+  return <div className="msig">
+    <span className={"mini "+c}>{state?shortSig(state).replace("S-","G-"):"—"}</span>
+    <span className="msname">{MS_LABEL[s.name]||String(s.name||"?").replace(/_/g," ").toUpperCase()}</span>
+    <Vu conf={Math.round(Math.abs(s.score||0)*100)} dir={sgn(s.score||0)}/>
+    <span className="msval">{s.score==null?"—":(s.score>0?"+":"")+Math.round(s.score*100)}</span>
+    <span className="msreason">{s.reason||"—"}</span>
+  </div>;}
+
+/* 24s gainers/losers rail (GET /api/leaders → SGS_GAINERS / SGS_LOSERS). */
+function LeadersRail({onSelect}){
+  const col=(title,rows)=> <div className="lcol">
+    <div className="lhead">{title}</div>
+    {!(rows||[]).length ? <div className="stat"><span className="k">VERİ</span><span className="v">—</span></div>
+      : rows.map(r=><button key={r.s} className="leader" onClick={()=>onSelect(r.s)} title={r.s}>
+        <span className="lsym">{String(r.s||"").replace("USDT","")}</span>
+        <span className="lpx">${fmt(r.price)}</span>
+        <span className={"chg "+(r.ch>=0?"up":"dn")}>{r.ch>=0?"+":""}{num(r.ch,2)}%</span>
+      </button>)}
+  </div>;
+  return <div className="panel mute"><div className="ph"><span className="tick">▸</span>24S LİDERLERİ
+    <span className="rt">HACİM SIRALI · KLIK → SEMBOL</span></div>
+    <div className="pb leaders">{col("YÜKSELENLER",window.SGS_GAINERS)}{col("DÜŞENLER",window.SGS_LOSERS)}</div></div>;
+}
+
+/* ── OI · L/S — positioning & futures microstructure for the selected symbol ──
+   Data: GET /api/symbol → microstructure{score,label,active,signals[{name,score,
+   reason,weight}]}, series{oi,funding,taker,glob,pos,acc}, divergence. */
+function Flow({sym,onSelect}){
+  const d=(window.SGS_DATA_MAP||{})[sym];
+  if(!d || !d.multiTf || !d.multiTf.length)
+    return <div className="state"><div className="spin"/><div>{String(sym||"").replace("USDT","")} verisi çekiliyor…</div></div>;
+  const ms=d.microstructure||{signals:[]}; const ser=d.series||{};
+  const oi=ser.oi,fu=ser.funding,tk=ser.taker,gl=ser.glob,ps=ser.pos,ac=ser.acc;
+  return <>
+    <div className="vhead"><span className="kicker">AÇIK POZİSYON · MİKROYAPI</span>
+      <h1>{d.s.replace("USDT","")} · OI / L-S</h1>
+      <div className="meta">5M × 48 PENCERE<br/>BINANCE FUTURES DATA</div></div>
+    <div className="grid2">
+      <div>
+        <div className="panel"><div className="ph"><span className="tick">▸</span>MİKROYAPI SİNYALLERİ
+          <span className="rt">{ms.active||0} AKTİF · {ms.label||"—"}</span></div>
+          <div className="pb" style={{padding:0}}>
+            <Gauge name="BÜTÜN DEMET" score={ms.score} cap={`${ms.active||0}/6 sinyal veriye sahip`}/>
+            {(ms.signals||[]).map(s=><MsigRow key={s.name} s={s}/>)}
+            {!(ms.signals||[]).length &&
+              <div className="stat"><span className="k">SİNYAL</span><span className="v">— mikroyapı sinyali yok (seri verisi yetersiz)</span></div>}
+          </div></div>
+        <LeadersRail onSelect={onSelect}/>
+      </div>
+      <div>
+        <div className="panel"><div className="ph"><span className="tick">▸</span>AÇIK POZİSYON & FONLAMA</div>
+          <div className="pb" style={{padding:0}}>
+            <Stat k="AÇIK POZİSYON (OI)" v={sLast(oi)!=null?window.sgsFmtBig(sLast(oi)):null} sub="kontrat"/>
+            <Stat k="OI Δ PENCERE" v={sDelta(oi)==null?null:(sDelta(oi)>0?"+":"")+num(sDelta(oi),2)+"%"}/>
+            <Stat k="SON FONLAMA" v={fPct(sLast(fu))}/>
+            <Stat k="ORT. FONLAMA" v={fPct(sMean(fu))}/>
+            <Stat k="TAKER AL/SAT" v={sLast(tk)==null?null:num(sLast(tk),3)} sub={sMean(tk)!=null?("ort "+num(sMean(tk),3)):null}/>
+            <div className="gcap">OI = taker açık pozisyon (kontrat) · fonlama periyodik oran · taker 1.0 = dengeli</div>
+          </div></div>
+        <div className="panel"><div className="ph"><span className="tick">▸</span>LONG / SHORT</div>
+          <div className="pb" style={{padding:0}}>
+            <Stat k="PERAKENDE HESAP L/S" v={sLast(gl)==null?null:num(sLast(gl),3)} sub={sMean(gl)!=null?("ort "+num(sMean(gl),3)):null}/>
+            <Stat k="ÜST-TRADER POZİSYON L/S" v={sLast(ps)==null?null:num(sLast(ps),3)} sub={sMean(ps)!=null?("ort "+num(sMean(ps),3)):null}/>
+            <Stat k="ÜST-TRADER HESAP L/S" v={sLast(ac)==null?null:num(sLast(ac),3)}/>
+            <div className="gcap">≥1 long baskın · ≤1 short baskın · kalabalık ucu tersine okunur (fade)</div>
+          </div></div>
+        <div className="panel mute"><div className="ph"><span className="tick">▸</span>BALİNA UYUMSUZLUĞU</div>
+          <div className="pb" style={{padding:0}}>
+            <Gauge name="WF SKORU" score={d.divergence?.score} cap={`en iyi ${d.divergence?.tf||"—"} · kapsam ${d.divergence?.coverage||0}/3`}/>
+          </div></div>
+      </div>
+    </div>
+  </>;
+}
+
+/* ── SİNYAL — the scan's survivors as cards. Click → PANEL for that symbol. ──
+   Data: GET /api/scan → survivors (full contract + netNss + whale divergence). */
+function Signal({onPick}){
+  const scan=window.SGS_SCAN||{survivors:[]};
+  const rows=scan.survivors||[];
+  return <>
+    <div className="vhead"><span className="kicker">SİNYAL KARTLARI</span><h1>Kısa Liste</h1>
+      <div className="meta">TARAMADAN SAĞ KALANLAR<br/>KART → PANELE GİDER</div></div>
+    {rows.length===0
+      ? <div className="state src-down">
+          <div className="sd-title">HENÜZ TARAMA YOK · NO SCAN YET</div>
+          <div className="sd-body">Bu görünüm /api/scan sonucunu gösterir. TARA görünümü ilk taramayı
+            otomatik çalıştırır; burada yeniden çalıştırabilirsin.</div>
+          <button className="cta" onClick={()=>window.DIVE?.scan?.(15,24).catch(()=>{})}>TARAMAYI ÇALIŞTIR · RUN SCAN</button>
+        </div>
+      : <div className="sigrail">{rows.map((w,i)=>{
+          const d=w.d||w;
+          const dir=sgn(d.finalSignal?.includes("BUY")?1:d.finalSignal?.includes("SELL")?-1:0);
+          const hit=(d.multiTf||[]).filter(m=>sgn(m.signal?.includes("BUY")?1:m.signal?.includes("SELL")?-1:0)===dir).length;
+          const wr=d.whaleRegime;
+          return <button key={d.s} className="sigcard" onClick={()=>onPick(d.s)}>
+            <span className="sc-top"><span className="rk">{String(i+1).padStart(2,"0")}</span>
+              <span className="sym">{d.s.replace("USDT","")}</span>
+              <Pill sig={d.finalSignal||"NEUTRAL"}/><DemoMark row={d}/></span>
+            <span className="sc-price"><span className="px">${fmt(d.price)}</span><DemoMark row={d}/>
+              <span className={"chg "+(d.ch>=0?"up":"dn")}>{d.ch>=0?"▲":"▼"} {num(Math.abs(d.ch||0),2)}%</span>
+              <span className="sc-score" title="netNss">{kfmt(w.score||d.netNss||d.quantBias||0)}</span></span>
+            <span className="sc-conf"><Vu conf={d.confidence} dir={dir}/> %{d.confidence||0}</span>
+            <Heat multiTf={d.multiTf}/>
+            <span className="sc-meta">
+              <span className={"tag "+(wr==="confirm"?"good":wr==="adverse"?"bad":"")}>BALİNA: {wr==="confirm"?"TEYİT":wr==="adverse"?"KARŞIT":"NÖTR"}</span>
+              <span className="tag">RİSK: {d.risk||"—"}</span>
+              <span className="tag">UYUM {hit}/12</span></span>
+            <span className="sc-reason">{(w.div&&w.div.reason)||d.reason||"—"}</span>
+          </button>;})}
+      </div>}
+  </>;
+}
+
 /* ── simple screens ──────────────────────────────────────────────────────── */
-function Flow({sym}){ return <Panel sym={sym}/>; }
-function Signal({sym}){ return <Panel sym={sym}/>; }
 function Logs(){
   const logs=window.SGS_LOGS||[];
   return <>
@@ -243,7 +413,7 @@ function Logs(){
         {logs.length===0 ? <div className="reason">Günlük boş.</div> :
          <table className="itbl"><tbody>{logs.slice(0,60).map((l,i)=>
            <tr key={i}><td className="nm" style={{color:"var(--dim)"}}>{l.t||l.time||""}</td>
-             <td className="rv" style={{textAlign:"left"}}>{l.msg||l.message||JSON.stringify(l)}</td></tr>)}</tbody></table>}
+             <td className="rv" style={{textAlign:"left"}}>{l.msg||l.m||l.message||JSON.stringify(l)}</td></tr>)}</tbody></table>}
       </div></div>
   </>;}
 function Settings({theme,setTheme}){
@@ -271,45 +441,74 @@ const NAV=[
 const THEMES=[["phosphor","#39ff9e"],["amber","#ffb02e"],["ice","#59c6ff"],["paper","#c2410c"]];
 const SYMBOL_VIEWS=new Set(["panel","flow","sig"]);
 
-const VIEW_IDS=["scan","panel","flow","sig","logs","settings"];
+/* Two-way hash routing: view ↔ location.hash. Hash names are the public ones. */
+const VIEW_HASH={scan:"scan",panel:"panel",flow:"flow",sig:"signal",logs:"log",settings:"settings"};
+const HASH_VIEW=Object.fromEntries(Object.entries(VIEW_HASH).map(([v,h])=>[h,v]));
+const viewFromHash=()=>{const h=(location.hash||"").replace(/^#\/?/,"").split("/")[0];return HASH_VIEW[h]||null;};
+
+const STALE_MS=90000;  // data older than this = honest "stale" banner
 function App(){
-  const [view,setView]=useState(()=>{const h=(location.hash||"").replace(/^#\/?/,"").split("/")[0];return VIEW_IDS.includes(h)?h:"scan";});
+  const [view,setView]=useState(()=>viewFromHash()||"scan");
   const [sym,setSym]=useState(null);
   const [theme,setThemeState]=useState(()=>localStorage.getItem("dive_theme")||"phosphor");
   const [q,setQ]=useState("");
   const [clock,setClock]=useState("");
   const [bootErr,setBootErr]=useState(null);
+  const [stale,setStale]=useState(null);   // {reason,hidden?} — live-feed honesty only
+  const lastOk=useRef(0);
   const [,force]=useState(0);
   const demo=isDemo();
   const setTheme=(t)=>{setThemeState(t);localStorage.setItem("dive_theme",t);document.documentElement.setAttribute("data-theme",t);};
+  const setRoute=(v)=>{setView(v);try{const h="#/"+(VIEW_HASH[v]||v);if(location.hash!==h)location.hash=h;}catch(e){}};
 
   useEffect(()=>{document.documentElement.setAttribute("data-theme",theme);},[]);
   useEffect(()=>{window.__diveOnData=()=>force(v=>v+1);return()=>{window.__diveOnData=null;};},[]);
   useEffect(()=>{const id=setInterval(()=>setClock(new Date().toTimeString().slice(0,8)),1000);
     setClock(new Date().toTimeString().slice(0,8));return()=>clearInterval(id);},[]);
+  useEffect(()=>{const onHash=()=>{const v=viewFromHash();if(v)setView(cur=>cur===v?cur:v);};
+    window.addEventListener("hashchange",onHash);return()=>window.removeEventListener("hashchange",onHash);},[]);
 
   // boot: universe → first symbol. If the fetch fails we surface an explicit
   // unavailable state — we do NOT fabricate a market to fill the screen.
   const boot=useCallback(async()=>{
     setBootErr(null);
     const r=await bootUniverse(window.DIVE);
-    if(r.ok){ setSym(s=>s||r.symbol||"BTCUSDT"); }
+    if(r.ok){ setSym(s=>s||r.symbol||"BTCUSDT"); lastOk.current=Date.now(); setStale(null); }
     else{ setBootErr(r.error||"unknown error"); }
     force(v=>v+1);
   },[]);
   useEffect(()=>{ boot(); },[boot]);
 
   useEffect(()=>{ if(sym&&SYMBOL_VIEWS.has(view)) window.DIVE?.symbol?.(sym).catch(()=>{}); },[sym,view]);
-  useEffect(()=>{ let live=true; const tick=async()=>{ if(!live)return;
-    try{ if(view==="scan") await window.DIVE.scan(15,24);}catch{}
-    try{ await window.DIVE.logs?.(); }catch{} };
-    tick(); const id=setInterval(tick, view==="scan"?20000:15000); return()=>{live=false;clearInterval(id);}; },[view]);
 
-  const refresh=()=>{ if(view==="scan") window.DIVE?.scan?.(15,24).catch(()=>{});
-    else if(sym) window.DIVE?.symbol?.(sym).catch(()=>{}); window.DIVE?.logs?.().catch(()=>{}); };
+  // One poll loop per view. Every outcome is honest: success stamps freshness and
+  // clears the stale banner; any throw names the failing endpoint in the banner.
+  const poll=useCallback(async()=>{
+    let fail=null;
+    try{
+      if(view==="scan") await window.DIVE.scan(15,24);
+      else if(SYMBOL_VIEWS.has(view)&&sym) await window.DIVE.symbol(sym);
+    }catch(e){ fail=(view==="scan"?"tarama":(sym||"sembol")+" verisi")+": "+((e&&e.message)||e); }
+    if(view==="flow"){ try{ await window.DIVE.leaders?.(); }
+      catch(e){ fail=fail||"liderler: "+((e&&e.message)||e); } }
+    try{ await window.DIVE.logs?.(); }catch(e){ fail=fail||"günlük: "+((e&&e.message)||e); }
+    if(fail) setStale(s=> s ? (s.reason===fail?s:{reason:fail,hidden:false}) : {reason:fail});
+    else { lastOk.current=Date.now(); setStale(null); }
+  },[view,sym]);
+  useEffect(()=>{ let live=true; const run=async()=>{ if(live) await poll(); };
+    run(); const id=setInterval(run,view==="scan"?20000:15000);
+    return()=>{live=false;clearInterval(id);}; },[poll]);
+  // age watchdog: even without a thrown error, silence > 90s is staleness.
+  useEffect(()=>{ const id=setInterval(()=>{ if(!lastOk.current) return;
+    if(Date.now()-lastOk.current>STALE_MS)
+      setStale(s=> s||{reason:`${Math.round(STALE_MS/1000)} sn'dir başarılı veri çekimi yok · no successful fetch for ${STALE_MS/1000}s`});
+  },5000); return()=>clearInterval(id); },[]);
+
+  const retry=()=>poll();
+  const dismissStale=()=>setStale(s=>s?{...s,hidden:true}:s);
   const submit=(e)=>{e.preventDefault();let s=q.trim().toUpperCase();if(!s)return;if(!s.endsWith("USDT"))s+="USDT";
-    setSym(s); if(!SYMBOL_VIEWS.has(view)) setView("panel"); setQ("");};
-  const pick=(s)=>{setSym(s);setView("panel");};
+    setSym(s); if(!SYMBOL_VIEWS.has(view)) setRoute("panel"); setQ("");};
+  const pick=(s)=>{setSym(s);setRoute("panel");};
 
   // A failed boot with nothing to show renders the unavailable state, not a
   // fabricated market. Settings stays reachable so the app is not a dead end.
@@ -319,13 +518,14 @@ function App(){
   if(noData && view!=="settings") body=<DataSourceDown error={bootErr} onRetry={boot}/>;
   else if(view==="scan") body=<Scanner onPick={pick}/>;
   else if(view==="panel") body=<Panel sym={sym}/>;
-  else if(view==="flow") body=<Flow sym={sym}/>;
-  else if(view==="sig") body=<Signal sym={sym}/>;
+  else if(view==="flow") body=<Flow sym={sym} onSelect={setSym}/>;
+  else if(view==="sig") body=<Signal onPick={pick}/>;
   else if(view==="logs") body=<Logs/>;
   else body=<Settings theme={theme} setTheme={setTheme}/>;
 
-  return <div className={"app"+(demo?" is-demo":"")}>
+  return <div className={"app"+(demo?" is-demo":"")+(stale&&!stale.hidden?" has-stale":"")}>
     <DemoBanner/>
+    <StaleBanner stale={stale} onRetry={retry} onDismiss={dismissStale}/>
     <div className="strip">
       {demo
         ? <span className="live demo"><span className="dot"/>DEMO</span>
@@ -336,14 +536,17 @@ function App(){
       <span>{view==="scan"?"TARAMA":(sym||"—").replace("USDT","")}</span><span className="seg">│</span>
       <form onSubmit={submit}><Svg d={ICONS.search}/><input value={q} onChange={e=>setQ(e.target.value)} placeholder="Sembol ara (örn. SOL)…"/></form>
       <span className="clk">{clock}</span><span className="seg">│</span>
-      <div className="themes">{THEMES.map(([id,c])=><button key={id} className={id===theme?"on":""} style={{background:c}} title={id} onClick={()=>setTheme(id)}/>)}</div>
-      <button className="iconbtn" title="Yenile" onClick={refresh}><Svg d={ICONS.refresh}/></button>
+      <div className="themes">{THEMES.map(([id,c])=><button key={id} className={id===theme?"on":""} style={{background:c}}
+        title={id} aria-label={`Tema: ${id}`} aria-pressed={id===theme} onClick={()=>setTheme(id)}/>)}</div>
+      <button className="iconbtn" title="Yenile" aria-label="Yenile · Refresh" onClick={retry}><Svg d={ICONS.refresh}/></button>
     </div>
     <nav className="rail">
       <div className="mark"><Mark/></div>
-      {NAV.map(n=><button key={n.id} className={"rail-btn"+(view===n.id?" on":"")} onClick={()=>setView(n.id)}><Svg d={ICONS[n.icon]}/>{n.label}</button>)}
+      {NAV.map(n=><button key={n.id} className={"rail-btn"+(view===n.id?" on":"")}
+        aria-current={view===n.id?"page":undefined} onClick={()=>setRoute(n.id)}><Svg d={ICONS[n.icon]}/>{n.label}</button>)}
       <div className="grow"/>
-      <button className={"rail-btn"+(view==="settings"?" on":"")} onClick={()=>setView("settings")}><Svg d={ICONS.gear}/>AYAR</button>
+      <button className={"rail-btn"+(view==="settings"?" on":"")} aria-current={view==="settings"?"page":undefined}
+        onClick={()=>setRoute("settings")}><Svg d={ICONS.gear}/>AYAR</button>
     </nav>
     <main className="stage" key={view+"|"+sym}>{body}</main>
   </div>;
@@ -353,4 +556,4 @@ function App(){
    must not try to mount. Named pieces are exported for the demo-mode tests. */
 const _diveRoot = (typeof document!=="undefined" && document.getElementById) ? document.getElementById("root") : null;
 if(_diveRoot) ReactDOM.createRoot(_diveRoot).render(<App/>);
-globalThis.DIVE_APP = { App, DemoBanner, DemoMark, DataSourceDown, bootUniverse, isDemo };
+globalThis.DIVE_APP = { App, DemoBanner, DemoMark, DataSourceDown, StaleBanner, Scanner, Flow, Signal, bootUniverse, isDemo };

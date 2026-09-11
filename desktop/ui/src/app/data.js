@@ -1,10 +1,9 @@
 /* ============================================================================
    Dive Into Crypto — Desktop · data adapter
-   Replaces the old mock generator. Pulls REAL data from the local backend
-   (Crypcodile-fed) and exposes it through the same globals the screens read:
-   SGS_DATA / SGS_DATA_MAP / SGS_GAINERS / SGS_LOSERS / SGS_LOGS / sgsFmtPrice /
-   sgsFmtBig, plus a thin SGS_QUANT shim whose runScan() returns the backend's
-   server-computed scan (the canonical, Android-parity engine — not a client copy).
+   Pulls REAL data from the local backend (Crypcodile-fed) and exposes it through
+   the globals the screens read: SGS_DATA / SGS_DATA_MAP / SGS_GAINERS /
+   SGS_LOSERS / SGS_LOGS / sgsFmtPrice / sgsFmtBig. The scan itself is the
+   backend's server-computed result (the canonical, Android-parity engine).
    ========================================================================== */
 
 window.SGS_TF = ["1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d"];
@@ -31,14 +30,6 @@ function sgsFmtBig(v) {
 }
 window.sgsFmtPrice = sgsFmtPrice;
 window.sgsFmtBig = sgsFmtBig;
-
-/* ── SGS_QUANT shim — the heavy lifting is server-side (canonical engine) ──── */
-window.SGS_QUANT = {
-  // Return a NEW array reference each tick so TaramaScreen's useMemo([ticked])
-  // re-runs and picks up the latest server scan (no client perturbation).
-  liveTick: (data) => (Array.isArray(data) ? data.slice() : data),
-  runScan: () => window.SGS_SCAN,      // server-computed scan result (set by DIVE.scan)
-};
 
 /* ── backend client (the UI is served by the backend → same origin) ───────── */
 const API = "";  // same-origin
