@@ -103,6 +103,21 @@ somewhere like `C:\dev\dive-into-crypto`.
 - No API keys, keystore files, or secrets of any kind — the app reads public Binance data
   only, and `.gitignore` blocks keystores deliberately.
 
+## Release process
+
+Releases are tag-driven. Pushing a `v*` tag runs `.github/workflows/release.yml`, which:
+
+- builds the **Android** release APK + AAB (R8-minified, signed when the
+  `KEYSTORE_BASE64` / `KEYSTORE_PASSWORD` / `KEY_ALIAS` / `KEY_PASSWORD` secrets are set —
+  an unsigned build is still published otherwise) and attaches them to the GitHub Release;
+- optionally packages the **desktop** edition with PyInstaller via the manual
+  `package_desktop` workflow input (never on tags).
+
+Secret names, the keystore generation how-to, the desktop packaging commands and the
+size/AV expectations are documented in [docs/packaging.md](docs/packaging.md). Maintainer
+note: on the owner's machine `git push` fails above ~1 MB, so create tags and releases
+via the REST API (or let CI attach artefacts) rather than pushing them.
+
 ## License
 
 By contributing you agree that your contributions are licensed under the [MIT

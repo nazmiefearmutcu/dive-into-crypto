@@ -1,0 +1,31 @@
+# Dependabot — weekly dependency updates across all four ecosystems.
+# One open PR per ecosystem maximum pressure: 5 each keeps noise bounded.
+version: 2
+updates:
+  # CI + release workflow actions (checkout, setup-java, setup-gradle, ...).
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  # Android edition (Gradle wrapper deps + version catalog).
+  - package-ecosystem: gradle
+    directory: /android
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  # Desktop backend (pyproject.toml; uv.lock is the lockfile of record).
+  - package-ecosystem: pip
+    directory: /desktop/backend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  # Depth Terminal UI (package.json + package-lock.json).
+  - package-ecosystem: npm
+    directory: /desktop/ui
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5

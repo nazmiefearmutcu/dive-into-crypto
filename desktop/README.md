@@ -1,7 +1,7 @@
 # Dive Into Crypto — Desktop
 
 A single-window terminal for the Binance USDT-M perpetual-futures market. The **reference**
-consensus engine — 57 indicators across 12 timeframes, three futures-native overlays, and a
+consensus engine — 60 indicators across 12 timeframes, three futures-native overlays, and a
 whale-divergence filter — fed with highest-fidelity data through
 [**Crypcodile**](https://github.com/nazmiefearmutcu/Crypcodile), rendered in the **Depth Terminal**
 UI.
@@ -45,7 +45,7 @@ Deribit (IV / DVOL)     ─┤
                          ▼
             ┌───────────────────────────────────────────────┐
             │  backend/   Python · FastAPI                   │
-            │   engine/   57 indicators + consensus + risk   │
+            │   engine/   60 indicators + consensus + risk   │
             │   scan/     whale divergence · microstructure  │
             │             · regime · MTF-confluence overlays │
             │             · two-phase ranking + backfill     │
@@ -63,9 +63,9 @@ Deribit (IV / DVOL)     ─┤
             └───────────────────────────────────────────────┘
 ```
 
-**Engine.** The backend *is* the canonical Python reference: 57 indicators plus three overlays
+**Engine.** The backend *is* the canonical Python reference: 60 indicators plus three overlays
 (futures-microstructure, regime-adaptive weighting, MTF-confluence) that annotate but never alter
-the parity-locked vote. The Android/Kotlin engine mirrors all 57, pinned to the same
+the parity-locked vote. The Android/Kotlin engine mirrors all 60, pinned to the same
 `BTCUSDT 1h × 300` fixtures (signal + score, exact) — cross-language parity is enforced
 per-indicator, on the original core and the extended set alike.
 
@@ -91,7 +91,7 @@ Mono / Newsreader. Four themes, switched live from the status strip (persisted l
 
 ### Screens
 **Tarama** (ranked sweep · whale-divergence elimination) · **Panel** (active symbol: 12-TF heat,
-serif verdict, family-grouped 57-indicator table, and instrument gauges for the
+serif verdict, family-grouped 60-indicator table, and instrument gauges for the
 microstructure / regime / MTF overlays + whale divergence) · **OI · L/S** · **Sinyal** · **Ağ
 Günlüğü** (live request log) · **Ayarlar**. Deep-link a view with `#panel`, `#scan`, …
 

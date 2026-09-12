@@ -50,4 +50,5 @@ desktop/backend/data/
 .agents/
 docs/superpowers/
 .superpowers/
-
+# PyInstaller output (desktop packaging)
+desktop/backend/dist/

@@ -2,7 +2,7 @@
 ┌─ DIVE INTO CRYPTO ─────────────────────────────────────────────┐
 │                                                                │
 │   Binance USDT-M perpetual-futures scanner.                    │
-│   57 indicators · 12 timeframes · whale-divergence filter ·    │
+│   60 indicators · 12 timeframes · whale-divergence filter ·    │
 │   one confidence-scored consensus verdict per symbol.          │
 │                                                                │
 │   No account. No API keys. No sign-up. Public data only.       │
@@ -17,7 +17,7 @@
 ![React](https://img.shields.io/badge/ui-react-1c7a52?style=flat-square)
 
 Point it at the futures market and it tells you, per symbol, whether the evidence leans **long,
-short, or neutral** — and how much to trust that read. Every symbol runs a weighted vote of **57
+short, or neutral** — and how much to trust that read. Every symbol runs a weighted vote of **60
 technical indicators across all 12 timeframes**, gets cross-checked against **top-trader
 positioning** (whale flow that diverges from price is empirically contrarian), and collapses into a
 single verdict with a 0–100 confidence and a LOW/MEDIUM/HIGH risk read.
@@ -37,7 +37,7 @@ market data. It is an instrument for *seeing* the market, not trading it for you
 | **Stack** | Python (FastAPI) + React terminal UI | Kotlin · Jetpack Compose |
 | **Data** | [Crypcodile](https://github.com/nazmiefearmutcu/Crypcodile)-fed, highest fidelity | Binance USDT-M public REST + WS |
 | **Runs** | local, terminal-launched | on your device, single APK |
-| **Engine** | full **57 indicators + 3 overlays** | full **57 indicators + 3 overlays** |
+| **Engine** | full **60 indicators + 3 overlays** | full **60 indicators + 3 overlays** |
 
 Both run the same engine. Every indicator is pinned to the shared Python reference by fixture
 (see [Parity](#parity)); the desktop engine is the reference, the Kotlin engine is its
@@ -132,6 +132,17 @@ Nothing leaves your machine except public Binance requests. Details:
 
 ---
 
+## Releases
+
+Tagged releases are built by CI: pushing a `v*` tag produces the Android release **APK +
+AAB** and attaches them to a GitHub Release — signed when the release-keystore secrets
+are configured, unsigned (but still published) otherwise. The desktop edition can be
+packaged on demand into a standalone folder. Secret names, the keystore how-to and the
+packaging details: **[docs/packaging.md](docs/packaging.md)** and
+[CONTRIBUTING.md](CONTRIBUTING.md#release-process).
+
+---
+
 ## Parity
 
 Cross-language parity is enforced **per indicator**, not per screen, against a `BTCUSDT 1h × 300`
@@ -178,7 +189,7 @@ dive-into-crypto/
 ├─ .github/          CI workflow (backend · UI · android jobs)
 ├─ android/          native Kotlin/Compose edition (Gradle)
 ├─ desktop/
-│  ├─ backend/       Python · FastAPI · the reference engine (57 indicators + overlays)
+│  ├─ backend/       Python · FastAPI · the reference engine (60 indicators + overlays)
 │  └─ ui/            React "Depth Terminal" — prebuilt bundle + design reference
 ├─ tests/            root E2E suite (offline, opaque-box tiers 1–4)
 └─ docs/             specs · api reference · screenshots

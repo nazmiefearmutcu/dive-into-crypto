@@ -1,0 +1,177 @@
+# Release pipeline for dive-into-crypto.
+#
+#   release          — triggered ONLY by pushing a `v*` tag. Builds the signed
+#                      Android release APK + AAB and publishes a GitHub Release
+#                      with both attached.
+#   package-desktop  — manual only (workflow_dispatch with the `package_desktop`
+#                      input ticked). Packages the desktop backend into a
+#                      standalone onedir folder with PyInstaller. It deliberately
+#                      does NOT run on tags.
+#
+# Signing degrades gracefully: when the KEYSTORE_BASE64 secret is absent, the
+# release build is still produced and uploaded, just UNSIGNED (the signing
+# scaffold in android/app/build.gradle.kts skips the signing config whenever any
+# of STORE_FILE / STORE_PASSWORD / KEY_ALIAS / KEY_PASSWORD is blank). See
+# docs/packaging.md for the secret names and the keystore how-to.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      package_desktop:
+        description: "Run the desktop packaging job (PyInstaller onedir bundle)"
+        type: boolean
+        default: false
+
+# Never cancel an in-flight release build for the same ref.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Android release (signed APK + AAB)
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write # create the GitHub Release and upload assets
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle caching
+        uses: gradle/actions/setup-gradle@v4
+
+      # Step-level `if:` cannot evaluate secrets in every position we need, so
+      # the guard is an env-mirror check inside the step — the documented
+      # equivalent of `if: secrets.KEYSTORE_BASE64 != ''`.
+      - name: Decode keystore (prep step)
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "::warning::no keystore secret set; APK will be unsigned"
+          else
+            echo "$KEYSTORE_B64" | base64 -d > android/app/release.keystore.jks
+            echo "keystore decoded: $(wc -c < android/app/release.keystore.jks) bytes"
+          fi
+
+      # Secret -> gradle env mapping (defaults documented in docs/packaging.md):
+      #   STORE_FILE       — default `app/release.keystore.jks`: the path the
+      #                      prep step writes to, relative to the android/ root
+      #                      (gradle resolves it via rootProject.file()).
+      #   STORE_PASSWORD   — from secret KEYSTORE_PASSWORD
+      #   KEY_ALIAS        — from secret KEY_ALIAS
+      #   KEY_PASSWORD     — from secret KEY_PASSWORD
+      # Blank values are safe: android/app/build.gradle.kts treats any blank
+      # entry as "no signing config" and produces an unsigned release build.
+      - name: Build release APK + AAB
+        working-directory: android
+        env:
+          STORE_FILE: app/release.keystore.jks
+          STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleRelease :app:bundleRelease --console=plain --parallel
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -f android/app/release.keystore.jks ]; then
+            SIGN_LINE="Signed with the release keystore (KEYSTORE_BASE64 secret)."
+          else
+            SIGN_LINE="**Unsigned build** — the KEYSTORE_BASE64 secret was not set, so Android will ask for confirmation before installing. See docs/packaging.md."
+          fi
+          {
+            echo "# Dive Into Crypto ${GITHUB_REF_NAME}"
+            echo
+            echo "${SIGN_LINE}"
+            echo
+            echo "- the attached \`.apk\` is the installable release build (R8-minified)"
+            echo "- the attached \`.aab\` is the Play-store bundle"
+            echo
+            echo "The desktop edition is packaged separately on demand — see docs/packaging.md."
+          } > release-notes.md
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Dive Into Crypto ${GITHUB_REF_NAME}" \
+            --notes-file release-notes.md \
+            --verify-tag
+
+      - name: Upload release assets (APK + AAB)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" \
+            --clobber \
+            android/app/build/outputs/apk/release/*.apk \
+            android/app/build/outputs/bundle/release/*.aab
+
+  package-desktop:
+    name: Desktop package (PyInstaller onedir)
+    # Manual only — never on tag pushes.
+    if: github.event_name == 'workflow_dispatch' && inputs.package_desktop == true
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: desktop/backend/uv.lock
+
+      - name: Sync backend dependencies (locked)
+        working-directory: desktop/backend
+        run: uv sync
+
+      # PyInstaller must run inside the project environment (`uv run --with`),
+      # NOT an isolated `uv tool run` env — Analysis needs to import
+      # pandas/fastapi/uvicorn/crypcodile from the synced venv to bundle them.
+      # `--with pyinstaller` adds the packager ephemerally on top of the locked
+      # dependency set. Same command as documented in dive.spec / docs.
+      - name: Package backend (dive.spec)
+        working-directory: desktop/backend
+        run: uv run --with pyinstaller pyinstaller dive.spec --noconfirm
+
+      # api/app.py resolves the UI via parents[4]/ui/dist. From the frozen
+      # module (dist/dive-desktop/_internal/...) that points one level ABOVE the
+      # app folder, i.e. <dist>/ui/dist. Mirror the UI bundle there so the
+      # legacy resolution finds it too (the spec already placed a copy at
+      # _internal/ui/dist for the sys._MEIPASS fallback). See the dive.spec
+      # header for the full path math.
+      - name: Mirror UI bundle for the legacy _UI_DIST path
+        working-directory: desktop/backend
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/ui | Out-Null
+          Copy-Item -Recurse -Force ..\ui\dist dist\ui\dist
+
+      - name: Zip the packaged tree
+        working-directory: desktop/backend
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist\dive-desktop, dist\ui -DestinationPath dive-desktop-windows-x64.zip -Force
+
+      - name: Upload desktop package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dive-desktop-windows-x64
+          path: desktop/backend/dive-desktop-windows-x64.zip
+          if-no-files-found: error
+          retention-days: 14
