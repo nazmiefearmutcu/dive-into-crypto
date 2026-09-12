@@ -34,7 +34,9 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
                         weightTakerLs = settings.weightTakerLs,
                         weightOiMomentum = settings.weightOiMomentum,
                         weightWhaleLs = settings.weightWhaleLs,
-                        weightAccountLs = settings.weightAccountLs
+                        weightAccountLs = settings.weightAccountLs,
+                        backgroundScansEnabled = settings.backgroundScansEnabled,
+                        backgroundScansUnmetered = settings.backgroundScansUnmetered
                     )
                 }
             }
@@ -114,6 +116,22 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
         container.settingsStore.updateSettings(current.copy(weights = updatedWeights))
     }
 
+    /**
+     * Persists the background-scan toggles (WorkManager card). The CALLER is
+     * responsible for invoking the platform sync hook afterwards
+     * ([com.diveintocrypto.android.platform.rememberBackgroundScanSync]) so the
+     * periodic work is enqueued/cancelled with the fresh constraints.
+     */
+    fun updateBackgroundScans(enabled: Boolean? = null, unmetered: Boolean? = null) {
+        val current = container.settingsStore.getSettings()
+        container.settingsStore.updateSettings(
+            current.copy(
+                backgroundScansEnabled = enabled ?: current.backgroundScansEnabled,
+                backgroundScansUnmetered = unmetered ?: current.backgroundScansUnmetered,
+            )
+        )
+    }
+
     fun setFavoriteSearchQuery(query: String) {
         val sanitized = query.uppercase().trim()
         _ui.update { state ->
@@ -159,6 +177,10 @@ data class SettingsUiState(
     val weightOiMomentum: Double = 0.30,
     val weightWhaleLs: Double = 0.20,
     val weightAccountLs: Double = 0.15,
+
+    // Background WorkManager scans (opt-in; sync handled platform-side).
+    val backgroundScansEnabled: Boolean = false,
+    val backgroundScansUnmetered: Boolean = true,
 
     // Favorite searching
     val favoriteSearchQuery: String = "",

@@ -6,6 +6,7 @@ import com.diveintocrypto.android.AppContainer
 import com.diveintocrypto.android.data.binance.BinanceFuturesClient
 import com.diveintocrypto.android.data.binance.Ticker24h
 import com.diveintocrypto.android.domain.evidence.EvidenceBucketStats
+import com.diveintocrypto.android.domain.evidence.EvidenceGrade
 import com.diveintocrypto.android.domain.evidence.EvidenceGrader
 import com.diveintocrypto.android.platform.nowMillis
 import kotlinx.coroutines.CancellationException
@@ -167,9 +168,23 @@ class PerformanceViewModel(private val container: AppContainer) : ViewModel() {
                             confidence = rec.confidence,
                             dominantDir = rec.dominantDir,
                             forwardReturnPct = fwd,
+                            ts = rec.ts,
                         )
                     },
                 )
+                // v2 calibration + skill + rolling windows (all PURE — no extra I/O).
+                val gradedSamples = graded.map { (rec, fwd) ->
+                    EvidenceGrader.GradedSample(
+                        verdict = rec.verdict,
+                        confidence = rec.confidence,
+                        dominantDir = rec.dominantDir,
+                        forwardReturnPct = fwd,
+                        ts = rec.ts,
+                    )
+                }
+                val ece = EvidenceGrader.ece(gradedSamples)
+                val brier = EvidenceGrader.brier(gradedSamples)
+                val windows = EvidenceGrader.gradeWindows(gradedSamples, nowMillis())
 
                 // Resume cursor = newest graded record (only successfully graded
                 // ones advance it — failed symbols stay stale and are retried).
@@ -185,6 +200,11 @@ class PerformanceViewModel(private val container: AppContainer) : ViewModel() {
                             graded = grade.graded,
                             byVerdict = grade.byVerdict,
                             byConfidence = grade.byConfidence,
+                            ece = ece.ece,
+                            eceBins = ece.bins,
+                            brier = brier?.brier,
+                            brierSkill = brier?.skill,
+                            windows = windows,
                             stale = stillStale,
                             isGrading = false,
                             horizonHours = horizonHours,
@@ -214,12 +234,18 @@ class PerformanceViewModel(private val container: AppContainer) : ViewModel() {
 }
 
 /**
- * Verdict-evidence self-audit state.
+ * Verdict-evidence self-audit state (v2).
  *
  * @param archived total records in the JSONL ring
  * @param graded records graded in the latest pass
- * @param byVerdict hit-rate/median-forward-return per verdict (BUY/SELL/…)
+ * @param byVerdict hit-rate/median-forward-return per verdict (BUY/SELL/…);
+ *                  v2 buckets carry Wilson 95% bounds + the small-sample gate
  * @param byConfidence same per confidence band (0-25 / 26-50 / 51-75 / 76-100)
+ * @param ece Expected Calibration Error over fixed 10-bin confidence bands; null = no graded samples
+ * @param eceBins the 10-bin reliability table behind [ece] (empty bins included)
+ * @param brier Brier score of stated confidences vs 0/1 outcomes; null = no samples
+ * @param brierSkill Brier Skill Score vs the constant base-rate forecast (>0 = skill); null when degenerate
+ * @param windows rolling-window grades keyed "7d"/"30d"/"all"
  * @param stale true when archived records older than the horizon are NOT yet
  *              graded (capped pass or failed fetches) — honest lag signal
  */
@@ -228,6 +254,11 @@ data class EvidenceState(
     val graded: Int = 0,
     val byVerdict: Map<String, EvidenceBucketStats> = emptyMap(),
     val byConfidence: Map<String, EvidenceBucketStats> = emptyMap(),
+    val ece: Double? = null,
+    val eceBins: List<EvidenceGrader.CalibrationBin> = emptyList(),
+    val brier: Double? = null,
+    val brierSkill: Double? = null,
+    val windows: Map<String, EvidenceGrade> = emptyMap(),
     val stale: Boolean = false,
     val isGrading: Boolean = false,
     val horizonHours: Long = 4,

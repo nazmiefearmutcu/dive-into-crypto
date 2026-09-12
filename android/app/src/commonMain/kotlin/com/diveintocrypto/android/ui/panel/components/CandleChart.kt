@@ -36,9 +36,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.diveintocrypto.android.domain.cvd.CvdBucket
 import com.diveintocrypto.android.domain.model.Candle
+import com.diveintocrypto.android.engine.analytics.VolCone
+import com.diveintocrypto.android.platform.format
 import com.diveintocrypto.android.ui.panel.PanelUiState
 import com.diveintocrypto.android.ui.theme.DiveColors
 import com.diveintocrypto.android.ui.theme.DiveFonts
+import com.diveintocrypto.android.ui.common.UiLabels
 import kotlin.math.abs
 
 /**
@@ -66,6 +69,7 @@ fun CandleChartCard(
     state: PanelUiState,
     onRefresh: () -> Unit,
     modifier: Modifier = Modifier,
+    cone: VolCone.ConeEnv? = null,
 ) {
     DiveCard(
         title = "${state.activeSymbol} · ${state.timeframe.uppercase()} · FİYAT",
@@ -93,7 +97,7 @@ fun CandleChartCard(
             return@DiveCard
         }
 
-        LegendRow()
+        LegendRow(hasCone = cone != null)
 
         Spacer(Modifier.height(6.dp))
 
@@ -113,8 +117,20 @@ fun CandleChartCard(
         // ── Price chart (~260dp): candles + overlays + volume + axis ──
         Box(modifier = Modifier.fillMaxWidth().height(260.dp)) {
             Canvas(modifier = Modifier.fillMaxSize()) {
-                drawPriceChart(candles, ema20, ema50, bbUpper, bbLower, textMeasurer)
+                drawPriceChart(candles, ema20, ema50, bbUpper, bbLower, cone, textMeasurer)
             }
+        }
+
+        // ── CONE honest caption (only when the envelope is actually drawn) ──
+        if (cone != null) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = UiLabels.CONE_CAPTION,
+                color = DiveColors.TextDim,
+                fontSize = 9.sp,
+                lineHeight = 12.sp,
+                fontFamily = DiveFonts.body,
+            )
         }
 
         Spacer(Modifier.height(8.dp))
@@ -165,7 +181,7 @@ fun CandleChartCard(
 }
 
 @Composable
-private fun LegendRow() {
+private fun LegendRow(hasCone: Boolean = false) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -174,6 +190,9 @@ private fun LegendRow() {
         LegendSwatch(color = DiveColors.Accent, label = "EMA20")
         LegendSwatch(color = DiveColors.Accent2, label = "EMA50")
         LegendSwatch(color = DiveColors.Purple.copy(alpha = 0.30f), label = "BOLL", filled = true)
+        if (hasCone) {
+            LegendSwatch(color = DiveColors.Cyan.copy(alpha = 0.20f), label = "CONE", filled = true)
+        }
     }
 }
 
@@ -208,6 +227,7 @@ private fun DrawScope.drawPriceChart(
     ema50: List<Double?>,
     bbUpper: List<Double?>,
     bbLower: List<Double?>,
+    cone: VolCone.ConeEnv?,
     textMeasurer: TextMeasurer,
 ) {
     if (candles.isEmpty()) return
@@ -225,10 +245,55 @@ private fun DrawScope.drawPriceChart(
     fun yOf(v: Double): Float = ChartMath.scaleY(v, range, priceTop, priceBottom)
     fun xCenter(i: Int): Float = plotRight * (i + 0.5f) / n
 
-    // ── Hairline grid: min / mid / max ────────────────────────────────
+    // ── HAIRLINE grid: min / mid / max ────────────────────────────
     listOf(range.min, (range.min + range.max) / 2.0, range.max).forEach { v ->
         val y = yOf(v)
         drawLine(DiveColors.Border, Offset(0f, y), Offset(plotRight, y), strokeWidth = 1f)
+    }
+
+    // ── CONE ±envelope bands (anchored on the LAST close) ─────────
+    // Inner band = ±envLowPct, outer = ±envHighPct — the 24h log-normal
+    // expected-move envelope P0·exp(±σ√24) as % of the last close.
+    // Percentile-free by construction: these are historical-σ projections,
+    // NOT probability bands — the caption below the chart says exactly that.
+    if (cone != null) {
+        val last = candles.last().close
+        if (last > 0.0) {
+            fun band(lowPct: Double?, highPct: Double?, alpha: Float) {
+                val loPct = lowPct ?: return
+                val hiPct = highPct ?: return
+                val upper = last * (1.0 + hiPct / 100.0)
+                val lower = last * (1.0 - loPct / 100.0)
+                val yU = yOf(upper).coerceIn(priceTop, priceBottom)
+                val yL = yOf(lower).coerceIn(priceTop, priceBottom)
+                if (yL - yU >= 1f) {
+                    drawRect(
+                        DiveColors.Cyan.copy(alpha = alpha),
+                        topLeft = Offset(0f, yU),
+                        size = Size(plotRight, yL - yU),
+                    )
+                    drawLine(
+                        DiveColors.Cyan.copy(alpha = (alpha + 0.35f).coerceAtMost(1f)),
+                        Offset(0f, yU), Offset(plotRight, yU), strokeWidth = 1f,
+                    )
+                    drawLine(
+                        DiveColors.Cyan.copy(alpha = (alpha + 0.35f).coerceAtMost(1f)),
+                        Offset(0f, yL), Offset(plotRight, yL), strokeWidth = 1f,
+                    )
+                }
+            }
+            // Outer envelope first (behind), inner on top.
+            band(cone.envLowPct, cone.envHighPct, alpha = 0.07f)
+            band(cone.envLowPct, cone.envLowPct, alpha = 0.10f)
+
+            // σ label — top-left, honest (√t projection from trailing σ1h).
+            val sigmaText = "σ1h ${cone.sigma1hPct.format(2)}% · 24h ±${cone.vol24hPct.format(2)}%"
+            val layout = textMeasurer.measure(
+                sigmaText,
+                TextStyle(color = DiveColors.Cyan, fontSize = 9.sp, fontFamily = DiveFonts.Mono),
+            )
+            drawText(textLayoutResult = layout, topLeft = Offset(6.dp.toPx(), priceTop + 2.dp.toPx()))
+        }
     }
 
     // ── Bollinger band translucent fill (null warm-up → skip runs) ────

@@ -54,4 +54,32 @@ object BasisAnalytics {
                 val m = t.markPrice!!; val i = t.indexPrice!!
                 PerpBasisRow(t.localTs, m, i, m - i, (m - i) / i)
             }.toList()
+
+    // ── Premium-index basis block (0.3.0 parity addition) ─────────────────────
+
+    /**
+     * The additive basis block shown on the panel:
+     *
+     * @param basisBps (mark − index)/index × 10 000 (basis points; positive = perp trades rich)
+     * @param annFundingPct the venue's predicted 8h funding rate annualised
+     *        (simple, non-compounded: rate·3·365), in PERCENT per year
+     */
+    data class BasisBlock(
+        val basisBps: Double,
+        val annFundingPct: Double,
+    )
+
+    /** Funding settlements per day on Binance USDT-M (8h cadence). */
+    const val FUNDING_PER_DAY: Double = 3.0
+
+    /**
+     * PURE basis block from a `/fapi/v1/premiumIndex` row.
+     * null when mark or index is non-positive (honest unavailability).
+     */
+    fun basisBlock(markPrice: Double, indexPrice: Double, lastFundingRate: Double): BasisBlock? {
+        if (markPrice <= 0.0 || indexPrice <= 0.0) return null
+        val basisBps = (markPrice - indexPrice) / indexPrice * 10_000.0
+        val annFundingPct = lastFundingRate * FUNDING_PER_DAY * 365.0 * 100.0
+        return BasisBlock(basisBps, annFundingPct)
+    }
 }

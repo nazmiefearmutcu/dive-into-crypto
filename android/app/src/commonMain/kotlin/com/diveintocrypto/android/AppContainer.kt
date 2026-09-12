@@ -13,7 +13,7 @@ import com.diveintocrypto.android.domain.consensus.DEFAULT_FULL_WEIGHTS
 import com.diveintocrypto.android.domain.indicator.*
 import com.diveintocrypto.android.domain.model.IndicatorConfig
 
-// NOTE: the full 57-name indicator weight map previously lived here as
+// NOTE: the full 60-name indicator weight map previously lived here as
 // `ALL_INDICATOR_WEIGHTS` but was never consumed — Scorer fell back to `?: 1.0`
 // and every extended indicator scored at weight 1.0. The canonical map now lives
 // in `domain/consensus/Weights.kt` ([DEFAULT_FULL_WEIGHTS]) and IS wired into
@@ -39,6 +39,24 @@ class AppContainer(kv: KeyValueStore) {
     private val kvStore: KeyValueStore = kv
 
     val settingsStore = SettingsStore(kv)
+
+    // ── LANGUAGE (TR/EN, LANE-7 i18n) ─────────────────────────────────────────
+    // Active string catalog, resolved once from the persisted "language" key
+    // (default "tr") and swapped via [setLanguage] (persists immediately).
+    // The Compose root provides it as LocalDiveStrings.
+    private val languageFlow = kotlinx.coroutines.flow.MutableStateFlow(
+        com.diveintocrypto.android.ui.i18n.languageFor(kvStore),
+    )
+
+    /** Active [com.diveintocrypto.android.ui.i18n.DiveStrings] catalog (StateFlow). */
+    val language: kotlinx.coroutines.flow.StateFlow<com.diveintocrypto.android.ui.i18n.DiveStrings>
+        get() = languageFlow
+
+    /** Persists the language ("tr"/"en") and swaps the active catalog. */
+    fun setLanguage(code: String) {
+        kvStore.putString(com.diveintocrypto.android.ui.i18n.KEY_LANGUAGE, code)
+        languageFlow.value = com.diveintocrypto.android.ui.i18n.languageFor(kvStore)
+    }
 
     val activeSymbol = kotlinx.coroutines.flow.MutableStateFlow("BTCUSDT")
     val activeTimeframe = kotlinx.coroutines.flow.MutableStateFlow("1h")
@@ -115,14 +133,73 @@ class AppContainer(kv: KeyValueStore) {
     ): com.diveintocrypto.android.domain.alerts.AlertRule =
         alertEngine.addRule(symbol, kind, direction, threshold, oneShot)
 
+    /**
+     * v2 add: a rule from an AND-ed condition group (chips for coalescing:
+     * 1m/15m/1h → [AlertRule.COALESCE_1M]/[COALESCE_15M]/[COALESCE_1H];
+     * "once" → [oneShot]). The old single-condition signature keeps working.
+     */
+    fun addRule(
+        symbol: String,
+        conditions: List<com.diveintocrypto.android.domain.alerts.AlertCondition>,
+        oneShot: Boolean = false,
+        coalesceMs: Long = com.diveintocrypto.android.domain.alerts.AlertRule.COALESCE_DEFAULT_MS,
+    ): com.diveintocrypto.android.domain.alerts.AlertRule =
+        alertEngine.addRule(symbol, conditions, oneShot, coalesceMs)
+
+    /** Per-rule re-fire coalescing window (ms); 0 = engine default. */
+    fun setRuleCoalesceMs(id: String, coalesceMs: Long) =
+        alertEngine.setRuleCoalesceMs(id, coalesceMs)
+
     fun removeRule(id: String) = alertEngine.removeRule(id)
 
     fun toggleRule(id: String, enabled: Boolean? = null) = alertEngine.toggleRule(id, enabled)
 
     fun dismissAlertBanner() = alertEngine.dismissBanner()
 
+    // ── PORTFOLIO TRACKER (local-only; never networked) ────────────────────────
+
+    /**
+     * Local portfolio store: persisted entries ([PortfolioStore.KEY] blob) +
+     * P&L recomputed on every live-ticker tick against the engine's REAL mark
+     * prices. Constructing it wires the (lazy) ticker engine as the mark source
+     * and the evidence archive as the engine-agreement verdict source.
+     */
+    val portfolioStore: com.diveintocrypto.android.domain.portfolio.PortfolioStore by lazy {
+        com.diveintocrypto.android.domain.portfolio.PortfolioStore(
+            settingsStore = settingsStore,
+            verdictProvider = com.diveintocrypto.android.domain.portfolio
+                .EvidenceStoreVerdictProvider(evidenceStore),
+            tickerSource = liveTickerEngine.tickers,
+        )
+    }
+
+    /** All local portfolio entries (persisted). */
+    val portfolioEntries: kotlinx.coroutines.flow.StateFlow<List<com.diveintocrypto.android.domain.portfolio.PortfolioEntry>>
+        get() = portfolioStore.entries
+
+    /** Direction-adjusted P&L per entry, recomputed on ticker ticks. */
+    val portfolioPnl: kotlinx.coroutines.flow.StateFlow<List<com.diveintocrypto.android.domain.portfolio.PositionPnl>>
+        get() = portfolioStore.pnl
+
+    fun addPortfolioEntry(
+        symbol: String,
+        entryPrice: Double,
+        size: Double,
+        direction: String,
+    ): com.diveintocrypto.android.domain.portfolio.PortfolioEntry =
+        portfolioStore.add(symbol, entryPrice, size, direction)
+
+    fun removePortfolioEntry(id: String) = portfolioStore.remove(id)
+
+    fun updatePortfolioEntry(
+        id: String,
+        entryPrice: Double? = null,
+        size: Double? = null,
+        direction: String? = null,
+    ) = portfolioStore.update(id, entryPrice, size, direction)
+
     val consensus: ConsensusEngine by lazy {
-        // Explicit full-weights wiring: settingsStore carries all 57 default weights
+        // Explicit full-weights wiring: settingsStore carries all 60 default weights
         // (user overrides on top); DEFAULT_FULL_WEIGHTS is the no-store fallback.
         ConsensusEngine(settingsStore, DEFAULT_FULL_WEIGHTS)
     }
@@ -238,6 +315,10 @@ class AppContainer(kv: KeyValueStore) {
             KalmanTrendIndicator(IndicatorConfig()),
             HalfLifeReversionIndicator(IndicatorConfig()),
             RollingSharpeIndicator(IndicatorConfig()),
+            // ── Price-action pattern library (desktop-reference parity, 2026-09-12) ──
+            EngulfingIndicator(IndicatorConfig()),
+            LiquiditySweepIndicator(IndicatorConfig()),
+            PivotStructureIndicator(IndicatorConfig()),
         )
     }
 }

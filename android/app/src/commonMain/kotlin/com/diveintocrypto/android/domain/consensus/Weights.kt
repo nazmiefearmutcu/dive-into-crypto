@@ -2,7 +2,7 @@ package com.diveintocrypto.android.domain.consensus
 
 /**
  * Indicator weights — verbatim from the original Python reference implementation.
- * Covers ALL 57 indicators of the full pipeline (15 core + 42 extended).
+ * Covers ALL 60 indicators of the full pipeline (15 core + 45 extended).
  *
  * CANONICAL SOURCE OF TRUTH for default weights. Previously this map lived in
  * `AppContainer` but nothing consumed it — [Scorer.compute] fell back to `?: 1.0`,
@@ -69,6 +69,9 @@ val ALL_INDICATOR_WEIGHTS: Map<String, Double> = mapOf(
     "kalman_trend" to 1.4,
     "half_life_reversion" to 1.0,
     "rolling_sharpe" to 1.2,
+    "engulfing" to 1.2,
+    "liquidity_sweep" to 1.4,
+    "pivot_structure" to 1.1,
 )
 
 /**
@@ -77,8 +80,8 @@ val ALL_INDICATOR_WEIGHTS: Map<String, Double> = mapOf(
  * Precedence rule: the 15 CORE names keep the F2 consensus matrix values
  * ([DEFAULT_F2_WEIGHTS] — the weights production has always applied via
  * SettingsStore, so existing consensus behaviour for the core set is unchanged),
- * while the 42 EXTENDED names take the desktop-reference weights from
- * [ALL_INDICATOR_WEIGHTS]. The result has exactly 57 entries.
+ * while the 45 EXTENDED names take the desktop-reference weights from
+ * [ALL_INDICATOR_WEIGHTS]. The result has exactly 60 entries.
  *
  * `ALL_INDICATOR_WEIGHTS + DEFAULT_F2_WEIGHTS` — right operand wins, so the
  * F2 core overrides the 4 core names on which the two sources differ

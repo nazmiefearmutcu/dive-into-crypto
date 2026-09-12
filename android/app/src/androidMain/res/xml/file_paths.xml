@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Share-card PNGs are written under cacheDir/share_cards/ and shared via
+     the FileProvider (ACTION_SEND). Cache = regenerable, no storage permission. -->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <cache-path
+        name="share_cards"
+        path="share_cards/" />
+</paths>

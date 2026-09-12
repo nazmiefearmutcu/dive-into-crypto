@@ -6,7 +6,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /**
- * Cross-language parity for the EXTENDED indicator set (the 42 indicators beyond
+ * Cross-language parity for the EXTENDED indicator set (the 45 indicators beyond
  * the original fixture-pinned 15-core). Expected values generated from the Python
  * reference engine (`SignalService({})`, in-code defaults) on the same
  * BTCUSDT 1h × 300 fixture candles — signal + score, exact.
@@ -62,6 +62,9 @@ class ExtendedIndicatorsFixtureTest {
         KalmanTrendIndicator(IndicatorConfig()),
         HalfLifeReversionIndicator(IndicatorConfig()),
         RollingSharpeIndicator(IndicatorConfig()),
+        EngulfingIndicator(IndicatorConfig()),
+        LiquiditySweepIndicator(IndicatorConfig()),
+        PivotStructureIndicator(IndicatorConfig()),
     )
 
     /** Python-reference expected outputs (BTCUSDT 1h × 300, in-code defaults). */
@@ -81,6 +84,7 @@ class ExtendedIndicatorsFixtureTest {
         "donchian_breakout" to ("NEUTRAL" to 0),
         "dpo" to ("NEUTRAL" to 0),
         "elder_ray" to ("NEUTRAL" to 0),
+        "engulfing" to ("NEUTRAL" to 0),
         "fisher_transform" to ("BUY" to 1),
         "force_index" to ("BUY" to 1),
         "half_life_reversion" to ("NEUTRAL" to 0),
@@ -91,7 +95,9 @@ class ExtendedIndicatorsFixtureTest {
         "klinger_oscillator" to ("NEUTRAL" to 0),
         "kst" to ("SELL" to -1),
         "linreg_slope" to ("NEUTRAL" to 0),
+        "liquidity_sweep" to ("NEUTRAL" to 0),
         "mass_index" to ("NEUTRAL" to 0),
+        "pivot_structure" to ("SELL" to -1),
         "qstick" to ("BUY" to 1),
         "range_expansion" to ("NEUTRAL" to 0),
         "relative_vigor_index" to ("NEUTRAL" to 0),

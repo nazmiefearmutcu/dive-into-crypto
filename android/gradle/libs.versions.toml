@@ -13,6 +13,8 @@ androidx-navigation = "2.8.0-alpha10"
 # Android-target-only
 androidx-core = "1.13.1"
 androidx-activity = "1.9.3"
+androidx-work = "2.9.1"
+androidx-glance = "1.1.1"
 material = "1.12.0"
 junit = "4.13.2"
 
@@ -35,6 +37,8 @@ androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "androidx
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidx-activity" }
 material = { module = "com.google.android.material:material", version.ref = "material" }
 ktor-client-okhttp = { module = "io.ktor:ktor-client-okhttp", version.ref = "ktor" }
+androidx-work = { module = "androidx.work:work-runtime-ktx", version.ref = "androidx-work" }
+androidx-glance = { module = "androidx.glance:glance-appwidget", version.ref = "androidx-glance" }
 
 # ── iOS target only ────────────────────────────────────────────────────
 ktor-client-darwin = { module = "io.ktor:ktor-client-darwin", version.ref = "ktor" }

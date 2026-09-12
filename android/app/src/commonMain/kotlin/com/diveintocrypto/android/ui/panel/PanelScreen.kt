@@ -22,7 +22,10 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -40,6 +43,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.diveintocrypto.android.AppContainer
 import com.diveintocrypto.android.platform.format
 import com.diveintocrypto.android.platform.nowMillis
+import com.diveintocrypto.android.ui.common.UiLabels
 import com.diveintocrypto.android.ui.panel.components.CandleChartCard
 import com.diveintocrypto.android.ui.panel.components.LiveTfGrid
 import com.diveintocrypto.android.ui.panel.components.PageHeader
@@ -51,6 +55,7 @@ import com.diveintocrypto.android.ui.panel.components.DiveCard
 import com.diveintocrypto.android.ui.theme.DiveColors
 import com.diveintocrypto.android.ui.theme.DiveDims
 import com.diveintocrypto.android.ui.theme.DiveFonts
+import kotlinx.coroutines.delay
 
 /**
  * Panel screen (paper-free). Top to bottom:
@@ -112,10 +117,12 @@ fun PanelScreen(container: AppContainer) {
             )
 
             // CANDLESTICK CHART — engine-cached candles + EMA20/50 + Bollinger fill
-            // + volume + last-price line + CVD delta strip (all from the SAME series
-            // the verdict was computed over). Empty data → honest "VERİ YOK — yenile".
+            // + volume + last-price line + CVD delta strip + vol-cone ±envelope
+            // (all from the SAME series the verdict was computed over). Empty data →
+            // honest "VERİ YOK — yenile".
             CandleChartCard(
                 state = state,
+                cone = state.cone,
                 onRefresh = { vm.refresh() },
                 modifier = Modifier.alpha(if (state.isLoading) 0.5f else 1f)
             )
@@ -136,6 +143,24 @@ fun PanelScreen(container: AppContainer) {
             // new PanelUiState fields. They NEVER change the verdict; "—" = not computable.
             StrategyOverlaysCard(
                 state = state,
+                modifier = Modifier.alpha(if (state.isLoading) 0.5f else 1f)
+            )
+
+            // 0.3.0 PARITY BLOCKS — funding lens · basis · planning strip.
+            // Every field is nullable-honest ("—" = the fetch/math could not be done).
+            FundingCard(
+                lens = state.fundingLens,
+                regime = state.regime,
+                modifier = Modifier.alpha(if (state.isLoading) 0.5f else 1f)
+            )
+
+            BasisCard(
+                block = state.basisBlock,
+                modifier = Modifier.alpha(if (state.isLoading) 0.5f else 1f)
+            )
+
+            PlanningStripCard(
+                plan = state.planning,
                 modifier = Modifier.alpha(if (state.isLoading) 0.5f else 1f)
             )
 
@@ -353,6 +378,279 @@ private fun OverlayRow(label: String, value: String, valueColor: Color) {
             fontSize = 12.sp,
             fontWeight = FontWeight.Bold,
             fontFamily = DiveFonts.body,
+        )
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// 0.3.0 parity cards — FUNDING · BASIS · PLANLAMA. All inputs come from the
+// PanelViewModel's parity bundle; null = honest "—", never a fabricated zero.
+// ═══════════════════════════════════════════════════════════════════════
+
+/**
+ * FUNDING card — predicted vs settled rate (% / 8h), simple APR, the regime
+ * label (NÖTR/POZİTİF/NEGATİF from the predicted rate) and a LIVE ticking
+ * countdown from [FundingAnalytics.FundingLens.secondsToFunding]; "—" when
+ * the venue gave no settlement time (never a fake clock).
+ */
+@Composable
+private fun FundingCard(
+    lens: com.diveintocrypto.android.engine.analytics.FundingAnalytics.FundingLens?,
+    regime: String,
+    modifier: Modifier = Modifier,
+) {
+    // Tick once per second, seeded on each new lens emission; the countdown
+    // counts DOWN from the fetched secondsToFunding. null → static "—".
+    var elapsedSec by remember(lens?.secondsToFunding) { androidx.compose.runtime.mutableLongStateOf(0L) }
+    LaunchedEffect(lens?.secondsToFunding) {
+        if (lens?.secondsToFunding != null) {
+            while (true) {
+                delay(1_000)
+                elapsedSec += 1
+            }
+        }
+    }
+    val secondsLeft = lens?.secondsToFunding?.let { (it - elapsedSec).coerceAtLeast(0L) }
+
+    val regimeColor = when (UiLabels.fundingRegimeLabel(lens?.predictedRatePct ?: 0.0)) {
+        "POZİTİF" -> DiveColors.Green
+        "NEGATİF" -> DiveColors.Red
+        else -> DiveColors.TextMuted
+    }
+
+    DiveCard(title = "FUNDING", modifier = modifier) {
+        if (lens == null) {
+            Text(
+                text = "— (premiumIndex / funding geçmişi alınamadı)",
+                color = DiveColors.TextDim,
+                fontSize = 12.sp,
+                fontFamily = DiveFonts.body,
+            )
+            return@DiveCard
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            FundingCell("TAHMİNİ", "${lens.predictedRatePct.format(4, plus = true)}%", Modifier.weight(1f))
+            FundingCell("SON", "${lens.lastSettledRatePct.format(4, plus = true)}%", Modifier.weight(1f))
+            FundingCell("APR", "${lens.aprPct.format(1, plus = true)}%", Modifier.weight(1f))
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "SETTLEMENT",
+                color = DiveColors.TextDim,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 0.8.sp,
+                fontFamily = DiveFonts.body,
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = UiLabels.countdownLabel(secondsLeft),
+                color = if (secondsLeft != null) DiveColors.Text else DiveColors.TextDim,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Black,
+                fontFamily = DiveFonts.Mono,
+            )
+            Spacer(modifier = Modifier.weight(1f))
+            Text(
+                text = UiLabels.fundingRegimeLabel(lens.predictedRatePct),
+                color = regimeColor,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 0.4.sp,
+                fontFamily = DiveFonts.body,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(regimeColor.copy(alpha = 0.12f))
+                    .border(1.dp, regimeColor.copy(alpha = 0.35f), RoundedCornerShape(4.dp))
+                    .padding(horizontal = 6.dp, vertical = 2.dp),
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = "REJİM $regime",
+                color = DiveColors.TextDim,
+                fontSize = 9.sp,
+                fontFamily = DiveFonts.body,
+            )
+        }
+    }
+}
+
+@Composable
+private fun FundingCell(label: String, value: String, modifier: Modifier = Modifier) {
+    Column(modifier = modifier) {
+        Text(
+            text = label,
+            color = DiveColors.TextDim,
+            fontSize = 9.sp,
+            fontWeight = FontWeight.SemiBold,
+            letterSpacing = 0.4.sp,
+        )
+        Spacer(Modifier.height(1.dp))
+        Text(
+            text = value,
+            color = DiveColors.Text,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold,
+            fontFamily = DiveFonts.Mono,
+        )
+    }
+}
+
+/** BASIS card — perp basis in bps + annualised predicted funding; "—" when null. */
+@Composable
+private fun BasisCard(
+    block: com.diveintocrypto.android.engine.analytics.BasisAnalytics.BasisBlock?,
+    modifier: Modifier = Modifier,
+) {
+    DiveCard(title = "BASİS", modifier = modifier) {
+        if (block == null) {
+            Text(
+                text = "— (mark/index fiyatı alınamadı)",
+                color = DiveColors.TextDim,
+                fontSize = 12.sp,
+                fontFamily = DiveFonts.body,
+            )
+            return@DiveCard
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "BASİS",
+                    color = DiveColors.TextDim,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    letterSpacing = 0.4.sp,
+                )
+                Text(
+                    text = "${block.basisBps.format(1, plus = true)} bps",
+                    color = if (block.basisBps >= 0) DiveColors.Green else DiveColors.Red,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Black,
+                    fontFamily = DiveFonts.Mono,
+                )
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "YILLIK FONLAMA",
+                    color = DiveColors.TextDim,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    letterSpacing = 0.4.sp,
+                )
+                Text(
+                    text = "${block.annFundingPct.format(1, plus = true)}%",
+                    color = if (block.annFundingPct >= 0) DiveColors.Green else DiveColors.Red,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Black,
+                    fontFamily = DiveFonts.Mono,
+                )
+            }
+        }
+        Spacer(Modifier.height(3.dp))
+        Text(
+            text = "pozitif bps = perp pahalı (mark > index)",
+            color = DiveColors.TextDim,
+            fontSize = 9.sp,
+            fontFamily = DiveFonts.body,
+        )
+    }
+}
+
+/**
+ * PLANLAMA strip — ATR%-based SL/TP/envelope geometry for the consensus
+ * direction. INFORMATIONAL ONLY ("sadece bilgi"); no execution promise.
+ */
+@Composable
+private fun PlanningStripCard(
+    plan: com.diveintocrypto.android.engine.analytics.PlanningStrip.Plan?,
+    modifier: Modifier = Modifier,
+) {
+    DiveCard(title = "PLANLAMA", modifier = modifier) {
+        if (plan == null) {
+            Text(
+                text = "— (ATR%/yön/fiyat yok — NÖTR yönde plan kurulmaz)",
+                color = DiveColors.TextDim,
+                fontSize = 12.sp,
+                fontFamily = DiveFonts.body,
+            )
+            return@DiveCard
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            PlanCell("YÖN", plan.direction, accent = true, modifier = Modifier.weight(1f))
+            PlanCell("ATR%", plan.atrPct.format(2), modifier = Modifier.weight(1f))
+            PlanCell("R:R", plan.rr.format(1), modifier = Modifier.weight(1f))
+        }
+        Spacer(Modifier.height(6.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            PlanCell("SL", plan.slPrice.format(2), accent = false, danger = true, modifier = Modifier.weight(1f))
+            PlanCell("TP", plan.tpPrice.format(2), accent = false, good = true, modifier = Modifier.weight(1f))
+            PlanCell("BANT ALTI", plan.envLow.format(2), modifier = Modifier.weight(1f))
+            PlanCell("BANT ÜSTÜ", plan.envHigh.format(2), modifier = Modifier.weight(1f))
+        }
+        Spacer(Modifier.height(3.dp))
+        Text(
+            text = "sadece bilgi — ATR geometrisi, emir kurulmaz",
+            color = DiveColors.TextDim,
+            fontSize = 9.sp,
+            fontFamily = DiveFonts.body,
+        )
+    }
+}
+
+@Composable
+private fun PlanCell(
+    label: String,
+    value: String,
+    accent: Boolean = false,
+    good: Boolean = false,
+    danger: Boolean = false,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(DiveColors.BgCardHover)
+            .border(1.dp, DiveColors.Border, RoundedCornerShape(6.dp))
+            .padding(horizontal = 6.dp, vertical = 5.dp),
+    ) {
+        Text(
+            text = label,
+            color = DiveColors.TextDim,
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 0.4.sp,
+            maxLines = 1,
+        )
+        Spacer(Modifier.height(1.dp))
+        Text(
+            text = value,
+            color = when {
+                good -> DiveColors.Green
+                danger -> DiveColors.Red
+                accent -> DiveColors.Accent
+                else -> DiveColors.Text
+            },
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+            fontFamily = DiveFonts.Mono,
+            maxLines = 1,
         )
     }
 }

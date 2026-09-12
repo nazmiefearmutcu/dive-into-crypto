@@ -223,6 +223,26 @@ class AlertEvaluatorTest {
     }
 
     @Test
+    fun `oiSpikePct signed semantics - negative threshold watches collapses only`() {
+        fun evaluate(threshold: Double, spike: Double) = AlertEvaluator.evaluate(
+            rules = listOf(rule(AlertKind.OI_SPIKE_PCT, threshold = threshold)),
+            inputs = AlertInputs(oiSpikePct = mapOf("BTCUSDT" to spike)),
+            nowMs = 1_000L,
+        )
+        // threshold −10 → fires when spike ≤ −10 (OI collapse).
+        val collapse = evaluate(-10.0, -12.5)
+        assertEquals(1, collapse.fired.size)
+        assertTrue(collapse.fired[0].message.contains("-12.5"))
+        assertTrue(evaluate(-10.0, -5.0).fired.isEmpty(), "−5% is not a ≤ −10% collapse")
+        assertTrue(evaluate(-10.0, 3.0).fired.isEmpty(), "expansion never fires a collapse rule")
+        // A positive threshold stays expansion-only: negative spikes stay silent.
+        assertTrue(evaluate(10.0, -12.5).fired.isEmpty())
+        // Zero threshold = legacy positive-only watch: any expansion, nothing else.
+        assertEquals(1, evaluate(0.0, 0.5).fired.size)
+        assertTrue(evaluate(0.0, -0.5).fired.isEmpty())
+    }
+
+    @Test
     fun `oiSpikePct helper computes first-to-last percent and rejects degenerate series`() {
         assertEquals(10.0, AlertEvaluator.oiSpikePct(listOf(100.0, 105.0, 110.0))!!, 1e-9)
         assertNull(AlertEvaluator.oiSpikePct(emptyList()))

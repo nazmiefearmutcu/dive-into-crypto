@@ -102,6 +102,18 @@ data class PanelUiState(
     val deltaSeries: List<CvdBucket> = emptyList(),
     /** HONESTY: true when the last CVD fetch FAILED (no fabricated zeros). */
     val cvdUnavailable: Boolean = false,
+
+    // ── MARKET-DATA PARITY BLOCKS (ADDITIVE in 0.3.0 — all nullable-honest:
+    //    null = the underlying fetch/math could not be done; NEVER zero-filled) ──
+
+    /** Perp basis in bps (mark vs index) + annualised predicted funding; null = premiumIndex unavailable. */
+    val basisBlock: com.diveintocrypto.android.engine.analytics.BasisAnalytics.BasisBlock? = null,
+    /** Funding lens: predicted vs last-settled rate, APR, seconds to settlement; null = unavailable. */
+    val fundingLens: com.diveintocrypto.android.engine.analytics.FundingAnalytics.FundingLens? = null,
+    /** Vol-cone: log-normal envelope P0·exp(±σ√h) vs the last close (desktop parity); null = not computable. */
+    val cone: com.diveintocrypto.android.engine.analytics.VolCone.ConeEnv? = null,
+    /** ATR%-based SL/TP/envelope planning strip for the consensus direction; null = no ATR%/direction/price. */
+    val planning: com.diveintocrypto.android.engine.analytics.PlanningStrip.Plan? = null,
 )
 
 /** Per-TF signal cell. */

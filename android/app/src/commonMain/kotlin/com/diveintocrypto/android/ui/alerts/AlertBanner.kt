@@ -64,6 +64,7 @@ fun AlertBannerHost(container: AppContainer, modifier: Modifier = Modifier) {
         val fired = banner ?: return@AnimatedVisibility
         val rule = container.rules.value.firstOrNull { it.id == fired.ruleId }
         val accent = bannerColor(fired)
+        val strings = com.diveintocrypto.android.ui.i18n.LocalDiveStrings.current
 
         Row(
             modifier = Modifier
@@ -86,7 +87,7 @@ fun AlertBannerHost(container: AppContainer, modifier: Modifier = Modifier) {
             Spacer(Modifier.width(10.dp))
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
                 Text(
-                    text = "ALARM · ${fired.symbol}",
+                    text = "${strings.alarmPrefix} · ${fired.symbol}",
                     color = accent,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Black,
@@ -108,7 +109,7 @@ fun AlertBannerHost(container: AppContainer, modifier: Modifier = Modifier) {
                     .clickable { container.dismissAlertBanner() }
                     .semantics {
                         role = Role.Button
-                        contentDescription = "Alarm bildirimini kapat"
+                        contentDescription = strings.a11yDismissBanner
                     }
                     .padding(horizontal = 10.dp, vertical = 6.dp),
             ) {

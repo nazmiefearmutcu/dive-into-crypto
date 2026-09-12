@@ -1,20 +1,23 @@
 package com.diveintocrypto.android.domain.alerts
 
-import kotlin.math.abs
-
 /**
  * PURE rule evaluation (no clock reads, no state, no I/O — the clock is a
  * parameter). Given the current rules and the data available this pass, returns
  * the alerts that fire and the updated rules (lastFiredTs advanced; one-shot
  * rules disabled after firing).
  *
- * Coalescing: a rule never re-fires within [COALESCE_MS] of its last fire —
- * the scanner cycles and 1s ticker batches would otherwise spam the same
- * condition every pass.
+ * Coalescing (v2): a rule never re-fires within its OWN [AlertRule.coalesceMs]
+ * window (0 → the engine-wide [COALESCE_MS] default) of its last fire — the
+ * scanner cycles and 1s ticker batches would otherwise spam the same condition
+ * every pass.
+ *
+ * AND semantics (v2): every condition in [AlertRule.effectiveConditions] must be
+ * satisfiable from THIS pass's data for the rule to fire. Any missing data for
+ * any condition = honest silence for the whole rule.
  */
 object AlertEvaluator {
 
-    /** Minimum interval between two fires of the SAME rule (ms). */
+    /** Minimum interval between two fires of the SAME rule (ms) — engine default. */
     const val COALESCE_MS: Long = 60_000L
 
     data class Outcome(
@@ -32,15 +35,21 @@ object AlertEvaluator {
         val updatedRules = rules.map { rule ->
             if (!rule.enabled) return@map rule
             val last = rule.lastFiredTs
-            if (last != null && nowMs - last < coalesceMs) return@map rule
+            // v2: the rule's own window wins; 0 = fall back to the engine default.
+            val window = if (rule.coalesceMs > 0) rule.coalesceMs else coalesceMs
+            if (last != null && nowMs - last < window) return@map rule
 
-            val message = messageFor(rule, inputs) ?: return@map rule
+            val conditions = rule.effectiveConditions
+            if (conditions.isEmpty()) return@map rule
+
+            val metMessages = conditions.map { conditionMessage(it, rule.symbol, inputs) }
+            if (metMessages.any { it == null }) return@map rule // AND: any unknown → silent
 
             fired += FiredAlert(
                 ruleId = rule.id,
                 symbol = rule.symbol,
                 kind = rule.kind,
-                message = message,
+                message = metMessages.filterNotNull().joinToString(" AND "),
                 firedTs = nowMs,
             )
             if (rule.oneShot) rule.copy(enabled = false, lastFiredTs = nowMs)
@@ -49,46 +58,70 @@ object AlertEvaluator {
         return Outcome(fired, updatedRules)
     }
 
-    /** null = the rule's condition is not met (or no data this pass) → silent. */
-    private fun messageFor(rule: AlertRule, inputs: AlertInputs): String? {
-        return when (rule.kind) {
+    /** null = the condition is not met (or no data this pass) → silent. */
+    fun conditionMessage(condition: AlertCondition, symbol: String, inputs: AlertInputs): String? {
+        return when (condition.kind) {
             AlertKind.PRICE_ABOVE -> {
-                val price = inputs.prices[rule.symbol] ?: return null
-                if (price > rule.threshold) {
-                    "${rule.symbol} price above ${rule.threshold} (now $price)"
+                val price = inputs.prices[symbol] ?: return null
+                if (price > condition.threshold) {
+                    "$symbol price above ${condition.threshold} (now $price)"
                 } else null
             }
             AlertKind.PRICE_BELOW -> {
-                val price = inputs.prices[rule.symbol] ?: return null
-                if (price < rule.threshold) {
-                    "${rule.symbol} price below ${rule.threshold} (now $price)"
+                val price = inputs.prices[symbol] ?: return null
+                if (price < condition.threshold) {
+                    "$symbol price below ${condition.threshold} (now $price)"
                 } else null
             }
             AlertKind.VERDICT -> {
-                val v = inputs.verdicts[rule.symbol] ?: return null
+                val v = inputs.verdicts[symbol] ?: return null
                 val dir = directionOf(v.signal) ?: return null // NEUTRAL → silent
-                val wanted = when (rule.direction) {
+                val wanted = when (condition.direction) {
                     AlertRule.DIRECTION_LONG -> 1
                     AlertRule.DIRECTION_SHORT -> -1
                     else -> 0 // ANY
                 }
                 val matches = wanted == 0 || wanted == dir
-                if (matches) "${rule.symbol} verdict ${v.signal} (confidence ${v.confidence}%)"
+                if (matches) "$symbol verdict ${v.signal} (confidence ${v.confidence}%)"
                 else null
             }
             AlertKind.CONFIDENCE_ABOVE -> {
-                val v = inputs.verdicts[rule.symbol] ?: return null
-                if (v.confidence > rule.threshold) {
-                    "${rule.symbol} confidence ${v.confidence}% above ${rule.threshold}"
+                val v = inputs.verdicts[symbol] ?: return null
+                if (v.confidence > condition.threshold) {
+                    "$symbol confidence ${v.confidence}% above ${condition.threshold}"
                 } else null
             }
             AlertKind.OI_SPIKE_PCT -> {
-                val spike = inputs.oiSpikePct[rule.symbol] ?: return null
-                if (abs(spike) >= abs(rule.threshold) && spike > 0) {
-                    "${rule.symbol} OI +${spike}% (threshold +${rule.threshold}%)"
-                } else null
+                // SIGNED threshold semantics (the spike input itself is signed
+                // first→last %): positive threshold = OI EXPANSION spike
+                // (fires when spike >= threshold); negative threshold = OI
+                // COLLAPSE (fires when spike <= threshold, e.g. −10 → −12%
+                // fires, −5% stays silent); threshold 0 = legacy positive-only
+                // watch — any expansion at all.
+                val spike = inputs.oiSpikePct[symbol] ?: return null
+                val threshold = condition.threshold
+                val met = when {
+                    threshold > 0 -> spike >= threshold
+                    threshold < 0 -> spike <= threshold
+                    else -> spike > 0
+                }
+                if (!met) return null
+                if (threshold < 0) "$symbol OI $spike% (threshold $threshold%)"
+                else "$symbol OI +$spike% (threshold +$threshold%)"
             }
         }
+    }
+
+    /** null = the rule's condition set is not met (or no data this pass) → silent. */
+    @Deprecated(
+        message = "v2 evaluates AND groups; kept for one-transition for v1 callers.",
+        replaceWith = ReplaceWith("AlertEvaluator.evaluate(...)"),
+    )
+    fun messageFor(rule: AlertRule, inputs: AlertInputs): String? {
+        val conditions = rule.effectiveConditions
+        if (conditions.isEmpty()) return null
+        val met = conditions.map { conditionMessage(it, rule.symbol, inputs) }
+        return if (met.any { it == null }) null else met.filterNotNull().joinToString(" AND ")
     }
 
     /** +1 for BUY/STRONG_BUY, −1 for SELL/STRONG_SELL, null for NEUTRAL/unknown. */

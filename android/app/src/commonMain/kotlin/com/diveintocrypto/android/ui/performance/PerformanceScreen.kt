@@ -22,6 +22,9 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -39,8 +42,10 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.diveintocrypto.android.AppContainer
 import com.diveintocrypto.android.data.binance.Ticker24h
 import com.diveintocrypto.android.domain.evidence.EvidenceBucketStats
+import com.diveintocrypto.android.domain.evidence.EvidenceGrader
 import com.diveintocrypto.android.platform.format
 import com.diveintocrypto.android.platform.nowMillis
+import com.diveintocrypto.android.ui.common.UiLabels
 import com.diveintocrypto.android.ui.panel.components.PageHeader
 import com.diveintocrypto.android.ui.panel.components.DiveCard
 import com.diveintocrypto.android.ui.theme.DiveColors
@@ -61,6 +66,7 @@ import com.diveintocrypto.android.ui.theme.DiveFonts
 fun PerformanceScreen(container: AppContainer) {
     val vm: PerformanceViewModel = viewModel { PerformanceViewModel(container) }
     val state by vm.ui.collectAsStateWithLifecycle()
+    val strings = com.diveintocrypto.android.ui.i18n.LocalDiveStrings.current
 
     // Pull-to-refresh wired to the VM's PUBLIC refresh() (loads once on init otherwise).
     PullToRefreshBox(
@@ -77,7 +83,7 @@ fun PerformanceScreen(container: AppContainer) {
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             PageHeader(
-                title = "24h Leaderboard",
+                title = strings.leaderboardTitle,
                 lastUpdateMs = state.lastUpdateMs,
                 stale = state.lastUpdateMs?.let { (nowMillis() - it) > 60_000 } ?: false,
                 onRefresh = { vm.refresh() },
@@ -93,7 +99,7 @@ fun PerformanceScreen(container: AppContainer) {
             )
 
             if (state.totalSymbols > 0) {
-                DiveCard(title = "SCANNED UNIVERSE") {
+                DiveCard(title = strings.cardScannedUniverse) {
                     Text(
                         text = "${state.totalSymbols} USDT-M futures symbols · stablecoins removed",
                         color = DiveColors.TextMuted,
@@ -107,10 +113,10 @@ fun PerformanceScreen(container: AppContainer) {
             }
             state.error?.let { ErrorCard(it) }
 
-            LeaderboardCard(title = "🚀 TOP GAINERS", rows = state.gainers, valueColor = DiveColors.Green)
-            LeaderboardCard(title = "📉 TOP LOSERS", rows = state.losers, valueColor = DiveColors.Red)
+            LeaderboardCard(title = strings.cardGainers, rows = state.gainers, valueColor = DiveColors.Green)
+            LeaderboardCard(title = strings.cardLosers, rows = state.losers, valueColor = DiveColors.Red)
             LeaderboardCard(
-                title = "💧 HIGHEST VOLUME",
+                title = strings.cardVolume,
                 rows = state.byVolume,
                 valueColor = DiveColors.Accent,
                 showVolume = true,
@@ -128,7 +134,7 @@ private fun LeaderboardCard(
 ) {
     DiveCard(title = title) {
         if (rows.isEmpty()) {
-            Text("No data", color = DiveColors.TextDim, fontSize = 11.sp)
+            Text(com.diveintocrypto.android.ui.i18n.LocalDiveStrings.current.noData, color = DiveColors.TextDim, fontSize = 11.sp)
             return@DiveCard
         }
         rows.forEachIndexed { idx, t ->
@@ -212,7 +218,7 @@ private fun LeaderRow(rank: Int, ticker: Ticker24h, valueColor: Color, showVolum
 
 @Composable
 private fun LoadingCard() {
-    DiveCard(title = "LOADING") {
+    DiveCard(title = com.diveintocrypto.android.ui.i18n.LocalDiveStrings.current.cardLoading) {
         Text("Fetching /fapi/v1/ticker/24hr...", color = DiveColors.TextMuted, fontSize = 12.sp)
     }
 }
@@ -239,9 +245,12 @@ private fun formatVolume(v: Double): String = when {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// MOTOR KANITI (kendini notlama) — verdict-evidence self-grading section.
+// MOTOR KANITI v2 (kendini notlama) — verdict-evidence self-grading section.
 // Renders EvidenceState straight from the VM; nothing here recomputes grades,
 // invents buckets or hides a failed pass (stale/error honest chips).
+// v2 additions: Wilson hit-rate rendering ("57% [45–89] · n=214"), gated
+// buckets, ECE 10-bin mini strip + Brier skill badges, and 7G/30G/TÜMÜ
+// window chips switching the displayed bucket set from [EvidenceState.windows].
 // ═══════════════════════════════════════════════════════════════════════
 
 /** Fixed verdict-bucket display order: LONG (BUY) · SHORT (SELL) · NEUTRAL. */
@@ -257,7 +266,18 @@ fun EvidenceCard(
     onHorizon: (Long) -> Unit,
     onGrade: () -> Unit,
 ) {
-    DiveCard(title = "MOTOR KANITI (kendini notlama)") {
+    val strings = com.diveintocrypto.android.ui.i18n.LocalDiveStrings.current
+    // Rolling-window lens: the displayed bucket set comes from state.windows.
+    var windowKey by remember { mutableStateOf(EvidenceGrader.WINDOW_ALL) }
+
+    /** Localized window label (7G/30G/TÜMÜ in TR; 7D/30D/ALL in EN). */
+    fun windowLabel(key: String): String = when (key) {
+        EvidenceGrader.WINDOW_7D -> strings.window7d
+        EvidenceGrader.WINDOW_30D -> strings.window30d
+        else -> strings.windowAll
+    }
+
+    DiveCard(title = strings.evidenceTitle) {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             // ── Horizon chips + GRADE button ──────────────────────────
             Row(
@@ -265,7 +285,11 @@ fun EvidenceCard(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                listOf(1L to "1s", 4L to "4s", 24L to "24s").forEach { (hours, label) ->
+                listOf(
+                    1L to strings.horizon1h,
+                    4L to strings.horizon4h,
+                    24L to strings.horizon24h,
+                ).forEach { (hours, label) ->
                     HorizonChip(
                         label = label,
                         selected = evidence.horizonHours == hours,
@@ -279,24 +303,51 @@ fun EvidenceCard(
 
             // ── Coverage line + honest chips ──────────────────────────
             Text(
-                text = "arşiv ${evidence.archived} · notalı ${evidence.graded} · ufuk ${evidence.horizonHours} sa",
+                text = strings.coverageLine(evidence.archived, evidence.graded, evidence.horizonHours),
                 color = DiveColors.TextMuted,
                 fontSize = 11.sp,
                 fontFamily = DiveFonts.body,
             )
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 if (evidence.stale) {
-                    HonestChip(text = "KISMİ — eski kayıtlar notalı değil", color = DiveColors.Warn)
+                    HonestChip(text = strings.chipPartial, color = DiveColors.Warn)
                 }
                 if (evidence.error != null) {
-                    HonestChip(text = "hata: ${evidence.error}", color = DiveColors.Red)
+                    HonestChip(text = "${strings.errorPrefix} ${evidence.error}", color = DiveColors.Red)
                 }
             }
 
-            // ── Verdict bucket cards ──────────────────────────────────
+            // ── Calibration badges: ECE (10-bin strip) + Brier skill ──
+            CalibrationBadgesRow(evidence = evidence)
+
+            // ── Window chips: 7G / 30G / TÜMÜ ─────────────────────────
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                listOf(
+                    EvidenceGrader.WINDOW_7D,
+                    EvidenceGrader.WINDOW_30D,
+                    EvidenceGrader.WINDOW_ALL,
+                ).forEach { key ->
+                    HorizonChip(
+                        label = windowLabel(key),
+                        selected = windowKey == key,
+                        enabled = true,
+                        onClick = { windowKey = key },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+
+            // ── Verdict bucket cards (from the SELECTED window) ───────
+            val windowGrade = evidence.windows[windowKey]
+            val byVerdict = windowGrade?.byVerdict ?: evidence.byVerdict
+            val byConfidence = windowGrade?.byConfidence ?: evidence.byConfidence
+
             if (evidence.archived == 0 && evidence.graded == 0) {
                 Text(
-                    text = "Kanıt yok — taramalar arşive biriktikçe notlanır.",
+                    text = strings.noEvidence,
                     color = DiveColors.TextDim,
                     fontSize = 12.sp,
                 )
@@ -306,7 +357,7 @@ fun EvidenceCard(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     VERDICT_BUCKETS.forEach { (key, label) ->
-                        val stats = evidence.byVerdict[key]
+                        val stats = byVerdict[key]
                         VerdictBucketCard(
                             label = label,
                             stats = stats,
@@ -316,9 +367,9 @@ fun EvidenceCard(
                 }
 
                 // ── byConfidence mini-table ───────────────────────────
-                if (evidence.byConfidence.isNotEmpty()) {
+                if (byConfidence.isNotEmpty()) {
                     Text(
-                        text = "GÜVEN BANTLARI",
+                        text = "${strings.lblConfidenceBands} · ${windowLabel(windowKey)}",
                         color = DiveColors.TextDim,
                         fontSize = 9.sp,
                         fontWeight = FontWeight.Bold,
@@ -326,7 +377,7 @@ fun EvidenceCard(
                         fontFamily = DiveFonts.body,
                     )
                     Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                        evidence.byConfidence.entries
+                        byConfidence.entries
                             .sortedBy { (k, _) -> k.split("-").firstOrNull()?.toIntOrNull() ?: 0 }
                             .forEach { (band, stats) ->
                                 ConfidenceRow(band = band, stats = stats)
@@ -334,6 +385,139 @@ fun EvidenceCard(
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * ECE badge (with the 10-bin reliability mini strip) + Brier + Brier-skill
+ * badges. All values come straight from the v2 state; null → "—" (no graded
+ * samples yet — never a fabricated zero).
+ */
+@Composable
+private fun CalibrationBadgesRow(evidence: EvidenceState) {
+    val strings = com.diveintocrypto.android.ui.i18n.LocalDiveStrings.current
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // ECE badge with the 10-bin mini bar strip.
+        Column(
+            modifier = Modifier
+                .weight(1.6f)
+                .clip(RoundedCornerShape(8.dp))
+                .background(DiveColors.BgCardHover)
+                .border(1.dp, DiveColors.Border, RoundedCornerShape(8.dp))
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "ECE",
+                    color = DiveColors.TextMuted,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Black,
+                    letterSpacing = 0.8.sp,
+                    fontFamily = DiveFonts.body,
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = UiLabels.eceLabel(evidence.ece),
+                    color = DiveColors.Text,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = DiveFonts.Mono,
+                )
+            }
+            Spacer(Modifier.height(5.dp))
+            // 10-bin strip: bar height = bin share, color = |pred − obs| gap.
+            val fractions = UiLabels.binBarFractions(evidence.eceBins.map { it.samples })
+            val heights = listOf(4.dp, 8.dp, 12.dp, 16.dp)
+            Row(
+                modifier = Modifier.fillMaxWidth().height(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                verticalAlignment = Alignment.Bottom,
+            ) {
+                evidence.eceBins.forEachIndexed { i, bin ->
+                    val f = fractions.getOrElse(i) { 0f }
+                    val h = heights[(f * (heights.size - 1)).toInt().coerceIn(0, heights.size - 1)]
+                    val colorToken = UiLabels.binGapColorToken(bin.gap)
+                    val color = when (colorToken) {
+                        UiLabels.TOK_GREEN -> DiveColors.Green
+                        UiLabels.TOK_WARN -> DiveColors.Warn
+                        UiLabels.TOK_RED -> DiveColors.Red
+                        else -> DiveColors.TextDim
+                    }
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(h)
+                            .clip(RoundedCornerShape(1.dp))
+                            .background(if (bin.samples > 0) color else DiveColors.Border),
+                    )
+                }
+                repeat((10 - evidence.eceBins.size).coerceAtLeast(0)) {
+                    Box(modifier = Modifier.weight(1f).height(4.dp))
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = strings.binsCaption,
+                color = DiveColors.TextDim,
+                fontSize = 9.sp,
+                fontFamily = DiveFonts.body,
+            )
+        }
+
+        // Brier + skill badge.
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .clip(RoundedCornerShape(8.dp))
+                .background(DiveColors.BgCardHover)
+                .border(1.dp, DiveColors.Border, RoundedCornerShape(8.dp))
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+        ) {
+            Text(
+                text = "BRIER",
+                color = DiveColors.TextMuted,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Black,
+                letterSpacing = 0.8.sp,
+                fontFamily = DiveFonts.body,
+            )
+            Text(
+                text = evidence.brier?.let { it.format(3) } ?: "—",
+                color = DiveColors.Text,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = DiveFonts.Mono,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = strings.lblScore,
+                color = DiveColors.TextMuted,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Black,
+                letterSpacing = 0.8.sp,
+                fontFamily = DiveFonts.body,
+            )
+            val skillToken = when {
+                evidence.brierSkill == null -> UiLabels.TOK_MUTED
+                evidence.brierSkill > 0 -> UiLabels.TOK_GREEN
+                else -> UiLabels.TOK_RED
+            }
+            Text(
+                text = UiLabels.brierSkillLabel(evidence.brierSkill),
+                color = when (skillToken) {
+                    UiLabels.TOK_GREEN -> DiveColors.Green
+                    UiLabels.TOK_RED -> DiveColors.Red
+                    else -> DiveColors.TextMuted
+                },
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = DiveFonts.Mono,
+            )
         }
     }
 }
@@ -349,6 +533,7 @@ private fun HorizonChip(
     val bg = if (selected) DiveColors.Accent.copy(alpha = 0.18f) else DiveColors.BgCardHover
     val border = if (selected) DiveColors.Accent.copy(alpha = 0.6f) else DiveColors.Border
     val fg = if (selected) DiveColors.Accent else DiveColors.TextMuted
+    val strings = com.diveintocrypto.android.ui.i18n.LocalDiveStrings.current
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(8.dp))
@@ -356,7 +541,7 @@ private fun HorizonChip(
             .border(1.dp, border, RoundedCornerShape(8.dp))
             .semantics {
                 role = Role.Button
-                stateDescription = if (selected) "Seçili" else "Seçili değil"
+                stateDescription = if (selected) strings.selected else strings.notSelected
             }
             .clickable(enabled = enabled, onClick = onClick)
             .padding(vertical = 9.dp),
@@ -385,7 +570,8 @@ private fun GradeButton(isGrading: Boolean, onGrade: () -> Unit) {
         contentAlignment = Alignment.Center,
     ) {
         Text(
-            text = if (isGrading) "NOTLANIYOR…" else "YENİDEN NOTLA",
+            text = if (isGrading) com.diveintocrypto.android.ui.i18n.LocalDiveStrings.current.gradingBusy
+            else com.diveintocrypto.android.ui.i18n.LocalDiveStrings.current.btnRegrade,
             // Preset-aware on-accent color; dim text while grading (disabled).
             color = if (isGrading) DiveColors.TextMuted else MaterialTheme.colorScheme.onPrimary,
             fontSize = 13.sp,
@@ -421,13 +607,27 @@ private fun VerdictBucketCard(label: String, stats: EvidenceBucketStats?, modifi
             // Honest absence — a bucket with no graded samples renders "—", not zeros.
             Text("n=0 · —", color = DiveColors.TextDim, fontSize = 11.sp, fontFamily = DiveFonts.body)
         } else {
+            // v2 Wilson rendering: "57% [45–89] · n=214"; n<5 → "—"; gated → dim + note.
+            val dimmed = stats.gated && stats.samples < 5
+            val note = UiLabels.smallSampleNote(stats.samples, stats.gated)
             Text(
-                text = "n=${stats.samples} · ${(stats.hitRate * 100).format(0)}%",
-                color = DiveColors.Text,
+                text = UiLabels.hitRateLabel(stats.samples, stats.hitRate, stats.hitRateLo, stats.hitRateHi),
+                color = if (dimmed) DiveColors.TextMuted else DiveColors.Text,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Bold,
-                fontFamily = DiveFonts.body,
+                fontFamily = DiveFonts.Mono,
+                maxLines = 2,
+                lineHeight = 14.sp,
             )
+            if (note != null) {
+                Text(
+                    text = note,
+                    color = DiveColors.TextMuted,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    fontFamily = DiveFonts.body,
+                )
+            }
             // Hit-rate bar
             Box(
                 modifier = Modifier
@@ -438,14 +638,15 @@ private fun VerdictBucketCard(label: String, stats: EvidenceBucketStats?, modifi
             ) {
                 Box(
                     modifier = Modifier
-                        .fillMaxWidth(stats.hitRate.toFloat().coerceIn(0f, 1f))
+                        .fillMaxWidth((stats.hitRate?.toFloat() ?: 0f).coerceIn(0f, 1f))
                         .height(5.dp)
                         .clip(RoundedCornerShape(3.dp))
-                        .background(DiveColors.Accent),
+                        .background(if (stats.gated) DiveColors.TextMuted else DiveColors.Accent),
                 )
             }
             Text(
-                text = "medyan ${stats.medianReturnPct.format(2, plus = true)}%",
+                text = com.diveintocrypto.android.ui.i18n.LocalDiveStrings.current.medianPrefix +
+                    " ${stats.medianReturnPct.format(2, plus = true)}%",
                 color = if (stats.medianReturnPct >= 0) DiveColors.Green else DiveColors.Red,
                 fontSize = 10.sp,
                 fontFamily = DiveFonts.body,
@@ -456,42 +657,55 @@ private fun VerdictBucketCard(label: String, stats: EvidenceBucketStats?, modifi
 
 @Composable
 private fun ConfidenceRow(band: String, stats: EvidenceBucketStats) {
-    Row(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(4.dp))
             .background(DiveColors.BgCardHover)
             .padding(horizontal = 8.dp, vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            text = band,
-            color = DiveColors.TextMuted,
-            fontSize = 11.sp,
-            fontFamily = DiveFonts.Mono,
-            modifier = Modifier.width(52.dp),
-        )
-        Text(
-            text = "n=${stats.samples}",
-            color = DiveColors.TextDim,
-            fontSize = 11.sp,
-            fontFamily = DiveFonts.body,
-            modifier = Modifier.width(52.dp),
-        )
-        Text(
-            text = "%${(stats.hitRate * 100).format(0)}",
-            color = DiveColors.Text,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Bold,
-            fontFamily = DiveFonts.body,
-            modifier = Modifier.weight(1f),
-        )
-        Text(
-            text = "${stats.medianReturnPct.format(2, plus = true)}%",
-            color = if (stats.medianReturnPct >= 0) DiveColors.Green else DiveColors.Red,
-            fontSize = 11.sp,
-            fontFamily = DiveFonts.body,
-        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = band,
+                color = DiveColors.TextMuted,
+                fontSize = 11.sp,
+                fontFamily = DiveFonts.Mono,
+                modifier = Modifier.width(52.dp),
+            )
+            Text(
+                text = "n=${stats.samples}",
+                color = DiveColors.TextDim,
+                fontSize = 11.sp,
+                fontFamily = DiveFonts.body,
+                modifier = Modifier.width(52.dp),
+            )
+            // v2 Wilson hit-rate with interval; "—" below the n<5 display floor.
+            Text(
+                text = UiLabels.hitRateLabel(stats.samples, stats.hitRate, stats.hitRateLo, stats.hitRateHi)
+                    .removeSuffix(" · n=${stats.samples}"),
+                color = if (stats.gated) DiveColors.TextMuted else DiveColors.Text,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = DiveFonts.Mono,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = "${stats.medianReturnPct.format(2, plus = true)}%",
+                color = if (stats.medianReturnPct >= 0) DiveColors.Green else DiveColors.Red,
+                fontSize = 11.sp,
+                fontFamily = DiveFonts.body,
+            )
+        }
+        UiLabels.smallSampleNote(stats.samples, stats.gated)?.let { note ->
+            Text(
+                text = note,
+                color = DiveColors.TextDim,
+                fontSize = 9.sp,
+                fontFamily = DiveFonts.body,
+            )
+        }
     }
 }
 

@@ -9,6 +9,7 @@ import kotlinx.atomicfu.locks.SynchronizedObject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -19,10 +20,16 @@ import kotlinx.serialization.json.Json
 /**
  * Local alert engine — evaluates rules cheaply on two hooks:
  *
- *   1. LIVE TICKER TICKS → PRICE_ABOVE / PRICE_BELOW (driven by the all-market
- *      mini-ticker StateFlow; evaluated per ~1s batch, coalesced).
+ *   1. LIVE TICKER TICKS → PRICE_ABOVE / PRICE_BELOW conditions (driven by the
+ *      all-market mini-ticker StateFlow; evaluated per ~1s batch, coalesced).
  *   2. SCAN-CYCLE END ([onScanResults]) → VERDICT / CONFIDENCE_ABOVE, plus
  *      OI_SPIKE_PCT when the caller supplies the (30s-cached) OI series.
+ *
+ * v2 (0.3.0): a rule carries a LIST of AND-ed [AlertCondition]s plus a
+ * per-rule [AlertRule.coalesceMs] re-fire window. v1 single-condition rules are
+ * MIGRATED on load: each becomes a v2 rule with exactly one condition
+ * (kind/direction/threshold preserved) and is persisted under the versioned
+ * key [KEY_RULES_V2] (the v1 blob stays on disk as a read-only fallback).
  *
  * When a rule fires:
  *   (a) the event is prepended to the fired-history ring (last [HISTORY_CAP],
@@ -41,7 +48,8 @@ class AlertEngine(
     /**
      * Live last-price map (from [LiveTickerEngine]). Optional so pure tests can
      * construct the engine without a running ticker stream; when supplied,
-     * PRICE_* rules are evaluated on every emission after [startTickerObservation].
+     * PRICE_* conditions are evaluated on every emission after
+     * [startTickerObservation].
      */
     private val tickerSource: StateFlow<Map<String, LiveTickerEngine.LiveTicker>>? = null,
 ) {
@@ -50,8 +58,19 @@ class AlertEngine(
         /** Fired-history ring size (spec: last 100). */
         const val HISTORY_CAP = 100
 
+        /** v2 rules blob (current). */
+        const val KEY_RULES_V2 = "alert_rules_v2"
+
+        /** v1 rules blob — READ-ONLY fallback for migration. */
         const val KEY_RULES = "alert_rules_v1"
+
         const val KEY_HISTORY = "alert_history_v1"
+
+        /** PURE migration: a v1 rule becomes a v2 rule with one identical condition. */
+        fun migrateV1(v1: AlertRule): AlertRule = if (v1.conditions.isNotEmpty()) v1 else v1.copy(
+            conditions = listOf(AlertCondition(v1.kind, v1.direction, v1.threshold)),
+            coalesceMs = if (v1.coalesceMs > 0) v1.coalesceMs else AlertRule.COALESCE_DEFAULT_MS,
+        )
     }
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
@@ -68,38 +87,76 @@ class AlertEngine(
     val banner: StateFlow<FiredAlert?> = _banner.asStateFlow()
 
     init {
-        // Restored PRICE_* rules need the live loop armed again.
-        if (_rules.value.any {
-                it.enabled && (it.kind == AlertKind.PRICE_ABOVE || it.kind == AlertKind.PRICE_BELOW)
-            }
-        ) {
+        // Restored rules with a PRICE_* condition need the live loop armed again.
+        if (_rules.value.any { it.enabled && hasPriceCondition(it) }) {
             startTickerObservation()
         }
     }
 
+    /**
+     * Releases the engine's coroutine scope (ticker-observation loop included).
+     * Only for THROWAWAY engines (e.g. a per-run worker container) — the
+     * Application-scoped engine lives for the process lifetime and is never
+     * closed. The engine is unusable afterwards.
+     */
+    fun close() {
+        scope.cancel()
+    }
+
     fun dismissBanner() { _banner.value = null }
 
+    /** v1-shaped add (single condition). Kept working — the UI + tests use it. */
     fun addRule(
         symbol: String,
         kind: AlertKind,
         direction: String = AlertRule.DIRECTION_ANY,
         threshold: Double = 0.0,
         oneShot: Boolean = false,
+    ): AlertRule = addRule(
+        symbol = symbol,
+        conditions = listOf(AlertCondition(kind, direction, threshold)),
+        oneShot = oneShot,
+    )
+
+    /** v2 add: a rule from an AND-ed condition group (kind/direction/threshold mirror the first). */
+    fun addRule(
+        symbol: String,
+        conditions: List<AlertCondition>,
+        oneShot: Boolean = false,
+        coalesceMs: Long = AlertRule.COALESCE_DEFAULT_MS,
     ): AlertRule {
+        val primary = conditions.first()
         val rule = AlertRule(
             id = randomId(),
             symbol = symbol.uppercase(),
-            kind = kind,
-            direction = direction,
-            threshold = threshold,
+            kind = primary.kind,
+            direction = primary.direction,
+            threshold = primary.threshold,
             oneShot = oneShot,
             enabled = true,
             createdTs = nowMillis(),
+            conditions = conditions,
+            coalesceMs = coalesceMs,
         )
         mutexFreeAdd(rule)
-        if (kind == AlertKind.PRICE_ABOVE || kind == AlertKind.PRICE_BELOW) startTickerObservation()
+        if (hasPriceCondition(rule)) startTickerObservation()
         return rule
     }
+
+    /** Sets the per-rule re-fire coalescing window (ms). 0 = engine default. */
+    fun setRuleCoalesceMs(id: String, coalesceMs: Long) {
+        synchronized(lock) {
+            _rules.value = _rules.value.map {
+                if (it.id == id) it.copy(coalesceMs = coalesceMs) else it
+            }
+            persistRules(_rules.value)
+        }
+    }
+
+    private fun hasPriceCondition(rule: AlertRule): Boolean =
+        rule.effectiveConditions.any {
+            it.kind == AlertKind.PRICE_ABOVE || it.kind == AlertKind.PRICE_BELOW
+        }
 
     private fun mutexFreeAdd(rule: AlertRule) {
         synchronized(lock) {
@@ -128,8 +185,8 @@ class AlertEngine(
     /**
      * SCAN-CYCLE HOOK. [verdicts] = symbol-keyed verdict snapshots (usually the
      * survivor table head). [oiSpikePct] = symbol → OI spike percent (optional —
-     * only computed for symbols that have an OI rule, so the extra REST calls
-     * stay bounded).
+     * only computed for symbols that have an OI condition, so the extra REST
+     * calls stay bounded).
      */
     suspend fun onScanResults(
         verdicts: Map<String, AlertVerdict>,
@@ -160,7 +217,7 @@ class AlertEngine(
 
     /**
      * Starts (once) the live-ticker observation loop that evaluates PRICE_*
-     * rules on every mini-ticker map emission. Cheap when no price rules exist.
+     * conditions on every mini-ticker map emission. Cheap when no price rules exist.
      */
     fun startTickerObservation() {
         if (tickerObserving) return
@@ -169,7 +226,7 @@ class AlertEngine(
         scope.launch {
             source.collect { tickers ->
                 val current = _rules.value
-                if (current.none { it.enabled && (it.kind == AlertKind.PRICE_ABOVE || it.kind == AlertKind.PRICE_BELOW) }) {
+                if (current.none { it.enabled && hasPriceCondition(it) }) {
                     return@collect
                 }
                 val prices = tickers.mapValues { it.value.price }
@@ -183,11 +240,25 @@ class AlertEngine(
         }
     }
 
-    private fun applyOutcome(outcome: AlertEvaluator.Outcome) {
+    /**
+     * Persists an evaluation outcome. The outcome's rule list was captured
+     * BEFORE the lock — a [removeRule] between evaluation and persist would
+     * otherwise silently RESURRECT the removed rule by writing the stale
+     * snapshot wholesale. Instead the outcome is mapped onto the CURRENT rule
+     * list by id: only lastFiredTs/enabled are adopted, and only for rules that
+     * still exist. Removed ids are never re-added; rules added in the interim
+     * are kept untouched.
+     */
+    internal fun applyOutcome(outcome: AlertEvaluator.Outcome) {
         if (outcome.fired.isEmpty()) return
         synchronized(lock) {
-            _rules.value = outcome.rules
-            persistRules(outcome.rules)
+            val updatedById = outcome.rules.associateBy { it.id }
+            _rules.value = _rules.value.map { current ->
+                updatedById[current.id]?.let { updated ->
+                    current.copy(lastFiredTs = updated.lastFiredTs, enabled = updated.enabled)
+                } ?: current
+            }
+            persistRules(_rules.value)
             // Newest-first ring.
             _firedHistory.value = (outcome.fired.asReversed() + _firedHistory.value).take(HISTORY_CAP)
             persistHistory(_firedHistory.value)
@@ -200,15 +271,34 @@ class AlertEngine(
 
     private fun persistRules(rules: List<AlertRule>) {
         runCatching {
-            settingsStore.putRaw(KEY_RULES, json.encodeToString(ListSerializer(AlertRule.serializer()), rules))
+            settingsStore.putRaw(KEY_RULES_V2, json.encodeToString(ListSerializer(AlertRule.serializer()), rules))
         }
     }
 
-    private fun loadRules(): List<AlertRule> = runCatching {
-        val raw = settingsStore.getRaw(KEY_RULES) ?: return emptyList()
-        if (raw.isBlank()) emptyList()
-        else json.decodeFromString(ListSerializer(AlertRule.serializer()), raw)
-    }.getOrDefault(emptyList())
+    /**
+     * Load order: v2 blob first; when absent/blank, fall back to the v1 blob and
+     * MIGRATE (each v1 rule → one-condition v2, immediately persisted to v2).
+     * The v1 blob is never deleted (read-only fallback).
+     */
+    private fun loadRules(): List<AlertRule> {
+        val v2Raw = runCatching { settingsStore.getRaw(KEY_RULES_V2) }.getOrNull()
+        if (!v2Raw.isNullOrBlank()) {
+            val decoded = runCatching {
+                json.decodeFromString(ListSerializer(AlertRule.serializer()), v2Raw)
+            }.getOrDefault(emptyList())
+            if (decoded.isNotEmpty()) return decoded
+        }
+        val v1Raw = runCatching { settingsStore.getRaw(KEY_RULES) }.getOrNull()
+        if (v1Raw.isNullOrBlank()) return emptyList()
+        val v1 = runCatching {
+            json.decodeFromString(ListSerializer(AlertRule.serializer()), v1Raw)
+        }.getOrDefault(emptyList())
+        if (v1.isEmpty()) return emptyList()
+        val migrated = v1.map { migrateV1(it) }
+        // Write the migrated blob forward so the next load skips the fallback.
+        runCatching { persistRules(migrated) }
+        return migrated
+    }
 
     private fun persistHistory(history: List<FiredAlert>) {
         runCatching {

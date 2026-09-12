@@ -3,6 +3,7 @@ package com.diveintocrypto.android.domain.evidence
 import com.diveintocrypto.android.data.KeyValueStore
 import com.diveintocrypto.android.platform.nowMillis
 import com.diveintocrypto.android.platform.synchronized
+import kotlinx.atomicfu.atomic
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
@@ -39,11 +40,19 @@ class EvidenceStore(
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val lock = kotlinx.atomicfu.locks.SynchronizedObject()
 
+    /** Bumped on every append — lets readers (e.g. cached verdict providers)
+     *  invalidate cheaply instead of re-reading the whole archive. */
+    private val versionCounter = atomic(0L)
+
+    /** Monotonic archive revision: changes exactly when new records are appended. */
+    val version: Long get() = versionCounter.value
+
     /** Appends one record (ring-capped). */
     fun append(record: VerdictRecord) {
         synchronized(lock) {
             val lines = readLinesUnlocked()
             writeLinesUnlocked(ringAppend(lines, encodeLine(record), RING_CAP))
+            versionCounter.incrementAndGet()
         }
     }
 
@@ -54,6 +63,7 @@ class EvidenceStore(
             var lines = readLinesUnlocked()
             for (r in records) lines = ringAppend(lines, encodeLine(r), RING_CAP)
             writeLinesUnlocked(lines)
+            versionCounter.incrementAndGet()
         }
     }
 

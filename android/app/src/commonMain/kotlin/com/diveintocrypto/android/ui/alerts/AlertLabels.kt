@@ -124,6 +124,58 @@ object AlertLabels {
         }
     }
 
+    // ── v2: cooldown chips + condition summary ───────────────────────────
+
+    /**
+     * One cooldown chip preset. [coalesceMs] is the rule's re-fire window;
+     * [oneShot] chips ignore it ("once" = auto-disable after first fire).
+     */
+    data class CooldownChip(val label: String, val coalesceMs: Long, val oneShot: Boolean)
+
+    /** The 4 cooldown chips: 1 DK / 15 DK / 1 SA / TEK ATIŞ (engine constants). */
+    val COOLDOWN_CHIPS: List<CooldownChip> = listOf(
+        CooldownChip("1 DK", AlertRule.COALESCE_1M, oneShot = false),
+        CooldownChip("15 DK", AlertRule.COALESCE_15M, oneShot = false),
+        CooldownChip("1 SA", AlertRule.COALESCE_1H, oneShot = false),
+        CooldownChip("TEK ATIŞ", coalesceMs = 0L, oneShot = true),
+    )
+
+    /** The chip matching a rule's cooldown config (default → the 1 DK chip). */
+    fun selectedCooldownChip(oneShot: Boolean, coalesceMs: Long): CooldownChip =
+        COOLDOWN_CHIPS.firstOrNull { chip ->
+            chip.oneShot == oneShot && (oneShot || chip.coalesceMs == coalesceMs)
+        } ?: COOLDOWN_CHIPS.first()
+
+    /** Cooldown display for a rule: oneShot wins; unmatched windows render honestly ("N dk"). */
+    fun cooldownLabel(oneShot: Boolean, coalesceMs: Long): String = when {
+        oneShot -> "TEK ATIŞ"
+        coalesceMs == AlertRule.COALESCE_1M -> "1 DK"
+        coalesceMs == AlertRule.COALESCE_15M -> "15 DK"
+        coalesceMs == AlertRule.COALESCE_1H -> "1 SA"
+        coalesceMs > 0 -> "${coalesceMs / 60_000} dk"
+        else -> "varsayılan"
+    }
+
+    /**
+     * One-line v2 summary for rule cards, e.g.
+     * "2 koşul · KARAR YÖNÜ(LONG)+GÜVEN ÜSTÜ · 15 DK". v1 rules (empty
+     * [AlertRule.conditions]) fold into exactly ONE condition — migration is
+     * display-only and automatic.
+     */
+    fun conditionSummaryLabel(rule: AlertRule): String {
+        val conds = rule.effectiveConditions
+        val kinds = conds.map { c ->
+            val base = kindLabel(c.kind)
+            if (c.kind == AlertKind.VERDICT && c.direction != AlertRule.DIRECTION_ANY) {
+                "$base(${directionLabel(c.direction)})"
+            } else base
+        }
+        val shown = if (kinds.size > 2) {
+            kinds.take(2).joinToString("+") + "+${kinds.size - 2}"
+        } else kinds.joinToString("+")
+        return "${conds.size} koşul · $shown · ${cooldownLabel(rule.oneShot, rule.coalesceMs)}"
+    }
+
     /** [ScanUniverseMode] label → display ("ALL" → "TÜMÜ"); unknown passes through. */
     fun universeLabel(mode: String): String = if (mode == "ALL") "TÜMÜ" else mode
 

@@ -107,6 +107,7 @@ fun MobileBottomBar(
     onNavigate: (NavRoute) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val strings = com.diveintocrypto.android.ui.i18n.LocalDiveStrings.current
     var showOverflow by remember { mutableStateOf(false) }
     val overflowSheetState: SheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
@@ -127,7 +128,7 @@ fun MobileBottomBar(
         ) {
             NavRoute.BottomBarRoutes.forEach { route ->
                 BottomNavCell(
-                    label = route.label,
+                    label = strings.routeLabel(route),
                     icon = if (route == currentRoute) route.iconFilled else route.iconOutlined,
                     active = route == currentRoute,
                     onClick = { onNavigate(route) },
@@ -135,7 +136,7 @@ fun MobileBottomBar(
             }
             val overflowActive = !currentRoute.inBottomBar
             BottomNavCell(
-                label = "More",
+                label = strings.navMore,
                 icon = Icons.Rounded.Apps,
                 active = overflowActive,
                 onClick = { showOverflow = true },
@@ -167,7 +168,7 @@ fun MobileBottomBar(
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Text(
-                    text = "MORE",
+                    text = com.diveintocrypto.android.ui.i18n.LocalDiveStrings.current.moreSheetTitle,
                     color = DiveColors.TextMuted,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
@@ -201,6 +202,7 @@ private fun BottomNavCell(
 ) {
     val tint = if (active) DiveColors.Accent else DiveColors.TextMuted
     val labelColor = if (active) DiveColors.Text else DiveColors.TextMuted
+    val strings = com.diveintocrypto.android.ui.i18n.LocalDiveStrings.current
     // Theme-derived active pill (was pinned blue 0x265B8DEF that ignored the preset accent).
     val pillBg = DiveColors.Accent.copy(alpha = 0.15f)
     Column(
@@ -212,7 +214,7 @@ private fun BottomNavCell(
             // Text child provides the accessible name (icon description is redundant).
             .semantics {
                 role = Role.Tab
-                stateDescription = if (active) "Seçili" else "Seçili değil"
+                stateDescription = if (active) strings.selected else strings.notSelected
             }
             .clickable(onClick = onClick)
             .padding(horizontal = 8.dp, vertical = 6.dp),
@@ -245,6 +247,8 @@ private fun BottomNavCell(
 private fun OverflowRow(route: NavRoute, active: Boolean, onClick: () -> Unit) {
     val bg = if (active) DiveColors.Accent.copy(alpha = 0.15f) else DiveColors.BgCardHover
     val fg = if (active) DiveColors.Accent else DiveColors.Text
+    val strings = com.diveintocrypto.android.ui.i18n.LocalDiveStrings.current
+    val label = strings.routeLabel(route)
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -253,7 +257,7 @@ private fun OverflowRow(route: NavRoute, active: Boolean, onClick: () -> Unit) {
             .border(1.dp, DiveColors.Border, RoundedCornerShape(DiveDims.Radius))
             .semantics {
                 role = Role.Button
-                stateDescription = if (active) "Seçili" else "Seçili değil"
+                stateDescription = if (active) strings.selected else strings.notSelected
             }
             .clickable(onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 14.dp),
@@ -261,13 +265,13 @@ private fun OverflowRow(route: NavRoute, active: Boolean, onClick: () -> Unit) {
     ) {
         Icon(
             imageVector = if (active) route.iconFilled else route.iconOutlined,
-            contentDescription = route.label,
+            contentDescription = label,
             tint = fg,
             modifier = Modifier.size(22.dp),
         )
         Spacer(modifier = Modifier.width(14.dp))
         Text(
-            text = route.label,
+            text = label,
             color = fg,
             fontSize = 15.sp,
             fontWeight = FontWeight.SemiBold,

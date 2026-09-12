@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.diveintocrypto.android.AppContainer
 import com.diveintocrypto.android.domain.model.Candle
+import com.diveintocrypto.android.domain.model.Signal
 import com.diveintocrypto.android.data.binance.LongShortRatioPoint
 import com.diveintocrypto.android.data.binance.OpenInterestPoint
 import com.diveintocrypto.android.data.binance.TakerLongShortRatioPoint
@@ -61,10 +62,15 @@ class PanelViewModel(private val container: AppContainer) : ViewModel() {
     private var lastGlob: List<LongShortRatioPoint> = emptyList()
     private var lastFunding: List<FundingRatePoint> = emptyList()
 
+    // Last REAL verdict context — feeds the pure parity math (planning strip).
+    private var lastAtrPct: Double? = null
+    private var lastDirection: String? = null
+
     private var bootstrapJob: kotlinx.coroutines.Job? = null
     private var multiTfJob: kotlinx.coroutines.Job? = null
     private var tickerJob: kotlinx.coroutines.Job? = null
     private var stalenessJob: kotlinx.coroutines.Job? = null
+    private var parityJob: kotlinx.coroutines.Job? = null
 
     init {
         viewModelScope.launch {
@@ -146,6 +152,7 @@ class PanelViewModel(private val container: AppContainer) : ViewModel() {
                     logDebug("PanelVM", "bootstrapJob: calling recomputeMultimodal")
                     recomputeMultimodal(oi, accountRatio, positionRatio, taker, globalRatio, fundingRate)
                     refreshCvd(symbol, force = true)
+                    refreshParity(symbol, force = true)
                 }
             } catch (e: CancellationException) {
                 logError("PanelVM", "bootstrapJob cancelled", e)
@@ -187,6 +194,9 @@ class PanelViewModel(private val container: AppContainer) : ViewModel() {
                         // CVD rides the same throttle; the engine's 10s cache makes
                         // the actual REST cadence ≥10s per symbol.
                         refreshCvd(symbol)
+                        // Parity blocks ride the same throttle (premiumIndex 15s cache,
+                        // candles already engine-cached).
+                        refreshParity(symbol)
                     }
                     // The 12-TF grid refreshes on candle close (grid cells only change
                     // when a TF's candle settles — keeps network chatter bounded).
@@ -245,6 +255,7 @@ class PanelViewModel(private val container: AppContainer) : ViewModel() {
 
     private var cvdJob: kotlinx.coroutines.Job? = null
     private var lastCvdFetchMs = 0L
+    private var lastParityFetchMs = 0L
 
     /**
      * Rolling CVD for the active symbol. Fire-and-forget on the VM scope; the
@@ -280,8 +291,41 @@ class PanelViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
-    /** Cheap fingerprint to decide whether the chart series actually moved. */
-    private fun chartChanged(st: PanelUiState, chart: ChartSeries): Boolean {
+    /**
+     * Parity blocks (basis / funding lens / vol-cone / planning) for the active
+     * symbol. Fire-and-forget on the VM scope; the engine's caches (premium 15s,
+     * funding + candles 30s+) keep the REST cadence polite. On ANY failure the
+     * affected fields stay/become null — nothing is zero-filled or fabricated.
+     */
+    private fun refreshParity(symbol: String, force: Boolean = false) {
+        val now = nowMillis()
+        if (!force && now - lastParityFetchMs < PARITY_FETCH_INTERVAL_MS) return
+        lastParityFetchMs = now
+        parityJob?.cancel()
+        parityJob = viewModelScope.launch(Dispatchers.Default) {
+            val bundle = try {
+                container.repository.panelParity(symbol, lastAtrPct, lastDirection)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                null
+            }
+            _ui.update { st ->
+                if (bundle == null) {
+                    // Full unavailability — only flip fields that had values.
+                    if (st.basisBlock == null && st.fundingLens == null && st.cone == null && st.planning == null) st
+                    else st.copy(basisBlock = null, fundingLens = null, cone = null, planning = null)
+                } else st.copy(
+                    basisBlock = bundle.basisBlock,
+                    fundingLens = bundle.fundingLens,
+                    cone = bundle.cone,
+                    planning = bundle.planning,
+                )
+            }
+        }
+    }
+
+    /** Cheap fingerprint to decide whether the chart series actually moved. */    private fun chartChanged(st: PanelUiState, chart: ChartSeries): Boolean {
         val oldLast = st.chartCandles.lastOrNull()
         val newLast = chart.candles.lastOrNull()
         return st.chartCandles.size != chart.candles.size ||
@@ -370,6 +414,14 @@ class PanelViewModel(private val container: AppContainer) : ViewModel() {
         // REGIME (domain/consensus/Regime.kt): label + adaptively-weighted
         // observational score from the already-computed ADX/Choppiness raws.
         val indResults = container.indicators.map { it.calculate(candles) }
+        // Capture (DISPLAY-ONLY) the ATR% the indicator layer ALREADY computed and
+        // the consensus direction — inputs for the pure parity planning strip.
+        lastAtrPct = indResults.firstOrNull { it.name == "atr_filter" }?.rawValues?.get("atr_pct")
+        lastDirection = when (consensus.finalSignal) {
+            Signal.STRONG_BUY, Signal.BUY -> "LONG"
+            Signal.STRONG_SELL, Signal.SELL -> "SHORT"
+            else -> null // NEUTRAL gets no plan (honest)
+        }
         val regimeEval = Regime.evaluate(indResults, container.settingsStore.getSettings().weights)
         // MICROSTRUCTURE (domain/overlay/Microstructure.kt): directed bundle over
         // the REAL aligned series (OI/price/funding/taker/global/whale L-S).
@@ -490,6 +542,7 @@ class PanelViewModel(private val container: AppContainer) : ViewModel() {
         tickerJob?.cancel()
         stalenessJob?.cancel()
         cvdJob?.cancel()
+        parityJob?.cancel()
         super.onCleared()
     }
 
@@ -514,6 +567,9 @@ class PanelViewModel(private val container: AppContainer) : ViewModel() {
 
         /** Local guard for CVD REST fetches (the engine adds its own 10s cache). */
         const val CVD_FETCH_INTERVAL_MS = 10_000L
+
+        /** Local guard for parity REST fetches (engine caches: premium 15s, candles 30s+). */
+        const val PARITY_FETCH_INTERVAL_MS = 15_000L
 
         private fun maskWarmup(values: List<Double>, warmup: Int): List<Double?> =
             values.mapIndexed { i, v -> if (i < warmup) null else v }

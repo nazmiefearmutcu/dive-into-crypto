@@ -28,5 +28,30 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Glance "Top Kararlar" widget: last background scan's top-3 + data age.
+             exported=false — only the system (APPWIDGET_UPDATE) may drive it. -->
+        <receiver
+            android:name=".widget.TopVerdictsWidgetReceiver"
+            android:exported="false"
+            android:label="Top Kararlar">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/top_verdicts_widget_info" />
+        </receiver>
+
+        <!-- Share-card PNGs: cacheDir/share_cards/ → content:// URIs for ACTION_SEND. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 </manifest>

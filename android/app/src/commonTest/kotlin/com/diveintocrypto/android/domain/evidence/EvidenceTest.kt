@@ -130,17 +130,24 @@ class EvidenceGraderTest {
                 sample(verdict = "BUY", dir = 1, fwd = 5.0),
                 sample(verdict = "BUY", dir = 1, fwd = -1.0),
                 sample(verdict = "BUY", dir = 1, fwd = 3.0),
+                sample(verdict = "BUY", dir = 1, fwd = 3.0),
+                sample(verdict = "BUY", dir = 1, fwd = -1.0),
+                sample(verdict = "BUY", dir = 1, fwd = 3.0),
+                sample(verdict = "SELL", dir = -1, fwd = -2.0),
+                sample(verdict = "SELL", dir = -1, fwd = -2.0),
+                sample(verdict = "SELL", dir = -1, fwd = -2.0),
+                sample(verdict = "SELL", dir = -1, fwd = -2.0),
                 sample(verdict = "SELL", dir = -1, fwd = -2.0),
             ),
         )
-        assertEquals(4, grade.graded)
+        assertEquals(11, grade.graded)
         val buy = grade.byVerdict.getValue("BUY")
-        assertEquals(3, buy.samples)
-        assertEquals(2.0 / 3.0, buy.hitRate, 1e-9)
+        assertEquals(6, buy.samples)
+        assertEquals(2.0 / 3.0, buy.hitRate!!, 1e-9)
         assertEquals(3.0, buy.medianReturnPct, 1e-9)
         val sell = grade.byVerdict.getValue("SELL")
-        assertEquals(1, sell.samples)
-        assertEquals(1.0, sell.hitRate, 1e-9)
+        assertEquals(5, sell.samples)
+        assertEquals(1.0, sell.hitRate!!, 1e-9)
     }
 
     @Test
@@ -149,13 +156,21 @@ class EvidenceGraderTest {
             listOf(
                 sample(confidence = 20, fwd = 4.0),
                 sample(confidence = 20, fwd = -4.0),
+                sample(confidence = 20, fwd = 4.0),
+                sample(confidence = 20, fwd = -4.0),
+                sample(confidence = 20, fwd = 4.0),
+                sample(confidence = 20, fwd = -4.0),
                 sample(confidence = 85, fwd = 1.0),
+                sample(confidence = 85, fwd = 2.0),
+                sample(confidence = 85, fwd = 3.0),
+                sample(confidence = 85, fwd = 4.0),
+                sample(confidence = 85, fwd = 5.0),
             ),
         )
-        assertEquals(2, grade.byConfidence.getValue("0-25").samples)
-        assertEquals(0.5, grade.byConfidence.getValue("0-25").hitRate, 1e-9)
-        assertEquals(1, grade.byConfidence.getValue("76-100").samples)
-        assertEquals(1.0, grade.byConfidence.getValue("76-100").hitRate, 1e-9)
+        assertEquals(6, grade.byConfidence.getValue("0-25").samples)
+        assertEquals(0.5, grade.byConfidence.getValue("0-25").hitRate!!, 1e-9)
+        assertEquals(5, grade.byConfidence.getValue("76-100").samples)
+        assertEquals(1.0, grade.byConfidence.getValue("76-100").hitRate!!, 1e-9)
     }
 
     @Test

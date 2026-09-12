@@ -50,4 +50,43 @@ object FundingAnalytics {
         val total = rows.sumOf { it.fundingRate }
         return FundingSummaryRow(n, meanRate, meanApr, total)
     }
+
+    // ── Funding lens (0.3.0 parity addition) ──────────────────────────────────
+
+    /**
+     * The additive per-symbol funding lens shown on the panel:
+     *
+     * @param predictedRatePct venue's PREDICTED funding for the NEXT settlement
+     *        (premiumIndex.lastFundingRate), percent per 8h interval
+     * @param lastSettledRatePct the actually SETTLED last funding (fundingRate history tail),
+     *        percent per 8h interval
+     * @param aprPct simple annualisation of the predicted rate, PERCENT per year
+     * @param secondsToFunding ms→s to [nextFundingMs]; null when the venue gave no time
+     */
+    data class FundingLens(
+        val predictedRatePct: Double,
+        val lastSettledRatePct: Double,
+        val aprPct: Double,
+        val secondsToFunding: Long?,
+    )
+
+    /**
+     * PURE funding lens. Rates are wire fractions (0.0001 = 0.01%); anything
+     * non-finite is rejected (null) — honest unavailability.
+     */
+    fun fundingLens(
+        predictedRate: Double,
+        lastSettledRate: Double,
+        nextFundingMs: Long,
+        nowMs: Long,
+    ): FundingLens? {
+        if (!predictedRate.isFinite() || !lastSettledRate.isFinite()) return null
+        val predictedPct = predictedRate * 100.0
+        return FundingLens(
+            predictedRatePct = predictedPct,
+            lastSettledRatePct = lastSettledRate * 100.0,
+            aprPct = aprFromRate(predictedRate, DEFAULT_INTERVAL_HOURS) * 100.0,
+            secondsToFunding = if (nextFundingMs > 0) (nextFundingMs - nowMs) / 1000 else null,
+        )
+    }
 }

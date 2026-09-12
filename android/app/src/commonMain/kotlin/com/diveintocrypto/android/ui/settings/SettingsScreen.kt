@@ -51,6 +51,7 @@ import com.diveintocrypto.android.ui.theme.DiveColors
 import com.diveintocrypto.android.ui.theme.DiveDims
 import com.diveintocrypto.android.ui.theme.DiveFonts
 import com.diveintocrypto.android.ui.notifications.rememberNotificationPermission
+import com.diveintocrypto.android.platform.rememberBackgroundScanSync
 
 /**
  * Enriched Settings screen (2026-05-24).
@@ -64,6 +65,7 @@ import com.diveintocrypto.android.ui.notifications.rememberNotificationPermissio
 fun SettingsScreen(container: AppContainer) {
     val vm: SettingsViewModel = viewModel { SettingsViewModel(container) }
     val state by vm.ui.collectAsStateWithLifecycle()
+    val strings = com.diveintocrypto.android.ui.i18n.LocalDiveStrings.current
 
     Column(
         modifier = Modifier
@@ -75,6 +77,7 @@ fun SettingsScreen(container: AppContainer) {
     ) {
         // 1. Favorite coin management
         FavoritesCard(
+            title = strings.setTitleFavorites,
             favorites = state.favorites,
             searchQuery = state.favoriteSearchQuery,
             filteredSymbols = state.filteredSymbols,
@@ -85,6 +88,7 @@ fun SettingsScreen(container: AppContainer) {
 
         // 2. Analysis threshold settings
         ConsensusSettingsCard(
+            title = strings.setTitleConsensus,
             confidenceThreshold = state.confidenceThreshold,
             minConfidenceForTrade = state.minConfidenceForTrade,
             enableRegimeMatrix = state.enableRegimeMatrix,
@@ -95,6 +99,7 @@ fun SettingsScreen(container: AppContainer) {
 
         // 3. Indicator weight coefficients
         WeightsCard(
+            title = strings.setTitleWeights,
             weights = state.weights,
             onUpdateWeight = vm::updateIndicatorWeight,
             onResetWeights = {
@@ -108,6 +113,7 @@ fun SettingsScreen(container: AppContainer) {
 
         // 4. Scanner engine settings
         ScanningCard(
+            title = strings.setTitleScanner,
             survivors = state.scanSurvivors,
             parallelism = state.scanParallelism,
             onSurvivorsChange = vm::updateScanSurvivors,
@@ -116,6 +122,7 @@ fun SettingsScreen(container: AppContainer) {
 
         // 4.1 Quantitative chart settings
         QuantitativeChartSettingsCard(
+            title = strings.setTitleQuantChart,
             wsDataSource = state.wsDataSource,
             chartCandleCount = state.chartCandleCount,
             onSourceChange = vm::updateWsDataSource,
@@ -124,6 +131,7 @@ fun SettingsScreen(container: AppContainer) {
 
         // 4.2 Quant Bias weight settings
         QuantBiasSettingsCard(
+            title = strings.setTitleQuantBias,
             taker = state.weightTakerLs,
             oi = state.weightOiMomentum,
             whale = state.weightWhaleLs,
@@ -132,18 +140,119 @@ fun SettingsScreen(container: AppContainer) {
         )
 
         // 4.3 Notification permission (API 33+ runtime grant) — Task 2d
-        NotificationsCard()
+        NotificationsCard(title = strings.setTitleNotifications)
 
-        // 5. Theme & About
-        ThemeCard()
-        AboutCard()
+        // 4.4 Background scans (WorkManager, opt-in) — honest scheduling card
+        val syncBackgroundScans = rememberBackgroundScanSync()
+        BackgroundScansCard(
+            title = strings.setTitleBackgroundScans,
+            enabled = state.backgroundScansEnabled,
+            unmeteredOnly = state.backgroundScansUnmetered,
+            onToggleEnabled = { enabled ->
+                vm.updateBackgroundScans(enabled = enabled)
+                syncBackgroundScans()
+            },
+            onToggleUnmetered = { unmetered ->
+                vm.updateBackgroundScans(unmetered = unmetered)
+                syncBackgroundScans()
+            },
+        )
+
+        // 5. Theme, Language & About
+        ThemeCard(title = strings.setTitleTheme)
+        LanguageCard(container = container)
+        AboutCard(title = strings.setTitleAbout)
 
         Spacer(modifier = Modifier.height(30.dp))
     }
 }
 
+/**
+ * BACKGROUND SCANS card — opt-in periodic WorkManager scan. Persisting flips
+ * [SettingsData.backgroundScansEnabled]/[backgroundScansUnmetered] AND calls
+ * the platform sync ([rememberBackgroundScanSync] → WorkManager enqueue/cancel
+ * with fresh constraints). The description is deliberately honest: WorkManager's
+ * 15-minute minimum + Doze means the OS can and will defer runs.
+ */
+@Composable
+private fun BackgroundScansCard(
+    title: String,
+    enabled: Boolean,
+    unmeteredOnly: Boolean,
+    onToggleEnabled: (Boolean) -> Unit,
+    onToggleUnmetered: (Boolean) -> Unit,
+) {
+    val strings = com.diveintocrypto.android.ui.i18n.LocalDiveStrings.current
+    SettingsCard(title = title) {        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            ToggleRow(
+                label = strings.tglBackgroundScan,
+                value = enabled,
+                onToggle = onToggleEnabled
+            )
+            Text(
+                text = "uygulama kapalıyken ~15 dk'da bir kaba tarama · Doze gecikebilir",
+                color = DiveColors.TextDim,
+                fontSize = 11.sp,
+                lineHeight = 15.sp,
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(enabled = enabled) { onToggleUnmetered(!unmeteredOnly) }
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = strings.tglUnmetered,
+                        color = if (enabled) DiveColors.Text else DiveColors.TextDim,
+                        fontSize = 13.sp,
+                    )
+                    Text(
+                        text = if (enabled) "Mobil veri kullanımı olmadan çalışır"
+                        else "Ana anahtar kapalıyken etkisiz",
+                        color = DiveColors.TextDim,
+                        fontSize = 10.sp,
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .width(44.dp)
+                        .height(24.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(if (enabled && unmeteredOnly) DiveColors.Accent else DiveColors.BgCardHover)
+                        .border(1.dp, DiveColors.Border, RoundedCornerShape(12.dp))
+                        .semantics {
+                            role = Role.Switch
+                            stateDescription = if (enabled && unmeteredOnly) strings.switchOn else strings.switchOff
+                        }
+                        .clickable(enabled = enabled) { onToggleUnmetered(!unmeteredOnly) }
+                        .padding(horizontal = 4.dp),
+                    contentAlignment = if (enabled && unmeteredOnly) Alignment.CenterEnd else Alignment.CenterStart,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .width(16.dp)
+                            .height(16.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color.White)
+                    )
+                }
+            }
+            Text(
+                text = "Sonuçlar Alarm geçmişine ve tarayıcı önbelleğine düşer; uygulama açıldığında oradan okunur.",
+                color = DiveColors.TextDim,
+                fontSize = 11.sp,
+                lineHeight = 15.sp,
+            )
+        }
+    }
+}
+
 @Composable
 private fun ConsensusSettingsCard(
+    title: String,
     confidenceThreshold: Int,
     minConfidenceForTrade: Int,
     enableRegimeMatrix: Boolean,
@@ -151,11 +260,12 @@ private fun ConsensusSettingsCard(
     onTradeThresholdChange: (Int) -> Unit,
     onToggleRegime: (Boolean) -> Unit
 ) {
-    SettingsCard(title = "ANALYSIS ALGORITHM SETTINGS") {
+    val strings = com.diveintocrypto.android.ui.i18n.LocalDiveStrings.current
+    SettingsCard(title = title) {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             // Regime Matrix Toggle
             ToggleRow(
-                label = "Dynamic Regime Matrix (ADX-aware)",
+                label = strings.tglRegimeMatrix,
                 value = enableRegimeMatrix,
                 onToggle = onToggleRegime
             )
@@ -199,11 +309,13 @@ private val EXTENDED_WEIGHT_KEYS: List<String> =
 
 @Composable
 private fun WeightsCard(
+    title: String,
     weights: Map<String, Double>,
     onUpdateWeight: (String, Double) -> Unit,
     onResetWeights: () -> Unit,
 ) {
-    SettingsCard(title = "INDICATOR CONSENSUS WEIGHTS") {
+    val strings = com.diveintocrypto.android.ui.i18n.LocalDiveStrings.current
+    SettingsCard(title = title) {
         // Collapsed by default so first paint composes the 15 core steppers only;
         // expanding adds the 42 extended rows to the (already scrollable) column.
         var extendedOpen by remember { mutableStateOf(false) }
@@ -221,7 +333,7 @@ private fun WeightsCard(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = "ÇEKİRDEK (${CORE_WEIGHT_KEYS.size})",
+                    text = "${strings.lblCore} (${CORE_WEIGHT_KEYS.size})",
                     color = DiveColors.TextMuted,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
@@ -240,7 +352,7 @@ private fun WeightsCard(
                         .padding(horizontal = 12.dp, vertical = 6.dp),
                 ) {
                     Text(
-                        text = "SIFIRLA",
+                        text = strings.btnResetWeights,
                         color = DiveColors.Red,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
@@ -263,13 +375,13 @@ private fun WeightsCard(
                     .border(1.dp, DiveColors.Border, RoundedCornerShape(DiveDims.RadiusSm))
                     .semantics {
                         role = Role.Button
-                        stateDescription = if (extendedOpen) "Açık" else "Kapalı"
+                        stateDescription = if (extendedOpen) strings.switchOn else strings.switchOff
                     }
                     .clickable { extendedOpen = !extendedOpen }
                     .padding(horizontal = 12.dp, vertical = 8.dp),
             ) {
                 Text(
-                    text = if (extendedOpen) "▾ GENİŞLETİLMİŞ (${EXTENDED_WEIGHT_KEYS.size})" else "▸ GENİŞLETİLMİŞ (${EXTENDED_WEIGHT_KEYS.size})",
+                    text = if (extendedOpen) "▾ ${strings.lblExtended} (${EXTENDED_WEIGHT_KEYS.size})" else "▸ ${strings.lblExtended} (${EXTENDED_WEIGHT_KEYS.size})",
                     color = DiveColors.Accent,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
@@ -316,12 +428,13 @@ private fun WeightStepperRow(
 
 @Composable
 private fun ScanningCard(
+    title: String,
     survivors: Int,
     parallelism: Int,
     onSurvivorsChange: (Int) -> Unit,
     onParallelismChange: (Int) -> Unit
 ) {
-    SettingsCard(title = "SCANNER SETTINGS") {
+    SettingsCard(title = title) {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text("Phase 2 Candidate Count (Survivors)", color = DiveColors.TextMuted, fontSize = 11.sp)
@@ -376,6 +489,7 @@ private fun ScanningCard(
 
 @Composable
 private fun FavoritesCard(
+    title: String,
     favorites: List<String>,
     searchQuery: String,
     filteredSymbols: List<String>,
@@ -383,7 +497,7 @@ private fun FavoritesCard(
     onAddFavorite: (String) -> Unit,
     onRemoveFavorite: (String) -> Unit
 ) {
-    SettingsCard(title = "FAVORITE COINS") {
+    SettingsCard(title = title) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(
                 text = "Manage your quick-access list on the Panel tab.",
@@ -573,8 +687,8 @@ private fun StepperRow(
 }
 
 @Composable
-private fun ThemeCard() {
-    SettingsCard(title = "THEME") {
+private fun ThemeCard(title: String) {
+    SettingsCard(title = title) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -624,8 +738,8 @@ private fun Swatch(color: Color) {
 }
 
 @Composable
-private fun AboutCard() {
-    SettingsCard(title = "ABOUT") {
+private fun AboutCard(title: String) {
+    SettingsCard(title = title) {
         AboutRow("App", "Dive Into Crypto")
         Spacer(Modifier.height(8.dp))
         AboutRow("Version", AppInfo.versionName)
@@ -636,7 +750,7 @@ private fun AboutCard() {
         Spacer(Modifier.height(8.dp))
         AboutRow("Data source", "Binance USDT-M Futures")
         Spacer(Modifier.height(8.dp))
-        AboutRow("Indicators", "15 (Dive Into Crypto consensus engine)")
+        AboutRow("Indicators", "60 (Dive Into Crypto consensus engine)")
         Spacer(Modifier.height(8.dp))
         AboutRow("Timeframe count", "12")
     }
@@ -661,6 +775,47 @@ private fun AboutRow(label: String, value: String) {
             fontWeight = FontWeight.SemiBold,
             fontFamily = DiveFonts.body,
         )
+    }
+}
+
+/**
+ * TR/EN language switch (LANE-7 i18n) — two chips persisting the "language"
+ * KeyValueStore key via [AppContainer.setLanguage]; the active catalog flows
+ * back through AppContainer.language → LocalDiveStrings app-wide.
+ */
+@Composable
+private fun LanguageCard(container: AppContainer) {
+    val strings = com.diveintocrypto.android.ui.i18n.LocalDiveStrings.current
+    val current by container.language.collectAsStateWithLifecycle()
+    SettingsCard(title = strings.setTitleLanguage) {
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf("tr" to strings.langTr, "en" to strings.langEn).forEach { (code, label) ->
+                val active = current.code == code
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(if (active) DiveColors.Accent else DiveColors.BgCardHover)
+                        .border(
+                            1.dp,
+                            if (active) DiveColors.Accent else DiveColors.Border,
+                            RoundedCornerShape(20.dp),
+                        )
+                        .semantics {
+                            role = Role.Button
+                            stateDescription = if (active) strings.selected else strings.notSelected
+                        }
+                        .clickable { container.setLanguage(code) }
+                        .padding(horizontal = 18.dp, vertical = 8.dp),
+                ) {
+                    Text(
+                        text = label,
+                        color = if (active) Color.White else DiveColors.TextMuted,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -689,12 +844,13 @@ private fun SettingsCard(title: String, content: @Composable () -> Unit) {
 
 @Composable
 private fun QuantitativeChartSettingsCard(
+    title: String,
     wsDataSource: String,
     chartCandleCount: Int,
     onSourceChange: (String) -> Unit,
     onLimitChange: (Int) -> Unit
 ) {
-    SettingsCard(title = "QUANTITATIVE DATA & CHART SETTINGS") {
+    SettingsCard(title = title) {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text("Live Price Data Source (WS)", color = DiveColors.TextMuted, fontSize = 11.sp)
@@ -752,13 +908,14 @@ private fun QuantitativeChartSettingsCard(
 
 @Composable
 private fun QuantBiasSettingsCard(
+    title: String,
     taker: Double,
     oi: Double,
     whale: Double,
     account: Double,
     onWeightsChange: (Double, Double, Double, Double) -> Unit
 ) {
-    SettingsCard(title = "QUANT BIAS FORMULA WEIGHTS") {
+    SettingsCard(title = title) {
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             val total = taker + oi + whale + account
             Row(
@@ -844,9 +1001,10 @@ private fun QuantBiasSettingsCard(
 // banners + alarm history work regardless of the OS grant — said explicitly.
 // ═══════════════════════════════════════════════════════════════════════
 @Composable
-private fun NotificationsCard() {
+private fun NotificationsCard(title: String) {
     val perm = rememberNotificationPermission()
-    SettingsCard(title = "BİLDİRİMLER") {
+    val strings = com.diveintocrypto.android.ui.i18n.LocalDiveStrings.current
+    SettingsCard(title = title) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(
                 text = "Alarm kuralları tetiklendiğinde sistem bildirimi gönderilir " +
@@ -889,7 +1047,7 @@ private fun NotificationsCard() {
                             .padding(horizontal = 16.dp, vertical = 9.dp),
                     ) {
                         Text(
-                            text = "BİLDİRİM İZNİ İSTE",
+                            text = strings.btnRequestNotifPermission,
                             color = MaterialTheme.colorScheme.onPrimary,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,

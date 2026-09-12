@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
@@ -13,6 +14,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.diveintocrypto.android.ui.i18n.LocalDiveStrings
 import com.diveintocrypto.android.ui.mobile.MobileShell
 import com.diveintocrypto.android.ui.theme.DiveThemeController
 import com.diveintocrypto.android.ui.theme.DiveIntoCryptoTheme
@@ -31,7 +34,10 @@ import com.diveintocrypto.android.ui.theme.DiveColors
 fun App(container: AppContainer) {
     DiveIntoCryptoTheme {
         val base = LocalDensity.current
+        // TR/EN string catalog — provided app-wide; screens read LocalDiveStrings.
+        val diveStrings by container.language.collectAsStateWithLifecycle()
         CompositionLocalProvider(
+            LocalDiveStrings provides diveStrings,
             LocalDensity provides Density(base.density, base.fontScale * DiveThemeController.fontScale)
         ) {
             val scan = DiveThemeController.scanlines

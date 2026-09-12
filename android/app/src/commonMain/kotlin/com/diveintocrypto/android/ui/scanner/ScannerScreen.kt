@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AddAlert
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -55,8 +56,11 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.diveintocrypto.android.AppContainer
 import com.diveintocrypto.android.domain.alerts.AlertKind
 import com.diveintocrypto.android.domain.model.Signal
+import com.diveintocrypto.android.platform.ShareVerdictPayload
 import com.diveintocrypto.android.platform.format
 import com.diveintocrypto.android.platform.formatTime
+import com.diveintocrypto.android.platform.nowMillis
+import com.diveintocrypto.android.platform.rememberShareVerdict
 import com.diveintocrypto.android.ui.alerts.AlertAddSheet
 import com.diveintocrypto.android.ui.alerts.AlertLabels
 import kotlinx.coroutines.delay
@@ -111,6 +115,9 @@ fun ScannerScreen(container: AppContainer, onSelectSymbol: (String) -> Unit = {}
     var watchOnly by remember { mutableStateOf(false) }
     // Quick-add alert sheet (🔔 on a result row): the symbol it opens for.
     var alertSheetSymbol by remember { mutableStateOf<String?>(null) }
+    // PAYLAŞ (v0.3.0): renders the row's verdict as a PNG share card and fires
+    // the system share sheet (androidMain util; see platform/Share expect/actual).
+    val shareVerdictCard = rememberShareVerdict()
     // ALL = survivors after elimination (as many as the table size); DIVERGENCE = eliminated.
     val eliminatedCount = state.eliminated.size
     // OPT-IN "Divergence Sort": when ON, the SAME survivor pool (state.survivors) is re-sorted
@@ -263,6 +270,18 @@ fun ScannerScreen(container: AppContainer, onSelectSymbol: (String) -> Unit = {}
                         allTfs = state.timeframes,
                         livePrice = liveTickers[row.symbol]?.price,
                         onAlert = { alertSheetSymbol = row.symbol },
+                        onShare = {
+                            val payload = ShareVerdictPayload(
+                                symbol = row.symbol,
+                                verdict = row.dominantDir.name,
+                                confidence = row.perTf.values.maxOfOrNull { it.confidence } ?: 0,
+                                perTf = state.timeframes.map { tf ->
+                                    tf to (row.perTf[tf]?.signal?.name ?: "N/A")
+                                },
+                                timestampMs = nowMillis(),
+                            )
+                            shareVerdictCard(payload)
+                        },
                         onSelect = { onSelectSymbol(row.symbol) },
                     )
                 }
@@ -534,6 +553,7 @@ private fun CoinResultCard(
     allTfs: List<String>,
     livePrice: Double?,
     onAlert: () -> Unit,
+    onShare: () -> Unit,
     onSelect: () -> Unit,
 ) {
     val isCommonAll = row.countHit == row.totalTfs
@@ -573,7 +593,7 @@ private fun CoinResultCard(
         )
 
         Column(modifier = Modifier.padding(14.dp)) {
-            // ── Row 1: Rank · Symbol · Signal · 🔔 · Price ────────────────
+            // ── Row 1: Rank · Symbol · Signal · 🔔 · ⤴ · Price ────────────
             CoinCardHeader(
                 row = row,
                 rank = rank,
@@ -581,6 +601,7 @@ private fun CoinResultCard(
                 accentColor = accentColor,
                 livePrice = livePrice,
                 onAlert = onAlert,
+                onShare = onShare,
             )
 
             // ── Row 1b: strategy-overlay tags (Regime · MTF gate · Micro) ──
@@ -874,6 +895,7 @@ private fun CoinCardHeader(
     accentColor: Color,
     livePrice: Double?,
     onAlert: () -> Unit,
+    onShare: () -> Unit,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -949,6 +971,27 @@ private fun CoinCardHeader(
                 imageVector = Icons.Rounded.AddAlert,
                 contentDescription = null, // container carries the a11y label
                 tint = DiveColors.Warn,
+                modifier = Modifier.size(16.dp),
+            )
+        }
+        Spacer(Modifier.width(6.dp))
+        // PAYLAŞ — verdict share-card PNG via the system share sheet.
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(6.dp))
+                .background(DiveColors.BgCardHover)
+                .border(1.dp, DiveColors.Border, RoundedCornerShape(6.dp))
+                .semantics {
+                    role = Role.Button
+                    contentDescription = "${row.symbol} karar kartını paylaş"
+                }
+                .clickable(onClick = onShare)
+                .padding(horizontal = 6.dp, vertical = 4.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Share,
+                contentDescription = null, // container carries the a11y label
+                tint = DiveColors.Accent,
                 modifier = Modifier.size(16.dp),
             )
         }
@@ -1396,7 +1439,7 @@ private fun ScanErrorCard(message: String, onRetry: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = "⟳ TEKRAR DENE",
+                text = com.diveintocrypto.android.ui.i18n.LocalDiveStrings.current.btnRetry,
                 color = MaterialTheme.colorScheme.onPrimary,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Bold,

@@ -11,7 +11,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * Pins the FULL 57-name weight wiring:
+ * Pins the FULL 60-name weight wiring:
  *  - SettingsStore defaults now cover ALL indicators (previously only the 15 core
  *    names, so the 42 extended indicators silently scored at weight 1.0);
  *  - user overrides persist across store restarts;
@@ -21,10 +21,10 @@ import kotlin.test.assertTrue
 class SettingsStoreWeightsTest {
 
     @Test
-    fun `default weights cover all 57 indicators`() {
+    fun `default weights cover all 60 indicators`() {
         val store = SettingsStore(InMemoryKeyValueStore())
         val weights = store.getSettings().weights
-        assertEquals(57, weights.size)
+        assertEquals(60, weights.size)
         assertEquals(DEFAULT_FULL_WEIGHTS.keys, weights.keys)
         // Weights persist as Float, so compare with a float-precision delta.
         for ((key, expected) in DEFAULT_FULL_WEIGHTS) {

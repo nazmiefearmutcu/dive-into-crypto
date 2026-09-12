@@ -206,6 +206,30 @@ class BinanceFuturesClient(
     }
 
     /**
+     * Premium index for one symbol — current mark price, index price, the
+     * (predicted) last funding rate and the next funding time.
+     * Binance public endpoint `/fapi/v1/premiumIndex`.
+     */
+    suspend fun premiumIndex(symbol: String): PremiumIndexDto {
+        val response = client.get(baseUrl) {
+            url {
+                appendPathSegments("fapi", "v1", "premiumIndex")
+                parameters.append("symbol", symbol)
+            }
+        }
+        if (!response.status.isSuccess()) throw IllegalStateException("premiumIndex HTTP ${response.status.value}")
+        val raw = response.bodyAsText()
+        val o = Json.parseToJsonElement(raw).jsonObject
+        return PremiumIndexDto(
+            symbol = o["symbol"]?.jsonPrimitive?.contentOrNull ?: symbol,
+            markPrice = o["markPrice"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: 0.0,
+            indexPrice = o["indexPrice"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: 0.0,
+            lastFundingRate = o["lastFundingRate"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: 0.0,
+            nextFundingTime = o["nextFundingTime"]?.jsonPrimitive?.longOrNull ?: 0L,
+        )
+    }
+
+    /**
      * Returns ALL USDT-M futures symbols sorted by 24h `quoteVolume` descending,
      * with the reference implementation's stablecoin skip set already removed. This is the universe
      * fed to the multi-symbol scanner.
@@ -382,4 +406,17 @@ data class TakerLongShortRatioPoint(
 data class FundingRatePoint(
     val timestamp: Long,
     val fundingRate: Double,
+)
+
+/**
+ * One row of `/fapi/v1/premiumIndex` (single-symbol response).
+ * [lastFundingRate] is the venue's CURRENT (predicted) funding rate for the
+ * next settlement — the last SETTLED rate comes from /fapi/v1/fundingRate.
+ */
+data class PremiumIndexDto(
+    val symbol: String,
+    val markPrice: Double,
+    val indexPrice: Double,
+    val lastFundingRate: Double,
+    val nextFundingTime: Long,
 )

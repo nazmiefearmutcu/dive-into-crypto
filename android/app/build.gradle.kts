@@ -43,6 +43,8 @@ kotlin {
             implementation(libs.androidx.activity.compose)
             implementation(libs.material)
             implementation(libs.ktor.client.okhttp)
+            implementation(libs.androidx.work)
+            implementation(libs.androidx.glance)
         }
         getByName("androidUnitTest").dependencies {
             implementation(libs.junit)
@@ -93,8 +95,8 @@ android {
         applicationId = "com.diveintocrypto.android"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.3.0"
     }
 
     sourceSets["main"].manifest.srcFile("src/androidMain/AndroidManifest.xml")

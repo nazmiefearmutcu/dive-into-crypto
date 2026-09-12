@@ -52,6 +52,8 @@ class MarketDataEngine(
     // CVD snapshots (nullable → a FAILED fetch is cached too, briefly, so an
     // unavailable endpoint is surfaced honestly without hammering it).
     private val cvdCache = mutableMapOf<String, CachedSingle<com.diveintocrypto.android.domain.cvd.CvdSnapshot?>>()
+    // Premium-index snapshots (nullable → failures cached briefly too).
+    private val premiumCache = mutableMapOf<String, CachedSingle<com.diveintocrypto.android.data.binance.PremiumIndexDto?>>()
 
     private data class CachedData<T>(val data: List<T>, val timestamp: Long)
 
@@ -279,9 +281,71 @@ class MarketDataEngine(
         return fetched
     }
 
+    // ── Market-data parity additions (0.3.0): basis block / funding lens /
+    //    vol-cone envelope / planning strip. Every consumer field is
+    //    nullable-honest: a failed fetch NEVER becomes a fabricated zero. ──────
+
+    /**
+     * Cached (15s, failures cached too) `/fapi/v1/premiumIndex` snapshot.
+     * null while unavailable — callers must surface that, not zero-fill.
+     */
+    suspend fun premiumIndex(symbol: String): com.diveintocrypto.android.data.binance.PremiumIndexDto? {
+        synchronized(restCacheLock) {
+            premiumCache[symbol]?.let { cached ->
+                if (nowMillis() - cached.timestamp < PREMIUM_CACHE_MS) return cached.data
+            }
+        }
+        val dto: com.diveintocrypto.android.data.binance.PremiumIndexDto? = try {
+            binance.futuresClient().premiumIndex(symbol)
+        } catch (t: Throwable) {
+            null // honest unavailability — cached briefly so we don't hammer
+        }
+        synchronized(restCacheLock) {
+            premiumCache[symbol] = CachedSingle(dto, nowMillis())
+        }
+        return dto
+    }
+
+    /**
+     * One-shot additive parity bundle for the Panel screen:
+     * basis block + funding lens (premiumIndex + funding history), vol-cone
+     * envelope (cached 1h futures candles) and the ATR%-planning strip (pure,
+     * from the caller's already-computed atrPct + consensus direction).
+     */
+    suspend fun panelParity(
+        symbol: String,
+        atrPct: Double?,
+        direction: String?,
+    ): ParityBundle {
+        val premium = premiumIndex(symbol)
+        val settled = runCatching {
+            fundingRate(symbol, limit = 2).lastOrNull()?.fundingRate ?: Double.NaN
+        }.getOrDefault(Double.NaN)
+
+        val basis = premium?.let {
+            com.diveintocrypto.android.engine.analytics.BasisAnalytics
+                .basisBlock(it.markPrice, it.indexPrice, it.lastFundingRate)
+        }
+        val lens = premium?.let {
+            com.diveintocrypto.android.engine.analytics.FundingAnalytics
+                .fundingLens(it.lastFundingRate, settled, it.nextFundingTime, nowMillis())
+        }
+        val cone = runCatching {
+            val candles = futuresHistory(symbol, "1h", limit = 200)
+            com.diveintocrypto.android.engine.analytics.VolCone.fromCloses(candles.map { it.close })
+        }.getOrNull()
+        val planning = if (atrPct != null && direction != null && (premium?.markPrice ?: 0.0) > 0.0) {
+            com.diveintocrypto.android.engine.analytics.PlanningStrip.build(
+                entry = premium!!.markPrice,
+                atrPct = atrPct,
+                direction = direction,
+            )
+        } else null
+        return ParityBundle(basis, lens, cone, planning)
+    }
+
     /** Live canonical OHLCV for the active symbol/interval (futures WS). */
-    fun liveOhlcv(symbol: String, interval: String): Flow<OHLCV> {
-        val settings = settingsStore.getSettings()
+    fun liveOhlcv(symbol: String, interval: String): Flow<OHLCV> {        val settings = settingsStore.getSettings()
         val wsDataSource = settings.wsDataSource
         val wsUrl = if (wsDataSource == "SPOT") "wss://stream.binance.com:9443"
                     else "wss://fstream.binance.com"
@@ -319,5 +383,24 @@ class MarketDataEngine(
 
         /** aggTrades page size for the CVD snapshot (venue max = 1000). */
         const val CVD_AGG_TRADE_LIMIT = 1000
+
+        /** Premium-index cache TTL per symbol (parity additions, 0.3.0). */
+        const val PREMIUM_CACHE_MS = 15_000L
     }
 }
+
+/**
+ * The additive Panel parity bundle (0.3.0). Every field is nullable-honest:
+ * null = the underlying fetch or math could not be done (no data fabricated).
+ *
+ * @param basisBlock perp basis in bps + annualised predicted funding
+ * @param fundingLens predicted vs settled funding + APR + seconds to settlement
+ * @param cone 1h-σ volatility cone with the 24h/48h envelope
+ * @param planning ATR%-based SL/TP/envelope strip for the consensus direction
+ */
+data class ParityBundle(
+    val basisBlock: com.diveintocrypto.android.engine.analytics.BasisAnalytics.BasisBlock?,
+    val fundingLens: com.diveintocrypto.android.engine.analytics.FundingAnalytics.FundingLens?,
+    val cone: com.diveintocrypto.android.engine.analytics.VolCone.ConeEnv?,
+    val planning: com.diveintocrypto.android.engine.analytics.PlanningStrip.Plan?,
+)

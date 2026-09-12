@@ -6,14 +6,14 @@
 ![Kotlin](https://img.shields.io/badge/Kotlin-7F52FF?logo=kotlin&logoColor=white)
 ![Jetpack Compose](https://img.shields.io/badge/Jetpack%20Compose-4285F4?logo=jetpackcompose&logoColor=white)
 
-**Dive Into Crypto is a financial scanner** that watches the entire Binance USDT‑M perpetual‑futures market and tells you, per symbol, whether the evidence leans long, short, or neutral. It runs **57 technical indicators across 12 timeframes**, cross‑checks the result against **whale (top‑trader) positioning**, and collapses everything into a single confidence‑scored consensus verdict. It is a native Android app, it runs entirely **on your device**, and it reads only **public** Binance market data — no account, no API keys, no sign‑up.
+**Dive Into Crypto is a financial scanner** that watches the entire Binance USDT‑M perpetual‑futures market and tells you, per symbol, whether the evidence leans long, short, or neutral. It runs **60 technical indicators across 12 timeframes**, cross‑checks the result against **whale (top‑trader) positioning**, and collapses everything into a single confidence‑scored consensus verdict. It is a native Android app, it runs entirely **on your device**, and it reads only **public** Binance market data — no account, no API keys, no sign‑up.
 
 > ⚠️ Dive Into Crypto is an analysis and research tool, **not financial advice** and **not an automated trader**. It places no orders. Markets are risky; you are responsible for your own decisions.
 
 - **Platform:** Android 8.0+ (minSdk 26), single signed APK, sideload install
 - **Stack:** Kotlin Multiplatform · Jetpack Compose · Ktor · kotlinx.serialization
 - **Data:** Binance USDT‑M Futures public REST + WebSocket
-- **Engine:** the full **57‑indicator consensus + 3 overlays** (microstructure · regime‑adaptive weighting · MTF‑confluence), every indicator pinned by fixture to the shared Python reference
+- **Engine:** the full **60‑indicator consensus + 3 overlays** (microstructure · regime‑adaptive weighting · MTF‑confluence), every indicator pinned by fixture to the shared Python reference
 - **Look:** **Depth Terminal** — a hand‑built trading instrument, not a generic dashboard
 - **License:** MIT
 
@@ -82,8 +82,8 @@ Top movers by 24 h % change.
 
 ## The multi‑scan system
 
-### 57 indicators (15 core + 42 extended)
-Every symbol × timeframe runs through 57 independent indicators. Each returns a five‑level signal (`STRONG_BUY = +2 … STRONG_SELL = −2`) plus a human‑readable reason. The 15 core indicators are:
+### 60 indicators (15 core + 45 extended)
+Every symbol × timeframe runs through 60 independent indicators. Each returns a five‑level signal (`STRONG_BUY = +2 … STRONG_SELL = −2`) plus a human‑readable reason. The 15 core indicators are:
 
 | # | Indicator | Defaults | Family |
 | --- | --- | --- | --- |
@@ -103,7 +103,7 @@ Every symbol × timeframe runs through 57 independent indicators. Each returns a
 | 14 | ADX + DI | period 14 | Trend strength |
 | 15 | ATR filter | period 14 | Volatility (filter) |
 
-The ATR filter is a **strict filter**: it carries weight 0, so it never votes in the consensus — it only feeds the risk assessment and the on‑screen volatility advisory. The remaining **42 extended indicators** (Supertrend, Squeeze, Wavetrend, Schaff Trend Cycle, Hurst, Kalman Trend, …) run alongside the core with their desktop‑reference weights; all 57 are fixture‑pinned to the shared Python reference engine.
+The ATR filter is a **strict filter**: it carries weight 0, so it never votes in the consensus — it only feeds the risk assessment and the on‑screen volatility advisory. The remaining **45 extended indicators** (Supertrend, Squeeze, Wavetrend, Schaff Trend Cycle, Hurst, Kalman Trend, and the 2026‑09 price‑action patterns Engulfing / Liquidity Sweep / Pivot Structure) run alongside the core with their desktop‑reference weights; all 60 are fixture‑pinned to the shared Python reference engine.
 
 ### 12 timeframes, scanned in two phases
 `1m · 3m · 5m · 15m · 30m · 1h · 2h · 4h · 6h · 8h · 12h · 1d`
@@ -152,7 +152,7 @@ The Scanner likewise reports how many symbols could not be scanned (`failedCount
 
 The Scanner and Signals screens use an indicator‑voting consensus. The pipeline for one symbol × timeframe is:
 
-**1. Vote.** Each of the 57 indicators produces a signal in `{ +2, +1, 0, −1, −2 }`.
+**1. Vote.** Each of the 60 indicators produces a signal in `{ +2, +1, 0, −1, −2 }`.
 
 **2. Weighted score.** The engine takes a weighted average:
 
@@ -160,7 +160,7 @@ The Scanner and Signals screens use an indicator‑voting consensus. The pipelin
 weightedScore = Σ(signal × weight) / Σ(weight)
 ```
 
-Indicators are weighted by family — for example MACD `2.0`, EMA‑cross `1.8`, RSI `1.5`, Bollinger `1.5`, ADX+DI `1.5`, OBV `1.5`, SMA‑cross `1.5`, Ichimoku `1.5`, Stochastic / PSAR / MFI `1.2`, Williams %R / CCI / ROC `1.0`, and the ATR filter `0.0` (never votes). **All 57 indicators carry their desktop‑reference weights** (as of 0.2.0 the 42 extended indicators are wired too — previously they silently scored at weight 1.0). Weights are user‑adjustable in Settings.
+Indicators are weighted by family — for example MACD `2.0`, EMA‑cross `1.8`, RSI `1.5`, Bollinger `1.5`, ADX+DI `1.5`, OBV `1.5`, SMA‑cross `1.5`, Ichimoku `1.5`, Stochastic / PSAR / MFI `1.2`, Williams %R / CCI / ROC `1.0`, and the ATR filter `0.0` (never votes). **All 60 wired indicators carry their desktop‑reference weights** (as of 0.2.0 the 42 then‑extended indicators were wired — previously they silently scored at weight 1.0; 0.3.0 added the price‑action patterns `engulfing` 1.2, `liquidity_sweep` 1.4, `pivot_structure` 1.1 to the weight map). Weights are user‑adjustable in Settings.
 
 **3. Verdict thresholds.**
 
@@ -232,7 +232,7 @@ Offline, compute‑only micro‑benchmarks of the consensus engine (no network, 
 
 The compute cost of the whole market is small; real‑world scan time is dominated by Binance network round‑trips, which the app fans out in parallel.
 
-> Scope note: `BENCHMARKS.md` measures the original **15‑core‑indicator F2 consensus path** over synthetic candles. The production pipeline runs all 57 indicators per symbol × timeframe, so absolute throughput differs; the point of the benchmarks is that compute is negligible relative to network latency.
+> Scope note: `BENCHMARKS.md` measures the original **15‑core‑indicator F2 consensus path** over synthetic candles. The production pipeline runs all 60 indicators per symbol × timeframe, so absolute throughput differs; the point of the benchmarks is that compute is negligible relative to network latency.
 
 - **Correctness:** the full Kotlin unit + fixture suite (150 tests, 0.2.0) passes; every indicator stays pinned to the original Python reference within per‑test tolerances.
 - **APK size:** 3.6 MB (release, R8‑minified).

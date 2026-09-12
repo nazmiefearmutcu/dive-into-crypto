@@ -55,9 +55,9 @@ class ConsensusEngine(
     private val settingsStore: SettingsStore? = null,
     /**
      * Fallback weights for the no-settings-store path. Defaults to the FULL
-     * 57-name map ([DEFAULT_FULL_WEIGHTS]) so a store-less engine applies the
+     * 60-name map ([DEFAULT_FULL_WEIGHTS]) so a store-less engine applies the
      * same weighted consensus as production instead of silently scoring the
-     * 42 extended indicators at weight 1.0.
+     * 45 extended indicators at weight 1.0.
      */
     private val fallbackWeights: Map<String, Double> = DEFAULT_FULL_WEIGHTS,
 ) {

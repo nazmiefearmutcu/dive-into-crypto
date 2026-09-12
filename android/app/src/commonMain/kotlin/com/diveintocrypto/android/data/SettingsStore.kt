@@ -49,6 +49,10 @@ class SettingsStore(private val kv: KeyValueStore) {
         kv.putString("scan_universe", data.scanUniverse)
         kv.putInt("scan_depth_top", data.scanDepthTop)
 
+        // Background WorkManager scans (opt-in; the worker reads these on every run)
+        kv.putBoolean("background_scans_enabled", data.backgroundScansEnabled)
+        kv.putBoolean("background_scans_unmetered", data.backgroundScansUnmetered)
+
         // Save weights
         data.weights.forEach { (key, value) ->
             kv.putFloat("weight_$key", value.toFloat())
@@ -84,9 +88,14 @@ class SettingsStore(private val kv: KeyValueStore) {
             ?: ScanUniverseMode.TOP50.label
         val scanDepthTop = kv.getInt("scan_depth_top", 50)
 
-        // FULL 57-name default weights (15 core F2 values + 42 extended
+        // Background WorkManager scans — OPT-IN (default off), unmetered-only
+        // default ON so a periodic scan never burns mobile data unnoticed.
+        val backgroundScansEnabled = kv.getBoolean("background_scans_enabled", false)
+        val backgroundScansUnmetered = kv.getBoolean("background_scans_unmetered", true)
+
+        // FULL 60-name default weights (15 core F2 values + 45 extended
         // desktop-reference values). Previously only 15 names were listed here,
-        // so the 42 extended indicators silently scored at weight 1.0 in the
+        // so the 45 extended indicators silently scored at weight 1.0 in the
         // engine. User overrides persist per key ("weight_<name>") and win.
         val weights = DEFAULT_FULL_WEIGHTS.mapValues { (key, defVal) ->
             kv.getFloat("weight_$key", defVal.toFloat()).toDouble()
@@ -111,6 +120,8 @@ class SettingsStore(private val kv: KeyValueStore) {
             weightAccountLs = weightAccountLs,
             scanUniverse = scanUniverse,
             scanDepthTop = scanDepthTop,
+            backgroundScansEnabled = backgroundScansEnabled,
+            backgroundScansUnmetered = backgroundScansUnmetered,
         )
     }
 }
@@ -136,4 +147,11 @@ data class SettingsData(
     val scanUniverse: String = ScanUniverseMode.TOP50.label,
     /** Phase-2 survivor pool size N (default 50). */
     val scanDepthTop: Int = 50,
+    /**
+     * OPT-IN periodic WorkManager background scan (default FALSE — a background
+     * scan costs real battery/data; nothing runs until the user enables it).
+     */
+    val backgroundScansEnabled: Boolean = false,
+    /** When true (default) the periodic work is constrained to unmetered networks. */
+    val backgroundScansUnmetered: Boolean = true,
 )

@@ -111,4 +111,45 @@ class AlertPersistenceTest {
         assertFalse(reborn.rules.value.single().enabled)
         assertEquals(1, reborn.firedHistory.value.size)
     }
+
+    @Test
+    fun `removeRule racing evaluation does not resurrect the rule from the stale snapshot`() = runTest {
+        val store = SettingsStore(InMemoryKeyValueStore())
+        val engine = newEngine(store, RecordingNotifier())
+        val doomed = engine.addRule("DOOMED", AlertKind.VERDICT)
+        val survivor = engine.addRule("SURVIVOR", AlertKind.VERDICT)
+
+        // Evaluate OUTSIDE the engine: the outcome's rule snapshot still
+        // carries BOTH rules (it was captured before the removal, exactly like
+        // a real evaluate→persist race).
+        val outcome = AlertEvaluator.evaluate(
+            rules = engine.rules.value,
+            inputs = AlertInputs(verdicts = mapOf(
+                "DOOMED" to AlertVerdict("BUY", 80, 100.0),
+                "SURVIVOR" to AlertVerdict("BUY", 80, 100.0),
+            )),
+            nowMs = 1_000L,
+        )
+        assertEquals(2, outcome.fired.size)
+        assertEquals(2, outcome.rules.size)
+
+        // The removal lands while the outcome is "in flight"…
+        engine.removeRule(doomed.id)
+
+        // …and only afterwards is the outcome applied: the removed rule must
+        // stay gone (never re-added from the stale snapshot), while the
+        // survivor's fire bookkeeping IS adopted.
+        engine.applyOutcome(outcome)
+        assertEquals(listOf("SURVIVOR"), engine.rules.value.map { it.symbol })
+        assertNull(engine.rules.value.firstOrNull { it.id == doomed.id })
+        assertEquals(1_000L, engine.rules.value.single().lastFiredTs, "survivor's lastFiredTs advanced")
+
+        // Both fires genuinely happened before the removal → history keeps both.
+        assertEquals(2, engine.firedHistory.value.size)
+
+        // Persistence agrees: a restart must not resurrect the removed rule.
+        val reborn = newEngine(store, RecordingNotifier())
+        assertEquals(listOf("SURVIVOR"), reborn.rules.value.map { it.symbol })
+        assertEquals(1_000L, reborn.rules.value.single().lastFiredTs)
+    }
 }
