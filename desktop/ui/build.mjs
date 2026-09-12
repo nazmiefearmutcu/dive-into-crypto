@@ -8,6 +8,7 @@ const APP = "src/app";
 const FILES = [
   "data.js",         // live backend adapter (window.DIVE + globals)
   "mock.js",         // offline demo fallback (window.DIVE_MOCK)
+  "i18n.js",         // TR/EN catalogs + L() helper (window.DIVE_I18N / dive_lang)
   "desktop-app.jsx", // "Depth Terminal" UI — shell + screens
 ];
 

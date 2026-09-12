@@ -1,7 +1,7 @@
 {
   "name": "dive-into-crypto-desktop-ui",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "Dive Into Crypto — Desktop UI (terminal-themed scanner front-end)",
   "type": "module",
   "engines": {
