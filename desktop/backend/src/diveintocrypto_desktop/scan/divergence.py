@@ -58,6 +58,28 @@ class SymbolResult:
 
 NONE_SYMBOL = SymbolResult()
 
+# ── divergence tiers (published constants, NOT fitted) ───────────────────────
+# WEAK 5-25 / MODERATE 25-55 / STRONG 55+ (on |score|); below 5 = none.
+# Tiers ANNOTATE rows and archives only — the elimination logic in
+# whale_regime_for / scanner is untouched and still uses DIVERGENCE_MIN_SHOWN.
+TIER_WEAK = "WEAK"
+TIER_MODERATE = "MODERATE"
+TIER_STRONG = "STRONG"
+TIER_NONE = "NONE"
+TIER_BOUNDARIES = (5.0, 25.0, 55.0)
+
+
+def tier_for(score: float) -> str:
+    """Fixed-tier label for a divergence score (sign-agnostic)."""
+    mag = abs(float(score))
+    if mag < TIER_BOUNDARIES[0]:
+        return TIER_NONE
+    if mag < TIER_BOUNDARIES[1]:
+        return TIER_WEAK
+    if mag < TIER_BOUNDARIES[2]:
+        return TIER_MODERATE
+    return TIER_STRONG
+
 
 def _sanitize(x: list[float], n: int) -> list[float] | None:
     """Forward-fill NaN/Inf; return None if >20% corrupt."""

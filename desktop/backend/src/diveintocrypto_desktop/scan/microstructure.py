@@ -37,6 +37,9 @@ class Params:
     w_taker: float = 1.0
     w_crowding: float = 1.0
     w_smart_dumb: float = 0.8
+    # additive lens signals (basis / funding acceleration)
+    w_basis_extreme: float = 0.6
+    w_funding_accel: float = 0.6
 
 
 # ── small numeric helpers (stdlib only) ──────────────────────────────────────
@@ -162,6 +165,48 @@ def _smart_dumb_spread(pos: list[float], glob: list[float], p: Params):
     return _clip(spread / 0.5), f"smart-dumb={spread:+.3f}"
 
 
+# ── additive scalars-based signals (basis / funding lens; never vote-touching) ─
+BASIS_EXTREME_Z = 2.0        # |basis z-score| treated as fully extreme
+FUNDING_ACCEL_REF = 0.0003   # predicted-settled gap of 3bp/interval → full magnitude
+
+
+def _basis_extreme(basis_zscore, p: Params):
+    """Contrarian read on the basis z-score (from the ``basis`` block).
+
+    A deep positive premium = over-heated leverage demand → fade. Scalar input;
+    ``None`` (unfetched/failed basis) skips the signal entirely.
+    """
+    try:
+        z = float(basis_zscore)
+    except (TypeError, ValueError):
+        return None, "basis unavailable"
+    if z != z:  # NaN guard
+        return None, "basis unavailable"
+    z = _clip(z, -p.z_cap, p.z_cap)
+    if abs(z) < 0.5:
+        return 0.0, "basis neutral"
+    return _clip(-z / BASIS_EXTREME_Z), f"basis z={z:+.2f}"
+
+
+def _funding_acceleration(predicted, settled, p: Params):
+    """Funding acceleration: predicted (pre-settlement) vs last settled rate.
+
+    A rising funding leg = longs increasingly crowded → contrarian bearish;
+    a falling leg (shorts paying) → bullish. Scalar inputs; either missing → skip.
+    """
+    try:
+        pred = float(predicted)
+        last = float(settled)
+    except (TypeError, ValueError):
+        return None, "funding lens unavailable"
+    if pred != pred or last != last:
+        return None, "funding lens unavailable"
+    accel = pred - last
+    if abs(accel) < 1e-5:
+        return 0.0, "funding flat"
+    return _clip(-accel / FUNDING_ACCEL_REF), f"accel={accel:+.5f}"
+
+
 _SIGNALS = (
     ("oi_price_divergence", "w_oi_div"),
     ("oi_breakout_confirm", "w_oi_breakout"),
@@ -196,12 +241,19 @@ def evaluate(series_data: dict, enabled: bool = True, params: Params = Params())
         "taker_aggression": _taker_aggression(taker, params),
         "ls_crowding_fade": _ls_crowding_fade(glob, params),
         "smart_dumb_spread": _smart_dumb_spread(pos, glob, params),
+        # additive lens signals — scalar inputs from the basis / funding-lens
+        # blocks; absent keys simply skip (never fabricated, never gate votes)
+        "basis_extreme": _basis_extreme(series_data.get("basis_zscore"), params),
+        "funding_acceleration": _funding_acceleration(
+            series_data.get("funding_predicted"), series_data.get("funding_last_settled"), params
+        ),
     }
 
     signals: list[dict] = []
     wsum = 0.0
     acc = 0.0
-    for name, wattr in _SIGNALS:
+    for name, wattr in _SIGNALS + (("basis_extreme", "w_basis_extreme"),
+                                   ("funding_acceleration", "w_funding_accel")):
         val, reason = computed[name]
         if val is None:
             continue

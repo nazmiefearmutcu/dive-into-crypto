@@ -37,7 +37,10 @@ def test_symbol_endpoint_ok():
             r = test_client.get("/api/symbol/BTCUSDT")
             assert r.status_code == 200
             assert r.json() == {"s": "BTCUSDT", "finalSignal": "BUY", "confidence": 75}
-            mock_build.assert_called_once_with("BTCUSDT")
+            mock_build.assert_called_once()
+            # default view: 1h primary TF, no historical end
+            assert mock_build.call_args.args == ("BTCUSDT",)
+            assert mock_build.call_args.kwargs == {"primary_tf": "1h", "end_ms": None}
 
 
 def test_symbol_endpoint_error():

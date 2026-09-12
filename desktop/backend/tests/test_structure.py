@@ -125,3 +125,47 @@ def test_greedy_clusters_size_ordering():
     ids = st.greedy_clusters(symbols, corr)
     assert ids["big"] == ids["m1"] == ids["m2"] == 1  # largest cluster gets id 1
     assert ids["solo"] == ids["sp"] == 2
+
+
+# ── cluster confirmation (v0.3) ───────────────────────────────────────────────
+def _cluster_rows():
+    return [
+        {"s": "A", "cluster_id": 1, "dominantDir": 1, "netNss": 100.0},
+        {"s": "B", "cluster_id": 1, "dominantDir": 1, "netNss": 110.0},
+        {"s": "C", "cluster_id": 1, "dominantDir": -1, "netNss": 90.0},
+        {"s": "D", "cluster_id": None, "dominantDir": 1, "netNss": 50.0},
+        {"s": "E", "cluster_id": 2, "dominantDir": 1, "netNss": 10.0},  # lone member
+        {"s": "F", "cluster_id": 2, "dominantDir": 1, "netNss": 12.0},
+    ]
+
+
+def test_cluster_agreement_needs_min_members():
+    conf = st.cluster_confirmation(_cluster_rows(), {r["s"]: r["cluster_id"] for r in _cluster_rows()})
+    # cluster 1 has 3 members: long A,B agree 2/3; short C agrees 1/3
+    assert conf["A"]["cluster_agreement"] == pytest.approx(0.667)
+    assert conf["B"]["cluster_agreement"] == pytest.approx(0.667)
+    assert conf["C"]["cluster_agreement"] == pytest.approx(0.333)
+    # cluster 2 has only 2 members (< MIN_CLUSTER_MEMBERS=3) → null
+    assert conf["E"]["cluster_agreement"] is None
+    assert conf["F"]["cluster_agreement"] is None
+    # unclustered → null
+    assert conf["D"]["cluster_agreement"] is None
+
+
+def test_cluster_rel_strength_zscore():
+    conf = st.cluster_confirmation(_cluster_rows(), {r["s"]: r["cluster_id"] for r in _cluster_rows()})
+    vals = [100.0, 110.0, 90.0]
+    import statistics
+    mean = statistics.fmean(vals)
+    sd = statistics.stdev(vals)
+    assert conf["A"]["cluster_rel_strength"] == pytest.approx(round((100.0 - mean) / sd, 3))
+    assert conf["B"]["cluster_rel_strength"] > 0
+    # lone cluster / unclustered → null (null-guarded)
+    assert conf["E"]["cluster_rel_strength"] is None
+    assert conf["D"]["cluster_rel_strength"] is None
+
+
+def test_cluster_confirmation_no_cluster_ids():
+    conf = st.cluster_confirmation(_cluster_rows(), {})
+    assert all(c["cluster_agreement"] is None and c["cluster_rel_strength"] is None
+               for c in conf.values())

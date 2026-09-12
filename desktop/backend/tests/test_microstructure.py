@@ -1,3 +1,5 @@
+import pytest
+
 """Unit tests for the futures-microstructure overlay (scan/microstructure.py)."""
 
 from diveintocrypto_desktop.scan import microstructure as ms
@@ -68,3 +70,43 @@ def test_score_bounded():
     assert -100.0 <= out["score"] <= 100.0
     for s in out["signals"]:
         assert -1.0 <= s["score"] <= 1.0
+
+
+# ── additive lens signals (v0.3): basis_extreme + funding_acceleration ────────
+def test_basis_extreme_contrarian_signal():
+    base = _bullish_series()
+    out = ms.evaluate({**base, "basis_zscore": 2.5})   # deep premium → fade bearish
+    names = [s["name"] for s in out["signals"]]
+    assert "basis_extreme" in names
+    sig = next(s for s in out["signals"] if s["name"] == "basis_extreme")
+    assert sig["score"] == pytest.approx(-1.0)          # −z/2 clamped
+    out_neg = ms.evaluate({**base, "basis_zscore": -2.0})
+    sig_neg = next(s for s in out_neg["signals"] if s["name"] == "basis_extreme")
+    assert sig_neg["score"] > 0
+
+
+def test_funding_acceleration_signal():
+    base = _bullish_series()
+    out = ms.evaluate({**base, "funding_predicted": 0.0005, "funding_last_settled": 0.0001})
+    sig = next(s for s in out["signals"] if s["name"] == "funding_acceleration")
+    assert sig["score"] == pytest.approx(-1.0)          # rising funding → fade (clamped)
+    out2 = ms.evaluate({**base, "funding_predicted": 0.0, "funding_last_settled": 0.0004})
+    sig2 = next(s for s in out2["signals"] if s["name"] == "funding_acceleration")
+    assert sig2["score"] > 0
+
+
+def test_lens_signals_skip_when_absent():
+    base = _bullish_series()
+    plain = ms.evaluate(base)
+    assert all(s["name"] not in ("basis_extreme", "funding_acceleration") for s in plain["signals"])
+    # partial keys: settled without predicted → skipped, never guessed
+    partial = ms.evaluate({**base, "funding_last_settled": 0.0001})
+    assert all(s["name"] != "funding_acceleration" for s in partial["signals"])
+
+
+def test_lens_signals_never_touch_vote_mechanics():
+    # the bundle still works with ONLY lens inputs (no OI/taker/etc.) — additive
+    only_lens = ms.evaluate({"basis_zscore": -3.0, "funding_predicted": 0.0,
+                             "funding_last_settled": 0.0005})
+    assert only_lens["direction"] == 1
+    assert only_lens["active"] == 2

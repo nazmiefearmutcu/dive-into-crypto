@@ -4,8 +4,10 @@ Every symbol gets a rolling 90-bar 1h-return **beta vs BTCUSDT** (OLS slope) and
 **Pearson correlation**. Where possible this is computed from candles the
 scanner ALREADY fetched (no extra upstream request); otherwise 1h klines are
 fetched once and cached for 10 minutes. Sector clusters are derived purely from
-the correlation structure — greedy single-link clustering at corr > 0.6 over the
-1h returns, top 8 clusters kept, each labeled by its largest member (the
+the correlation structure — leader/seed clustering at corr > 0.6 over the 1h
+returns (each symbol joins the first cluster whose SEED member correlates above
+the cut, else seeds its own cluster — not single-link: non-seed members never
+merge clusters), top 8 clusters kept, each labeled by its largest member (the
 highest-volume symbol inside it, since inputs arrive volume-ranked).
 
 Report-only analytics: nothing here feeds back into the consensus verdict.
@@ -24,20 +26,30 @@ from diveintocrypto_desktop.data import universe as uni
 
 BETA_WINDOW = 90        # rolling 1h-return window (bars)
 MIN_RETURNS = 30        # below this the beta/corr read is noise — report None
-CLUSTER_THRESHOLD = 0.6 # greedy single-link correlation cut
+CLUSTER_THRESHOLD = 0.6 # leader/seed clustering correlation cut
 MAX_CLUSTERS = 8        # labeled clusters kept
 _KLINE_TTL = 600.0      # seconds a fetched 1h series stays cached
 _BTC_SYMBOL = "BTCUSDT"
+
+# ── vol term structure / cone constants (published, not fitted) ──────────────
+VOL_HORIZONS: dict[str, int] = {"h1": 1, "h4": 4, "h12": 12, "h24": 24}
+HOURS_PER_YEAR = 365 * 24
+CONE_Z = 1.0            # envelope width in σ (log-normal P0·exp(±z·σ√h))
+CONE_MIN_WINDOWS = 30   # overlapping windows needed for an honest percentile
+MIN_CLUSTER_MEMBERS = 3 # clusters smaller than this → cluster_agreement null
 
 logger = logging.getLogger("trading_bot.scan.structure")
 
 # {symbol: (monotonic_ts, [(t_ms, close), ...])} — fetched-only 1h series cache
 _kline_cache: dict[str, tuple[float, list[tuple[int, float]]]] = {}
+# {symbol: (monotonic_ts, [candle, ...])} — full 1h candles (vol needs h/l)
+_candle_cache: dict[str, tuple[float, list[dict]]] = {}
 
 
 def reset_cache() -> None:
-    """Drop the fetched-kline cache (test hook)."""
+    """Drop the fetched-kline caches (test hook)."""
     _kline_cache.clear()
+    _candle_cache.clear()
 
 
 def _iso(ts: float) -> str:
@@ -130,11 +142,13 @@ def greedy_clusters(
     threshold: float = CLUSTER_THRESHOLD,
     top: int = MAX_CLUSTERS,
 ) -> dict[str, int | None]:
-    """Greedy single-link clustering over a pairwise-correlation map.
+    """Leader/seed clustering over a pairwise-correlation map.
 
     Symbols (in the given order — callers pass volume order) join the first
-    cluster whose SEED member correlates above ``threshold``; otherwise they seed
-    a new cluster. Returns ``{symbol: cluster_id}`` with ids 1..N assigned by
+    cluster whose SEED member correlates above ``threshold``; otherwise they
+    seed a new cluster. NOT single-link: only the seed's correlation gates
+    membership, so two loosely-correlated members can never bridge two clusters.
+    Returns ``{symbol: cluster_id}`` with ids 1..N assigned by
     cluster size (desc, ties by first-seen); only the top ``top`` clusters get
     ids — the rest (and unpairable symbols) map to ``None``.
     """
@@ -175,15 +189,213 @@ async def _one_hour_returns(symbol: str, candles_1h: list[dict] | None = None) -
     return rets
 
 
+async def _one_hour_candles(symbol: str, candles_1h: list[dict] | None = None) -> list[dict]:
+    """Full 1h candles (the vol block needs highs/lows) — same reuse rules as
+    :func:`_one_hour_returns`."""
+    if candles_1h:
+        return candles_1h
+    now = time.monotonic()
+    cached = _candle_cache.get(symbol)
+    if cached and now - cached[0] < _KLINE_TTL:
+        return cached[1]
+    candles = await kl.fetch_klines(symbol, "1h", limit=BETA_WINDOW)
+    if candles:
+        _candle_cache[symbol] = (now, candles)
+    return candles
+
+
+# ── vol term structure + cone (report-only; reuses the cached 1h candles) ─────
+def _log_returns(closes: list[float]) -> list[float]:
+    out: list[float] = []
+    for a, b in zip(closes, closes[1:]):
+        if a > 0 and b > 0:
+            out.append(math.log(b / a))
+    return out
+
+
+def _std(xs: list[float]) -> float | None:
+    n = len(xs)
+    if n < 2:
+        return None
+    m = sum(xs) / n
+    return math.sqrt(sum((x - m) ** 2 for x in xs) / (n - 1))
+
+
+def vol_term_structure(candles_1h: list[dict], btc_vol_1h: float | None = None) -> dict:
+    """``vol`` block — annualized close-to-close term structure from 1h candles.
+
+    ``curve`` uses overlapping h-hour log-return windows (step 1h — the standard
+    realized-vol trick; autocorrelation makes the long legs indicative, which the
+    UI should surface as descriptive). ``slope`` is the relative change h1→h24;
+    ``inverted`` is True when long-horizon vol prices BELOW short. ``vol_of_vol``
+    is the coefficient of variation of the rolling 24-bar σ. ``parkinson`` is the
+    high-low estimator, annualized. ``ratio_btc`` compares the symbol's 1h vol to
+    BTC's (null when BTC's vol is unavailable). Fewer than MIN_RETURNS hourly
+    returns → ``{"unavailable": "insufficient_history"}``.
+    """
+    closes = []
+    for c in candles_1h:
+        try:
+            v = float(c["c"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if math.isfinite(v) and v > 0:
+            closes.append(v)
+    rets = _log_returns(closes)
+    if len(rets) < MIN_RETURNS:
+        return {"unavailable": "insufficient_history"}
+
+    curve: dict[str, float | None] = {}
+    for name, h in VOL_HORIZONS.items():
+        if h == 1:
+            sd = _std(rets)
+        else:
+            sums = [sum(rets[i:i + h]) for i in range(len(rets) - h + 1)]
+            sd = _std(sums)
+        curve[name] = round(sd * math.sqrt(HOURS_PER_YEAR / h), 4) if sd is not None else None
+
+    c1, c24 = curve["h1"], curve["h24"]
+    slope = None
+    if c1 is not None and c24 is not None and c1 > 0:
+        slope = round((c24 - c1) / c1, 4)
+
+    rolling: list[float] = []
+    for i in range(24, len(rets) + 1):
+        sd = _std(rets[i - 24:i])
+        if sd is not None:
+            rolling.append(sd)
+    vov = None
+    if len(rolling) >= MIN_RETURNS:
+        m = sum(rolling) / len(rolling)
+        if m > 0:
+            vov = round(_std(rolling) / m, 4)  # type: ignore[arg-type]
+
+    pk_terms = []
+    for c in candles_1h:
+        try:
+            h, lo = float(c["h"]), float(c["l"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if h > 0 and lo > 0 and h >= lo:
+            pk_terms.append(math.log(h / lo) ** 2)
+    parkinson = None
+    if len(pk_terms) >= MIN_RETURNS:
+        parkinson = round(math.sqrt(sum(pk_terms) / len(pk_terms) / (4 * math.log(2)) * HOURS_PER_YEAR), 4)
+
+    ratio_btc = None
+    if btc_vol_1h and c1 is not None:
+        ratio_btc = round(c1 / btc_vol_1h, 3)
+
+    return {
+        "curve": curve,
+        "slope": slope,
+        "inverted": bool(c1 is not None and c24 is not None and c24 < c1),
+        "vol_of_vol": vov,
+        "parkinson": parkinson,
+        "ratio_btc": ratio_btc,
+    }
+
+
+def vol_cone(candles_1h: list[dict]) -> dict | None:
+    """``cone`` block — log-normal expected-move envelope, P0·exp(±z·σ√h).
+
+    ``sigma_1h`` is the per-bar (1h) log-return σ; ``env_24h``/``env_48h`` carry
+    the up/down fractional bounds at z=1; ``percentile`` ranks the latest 24h
+    absolute log-move within the trailing overlapping 24h distribution
+    (null below CONE_MIN_WINDOWS). Returns None when returns are insufficient —
+    the caller then OMITS the field (never ships a fake cone).
+    """
+    closes = []
+    for c in candles_1h:
+        try:
+            v = float(c["c"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if math.isfinite(v) and v > 0:
+            closes.append(v)
+    rets = _log_returns(closes)
+    if len(rets) < MIN_RETURNS:
+        return None
+    sigma = _std(rets)
+    if sigma is None or sigma <= 0:
+        return None
+
+    def env(h: int) -> dict[str, float]:
+        drift_z = CONE_Z * sigma * math.sqrt(h)
+        return {
+            "up": round(math.exp(drift_z) - 1.0, 4),
+            "down": round(math.exp(-drift_z) - 1.0, 4),
+        }
+
+    windows24 = [abs(sum(rets[i:i + 24])) for i in range(len(rets) - 24 + 1)]
+    percentile = None
+    if len(windows24) >= CONE_MIN_WINDOWS:
+        last = windows24[-1]
+        below = sum(1 for w in windows24 if w <= last)
+        percentile = round(below / len(windows24) * 100.0, 1)
+
+    return {
+        "sigma_1h": round(sigma, 6),
+        "env_24h": env(24),
+        "env_48h": env(48),
+        "percentile": percentile,
+    }
+
+
+def cluster_confirmation(
+    rows: list[dict],
+    ids: dict[str, int | None],
+) -> dict[str, dict]:
+    """``cluster_agreement`` + ``cluster_rel_strength`` per symbol.
+
+    ``cluster_agreement``: share of the row's cluster-mates (size ≥
+    MIN_CLUSTER_MEMBERS, else null) whose ``dominantDir`` matches the row's own
+    — a read of how much the sector backs the call. ``cluster_rel_strength``:
+    the row's ``netNss`` z-score vs its cluster's mean/sd (null when the cluster
+    has <2 readings or zero spread). Pure, null-guarded, no fabrication.
+    """
+    members_by_cluster: dict[int, list[dict]] = {}
+    for r in rows:
+        cid = ids.get(r["s"])
+        if cid is not None:
+            members_by_cluster.setdefault(cid, []).append(r)
+
+    out: dict[str, dict] = {}
+    for r in rows:
+        cid = ids.get(r["s"])
+        agreement = None
+        rel_strength = None
+        if cid is not None:
+            members = members_by_cluster.get(cid, [])
+            if len(members) >= MIN_CLUSTER_MEMBERS and r.get("dominantDir") is not None:
+                same = sum(
+                    1 for m in members
+                    if m.get("dominantDir") is not None and int(m["dominantDir"]) == int(r["dominantDir"])
+                )
+                agreement = round(same / len(members), 3)
+                # rel strength uses the same quorum: tiny clusters carry no signal
+                strengths = [float(m["netNss"]) for m in members if m.get("netNss") is not None]
+                own = r.get("netNss")
+                if own is not None and len(strengths) >= 2:
+                    mean = sum(strengths) / len(strengths)
+                    sd = _std(strengths)
+                    if sd is not None and sd > 0:
+                        rel_strength = round((float(own) - mean) / sd, 3)
+        out[r["s"]] = {"cluster_agreement": agreement, "cluster_rel_strength": rel_strength}
+    return out
+
+
 async def attach_structure(
     rows: list[dict], candle_map: dict[str, dict[str, list[dict]]]
 ) -> dict[str, dict]:
-    """Attach ``beta`` / ``corr_btc`` / ``cluster_id`` inputs for scan rows.
+    """Attach ``beta`` / ``corr_btc`` / ``cluster_id`` / cluster confirmation /
+    ``vol`` / ``cone`` inputs for scan rows.
 
     ``candle_map`` is ``{symbol: candles_by_tf}`` from the scan itself (1h candles
     reused — no extra fetch for symbols present). Returns
-    ``{symbol: {beta, corr_btc, cluster_id}}``; missing data maps to ``None``
-    fields — never fabricated.
+    ``{symbol: {beta, corr_btc, cluster_id, cluster_agreement,
+    cluster_rel_strength, vol, cone}}``; missing data maps to ``None`` fields —
+    never fabricated.
     """
     btc_1h = (candle_map.get(_BTC_SYMBOL) or {}).get("1h")
     try:
@@ -192,6 +404,18 @@ async def attach_structure(
         logger.warning("structure: BTC 1h fetch failed — %s", str(e)[:80])
         btc_rets_ts = []
     btc_vals = [v for _, v in btc_rets_ts]
+
+    # BTC 1h vol (for per-symbol ratio_btc) — from the same reused candles.
+    btc_candles = btc_1h or []
+    try:
+        if not btc_candles:
+            btc_candles = await _one_hour_candles(_BTC_SYMBOL)
+    except Exception as e:
+        logger.warning("structure: BTC vol candles failed — %s", str(e)[:80])
+    btc_vol = None
+    btc_vol_block = vol_term_structure(btc_candles)
+    if "curve" in btc_vol_block:
+        btc_vol = btc_vol_block["curve"].get("h1")
 
     rets_by_symbol: dict[str, list[tuple[int, float]]] = {}
     for r in rows:
@@ -234,6 +458,27 @@ async def attach_structure(
         out.setdefault(s, {})["cluster_id"] = cid
     for s in (r["s"] for r in rows):
         out.setdefault(s, {"beta": None, "corr_btc": None, "cluster_id": None})
+
+    # cluster confirmation (needs dominantDir + netNss on the rows)
+    for s, conf in cluster_confirmation(rows, ids).items():
+        out.setdefault(s, {}).update(conf)
+
+    # vol term structure + cone — computed from the SAME reused 1h candles
+    for r in rows:
+        s = r["s"]
+        try:
+            candles = (candle_map.get(s) or {}).get("1h")
+            if not candles:
+                candles = await _one_hour_candles(s)
+        except Exception as e:
+            logger.warning("structure: %s vol fetch failed — %s", s, str(e)[:80])
+            candles = []
+        vol = vol_term_structure(candles, btc_vol_1h=btc_vol) if candles else \
+            {"unavailable": "insufficient_history"}
+        out.setdefault(s, {})
+        out[s]["vol"] = vol
+        cone = vol_cone(candles) if candles else None
+        out[s]["cone"] = cone  # omitted downstream when None
     return out
 
 
@@ -291,13 +536,23 @@ async def structure_summary(limit: int = 60) -> dict:
             by_cluster.setdefault(cid, []).append(s)
 
     clusters = []
+    try:
+        from diveintocrypto_desktop.data import index_info as ii
+
+        verification = await ii.verify_cluster_labels(by_cluster)
+    except Exception as e:  # verification is an annotation — never fatal
+        logger.warning("structure: index verification failed — %s", str(e)[:80])
+        verification = {}
     for cid in sorted(by_cluster):
         members = by_cluster[cid]  # volume-ordered (universe order) → member[0] is largest
+        ver = verification.get(cid, {})
         clusters.append(
             {
                 "cluster_id": cid,
                 "label": members[0].replace("USDT", ""),
                 "size": len(members),
+                "index_verified": bool(ver.get("index_verified")),
+                "verified_name": ver.get("verified_name"),
                 "members": [
                     {"s": s, "beta": rows_meta.get(s, {}).get("beta"), "corr_btc": rows_meta.get(s, {}).get("corr_btc")}
                     for s in members

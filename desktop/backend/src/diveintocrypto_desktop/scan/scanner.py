@@ -24,7 +24,10 @@ import asyncio
 import logging
 import time
 
+from diveintocrypto_desktop.data import basis as bs
 from diveintocrypto_desktop.data import binance_klines as kl
+from diveintocrypto_desktop.data import funding as fnd
+from diveintocrypto_desktop.data import spot as spot_mod
 from diveintocrypto_desktop.data import universe as uni
 from diveintocrypto_desktop.scan import divergence as dv
 from diveintocrypto_desktop.scan import structure as st
@@ -220,6 +223,57 @@ async def _attach_divergence(row: dict, sem: asyncio.Semaphore) -> None:
     row["_adverse"] = adverse
 
 
+def _attach_divergence_tier(row: dict) -> None:
+    """Annotate the row's divergence score with its fixed tier (WEAK/MODERATE/
+    STRONG/NONE). Pure annotation — elimination logic is untouched."""
+    score = (row.get("divergence") or {}).get("score")
+    row["divergence_tier"] = dv.tier_for(score) if isinstance(score, (int, float)) else dv.TIER_NONE
+
+
+async def _attach_market_extras(rows: list[dict], sem: asyncio.Semaphore) -> None:
+    """Batch-annotated market blocks for the returned rows: funding lens + basis
+    (from ONE premiumIndex batch call + the shared delivery map + per-symbol
+    premium history) and the spot lead/lag. Each piece fails independently and
+    is either honest-``unavailable`` or omitted — never a zero dressed as data.
+    """
+    try:
+        prem_all = await fnd.premium_index_all()
+        deliveries = await bs.delivery_symbols()
+    except Exception as e:
+        logger.warning("scan: market extras skipped — %s", str(e)[:80])
+        return
+
+    async def one(row: dict) -> None:
+        prem = prem_all.get(row["s"])
+        if not prem:
+            return
+        try:
+            async with sem:
+                tail = await fnd.funding_hist(row["s"], limit=2)
+            settled = [t["funding_rate"] for t in tail]
+            row["funding_lens"] = fnd.funding_lens(
+                prem["last_funding_rate"], settled, int(prem.get("next_funding_time") or 0) or None
+            )
+        except Exception as e:
+            logger.warning("scan: %s funding lens failed — %s", row["s"], str(e)[:80])
+        try:
+            async with sem:
+                hist = await bs.premium_index_klines(row["s"], "5m", 200)
+            row["basis"] = await bs.basis_block(
+                row["s"], prem, deliveries.get(row["s"], {}), [h["premium_pct"] for h in hist]
+            )
+        except Exception as e:
+            logger.warning("scan: %s basis failed — %s", row["s"], str(e)[:80])
+        try:
+            closes = [c["c"] for c in (row.get("_candles_by_tf", {}).get("1h") or [])]
+            async with sem:
+                row["spot_perp"] = await spot_mod.snapshot(row["s"], row.get("price", 0.0), closes)
+        except Exception as e:
+            logger.warning("scan: %s spot lead/lag failed — %s", row["s"], str(e)[:80])
+
+    await asyncio.gather(*(one(r) for r in rows))
+
+
 def _rank_score(row: dict, max_net: float) -> float:
     """netNss + 0.35·divergence (README blend). Divergence is signed toward the
     dominant direction so a confirming whale lift ranks a coin up."""
@@ -314,6 +368,8 @@ async def scan(
     await asyncio.gather(*(_attach_divergence(r, div_sem) for r in candidates))
     if progress:
         progress.tick(len(candidates))
+    for r in candidates:
+        _attach_divergence_tier(r)
 
     max_net = max((r["netNss"] for r in candidates), default=1.0) or 1.0
     candidates.sort(key=lambda r: _rank_score(r, max_net), reverse=True)
@@ -324,7 +380,7 @@ async def scan(
 
     survivors = survivors[:size]
 
-    # ── market structure (BTC beta / correlation / clusters) for the returned rows ──
+    # ── market structure (BTC beta / correlation / clusters / vol) for the returned rows ──
     if progress:
         progress.set_phase("structure", total=1)
     candle_map = {r["s"]: r.get("_candles_by_tf", {}) for r in candidates}
@@ -338,8 +394,20 @@ async def scan(
         r["beta"] = f.get("beta")
         r["corr_btc"] = f.get("corr_btc")
         r["cluster_id"] = f.get("cluster_id")
+        r["cluster_agreement"] = f.get("cluster_agreement")
+        r["cluster_rel_strength"] = f.get("cluster_rel_strength")
+        r["vol"] = f.get("vol")
+        if f.get("cone") is not None:
+            r["cone"] = f.get("cone")
     if progress:
         progress.tick()
+
+    # funding lens + basis + spot lead/lag for the returned rows (batch-priced)
+    extras_sem = asyncio.Semaphore(4)
+    try:
+        await _attach_market_extras(candidates, extras_sem)
+    except Exception as e:  # extras are annotations — never break the scan
+        logger.warning("scan: market extras failed — %s", str(e)[:120])
 
     for r in survivors + eliminated:
         r.pop("_candles_by_tf", None)  # don't ship the transient candle cache

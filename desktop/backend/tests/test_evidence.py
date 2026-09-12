@@ -223,42 +223,99 @@ async def test_grade_skips_immature_records():
 
 # ── summary aggregation ────────────────────────────────────────────────────────
 def test_summary_aggregates_by_verdict_confidence_indicator():
+    # v0.3 stats gates: n<5 reports {n} only, so each bucket below gets exactly
+    # 5 graded events to exercise the real aggregation math (gated: true).
     sig_a = {"rsi": 1, "macd": 1, "adx_di": -1}
     sig_b = {"rsi": 1}  # LONG-leaning indicator on a SHORT verdict → disagree
-    evidence.append_lines(evidence.archive_path(), [
-        _rec("AUSDT", TS, verdict="BUY", conf=80, price=100.0, dir=1, signals=sig_a),
-        _rec("BUSDT", TS, verdict="SELL", conf=30, price=50.0, dir=-1, signals=sig_b),
-        _rec("CUSDT", TS, verdict="NEUTRAL", conf=10, price=2.0, dir=0, signals={}),
-    ])
-    grades = [
-        {"ts": TS, "symbol": "AUSDT", "horizon": "4h", "hit": True, "forward": 0.02},
-        {"ts": TS, "symbol": "BUSDT", "horizon": "4h", "hit": True, "forward": 0.01},
-        {"ts": TS, "symbol": "CUSDT", "horizon": "4h", "hit": False, "forward": -0.02},
+    recs = [
+        _rec("A1", TS - 0 * HOUR, verdict="BUY", conf=80, price=100.0, dir=1, signals=sig_a),
+        _rec("A2", TS - 1 * HOUR, verdict="BUY", conf=80, price=100.0, dir=1, signals=sig_a),
+        _rec("A3", TS - 2 * HOUR, verdict="BUY", conf=80, price=100.0, dir=1, signals=sig_a),
+        _rec("A4", TS - 3 * HOUR, verdict="BUY", conf=80, price=100.0, dir=1, signals=sig_a),
+        _rec("A5", TS - 4 * HOUR, verdict="BUY", conf=80, price=100.0, dir=1, signals=sig_a),
+        _rec("B1", TS - 0 * HOUR, verdict="SELL", conf=30, price=50.0, dir=-1, signals=sig_b),
+        _rec("B2", TS - 1 * HOUR, verdict="SELL", conf=30, price=50.0, dir=-1, signals=sig_b),
+        _rec("B3", TS - 2 * HOUR, verdict="SELL", conf=30, price=50.0, dir=-1, signals=sig_b),
+        _rec("B4", TS - 3 * HOUR, verdict="SELL", conf=30, price=50.0, dir=-1, signals=sig_b),
+        _rec("B5", TS - 4 * HOUR, verdict="SELL", conf=30, price=50.0, dir=-1, signals=sig_b),
+        _rec("C1", TS - 0 * HOUR, verdict="NEUTRAL", conf=10, price=2.0, dir=0, signals={}),
+        _rec("C2", TS - 1 * HOUR, verdict="NEUTRAL", conf=10, price=2.0, dir=0, signals={}),
+        _rec("C3", TS - 2 * HOUR, verdict="NEUTRAL", conf=10, price=2.0, dir=0, signals={}),
+        _rec("C4", TS - 3 * HOUR, verdict="NEUTRAL", conf=10, price=2.0, dir=0, signals={}),
+        _rec("C5", TS - 4 * HOUR, verdict="NEUTRAL", conf=10, price=2.0, dir=0, signals={}),
     ]
+    evidence.append_lines(evidence.archive_path(), recs)
+    # LONG all hit, SHORT all hit, NEUTRAL none hit
+    grades = (
+        [{"ts": r["ts"], "symbol": r["symbol"], "horizon": "4h", "hit": True, "forward": 0.02}
+         for r in recs[:5]]
+        + [{"ts": r["ts"], "symbol": r["symbol"], "horizon": "4h", "hit": True, "forward": 0.01}
+           for r in recs[5:10]]
+        + [{"ts": r["ts"], "symbol": r["symbol"], "horizon": "4h", "hit": False, "forward": -0.02}
+           for r in recs[10:]]
+    )
     evidence.append_lines(evidence.grades_path(), grades)
     s = evidence.summary("4h", now_ms=NOW)
-    assert s["archived_count"] == 3 and s["graded_count"] == 3 and s["gradable_count"] == 3
+    assert s["archived_count"] == 15 and s["graded_count"] == 15 and s["gradable_count"] == 15
     assert s["coverage"] == 1.0 and s["stale"] is False
-    assert s["by_verdict"]["LONG"]["n"] == 1 and s["by_verdict"]["LONG"]["hit_rate"] == 1.0
-    assert s["by_verdict"]["LONG"]["avg_forward"] == pytest.approx(0.02)
-    assert s["by_verdict"]["SHORT"]["n"] == 1
-    assert s["by_verdict"]["NEUTRAL"]["n"] == 1 and s["by_verdict"]["NEUTRAL"]["hit_rate"] == 0.0
+    # n=5 → values present but gated (below GATE_FLAG_N=20)
+    lv = s["by_verdict"]["LONG"]
+    assert lv["n"] == 5 and lv["hit_rate"] == 1.0 and lv["gated"] is True
+    assert lv["avg_forward"] == pytest.approx(0.02)
+    assert 0.0 <= lv["wilson_lo"] <= lv["wilson_hi"] <= 1.0
+    sv = s["by_verdict"]["SHORT"]
+    assert sv["n"] == 5 and sv["hit_rate"] == 1.0
+    nv = s["by_verdict"]["NEUTRAL"]
+    assert nv["n"] == 5 and nv["hit_rate"] == 0.0
     buckets = {b["bucket"]: b for b in s["by_confidence"]}
-    assert buckets["75-100"]["n"] == 1 and buckets["25-50"]["n"] == 1 and buckets["0-25"]["n"] == 1
-    assert buckets["50-75"]["n"] == 0
-    # per-indicator association (report-only)
+    assert buckets["75-100"]["n"] == 5 and buckets["25-50"]["n"] == 5 and buckets["0-25"]["n"] == 5
+    assert buckets["50-75"]["n"] == 0 and set(buckets["50-75"]) == {"bucket", "n"}  # gated
+    # per-indicator association (report-only): rsi agrees 5× (A) + disagrees 5× (B)
     ind = s["by_indicator"]
-    assert ind["rsi"]["agree"]["n"] == 1 and ind["rsi"]["agree"]["hit_rate"] == 1.0
-    assert ind["rsi"]["disagree"]["n"] == 1
-    assert ind["macd"]["agree"]["n"] == 1
-    assert ind["adx_di"]["disagree"]["n"] == 1
+    assert ind["rsi"]["agree"]["n"] == 5 and ind["rsi"]["agree"]["hit_rate"] == 1.0
+    assert ind["rsi"]["disagree"]["n"] == 5 and ind["rsi"]["disagree"]["hit_rate"] == 1.0
+    assert ind["macd"]["agree"]["n"] == 5
+    assert ind["adx_di"]["disagree"]["n"] == 5
+    # v2 blocks present
+    assert s["calibration"]["bins"] and len(s["calibration"]["bins"]) == 4
+    assert s["brier"]["n"] == 15
+    assert set(s["windows"]) == {"7d", "30d", "all"}
+    assert s["windows"]["all"]["LONG"]["n"] == 5
+    for sl in ("by_regime", "by_session", "by_funding_proximity", "by_divergence_tier"):
+        assert s[sl]["note"].startswith("multiple comparisons")
+    assert set(s["by_session"]["buckets"]) <= {"0-8", "8-16", "16-24", "unclassified"}
+    assert s["provenance"]["graded_count"] == 15 and s["provenance"]["failed_grades"] == 0
 
 
 def test_summary_stale_when_mature_records_ungraded():
     evidence.append_lines(evidence.archive_path(), [_rec("AUSDT", TS, price=100.0)])
     s = evidence.summary("4h", now_ms=NOW)
     assert s["stale"] is True and s["graded_count"] == 0 and s["coverage"] == 0.0
-    assert s["by_verdict"]["LONG"]["n"] == 0 and s["by_verdict"]["LONG"]["hit_rate"] is None
+    # gate: n=0 → {n} only (never a fabricated 0% hit-rate)
+    assert s["by_verdict"]["LONG"] == {"n": 0}
+
+
+# ── stats gates + Wilson interval (v0.3 contract) ─────────────────────────────
+def test_wilson_interval_known_values():
+    # Wilson 95% on 7/10 ≈ [0.397, 0.892] (standard reference value)
+    lo, hi = evidence.wilson_interval(7, 10)
+    assert lo == pytest.approx(0.3968, abs=5e-4) and hi == pytest.approx(0.8922, abs=5e-4)
+    lo0, hi0 = evidence.wilson_interval(0, 5)
+    assert lo0 == 0.0 and 0 < hi0 < 0.6  # honest non-zero upper bound at p̂=0
+    assert evidence.wilson_interval(1, 0) == (None, None)
+
+
+def test_stats_gates_suppress_gated_and_full():
+    def g(hit):
+        return {"hit": hit, "forward": 0.01}
+
+    assert evidence._stats([g(True)] * 4) == {"n": 4}  # n<5 → {n} only
+    nine = evidence._stats([g(True)] * 6 + [g(False)] * 3)
+    assert nine["n"] == 9 and nine["hit_rate"] == pytest.approx(0.6667)  # 4 dp rounding
+    assert nine["gated"] is True and "wilson_lo" in nine  # n<20 → flagged
+    fifty = evidence._stats([g(True)] * 30 + [g(False)] * 20)
+    assert fifty["n"] == 50 and fifty["gated"] is False
+    assert fifty["hit_rate"] == 0.6 and fifty["wilson_lo"] < 0.6 < fifty["wilson_hi"]
 
 
 # ── API surface ────────────────────────────────────────────────────────────────
@@ -277,9 +334,11 @@ def test_evidence_api_endpoints(monkeypatch):
     body = r.json()
     assert body["archived_count"] == 1
     assert body["stale"] is True
-    assert {"n", "hit_rate", "avg_forward", "median_forward"} <= set(body["by_verdict"]["LONG"])
+    # gate: 1 record, no grades → LONG bucket is {n: 0}
+    assert body["by_verdict"]["LONG"] == {"n": 0}
     assert [b["bucket"] for b in body["by_confidence"]] == ["0-25", "25-50", "50-75", "75-100"]
     assert body["generated_at"].endswith("Z")
+    assert body["engine_version"] == evidence.ENGINE_VERSION
 
     g = client.post("/api/evidence/grade?horizon=4h")
     assert g.status_code == 200
@@ -292,3 +351,137 @@ def test_evidence_api_endpoints(monkeypatch):
 
     bad = client.get("/api/evidence?horizon=3h")
     assert bad.status_code == 422
+
+
+def test_grade_stores_v2_event_fields():
+    rec = _rec("AUSDT", TS, verdict="BUY", dir=1, price=100.0)
+    candles = _candles(TS, [(100.5, 99.5, 100.2), (103.0, 100.0, 102.0), (102.5, 101.0, 101.5)])
+    g = evidence._grade_one(rec, candles, "4h", NOW)
+    assert g["hit_close"] is True            # close-to-close +1.5% ≥ 1%
+    assert g["mfe"] == pytest.approx(0.03)   # max favorable excursion
+    assert g["mae"] == pytest.approx(0.005)  # max adverse excursion
+    assert g["bnh_forward"] == pytest.approx(0.015)  # unsigned buy-and-hold
+    assert g["momentum_hit"] is None         # no pre-window → honest null
+
+
+def test_summary_calibration_brier_baselines():
+    recs = [_rec(f"S{i}", TS - i * HOUR, verdict="BUY", conf=80, price=100.0, dir=1, signals={})
+            for i in range(6)]
+    grades = [{"ts": r["ts"], "symbol": r["symbol"], "horizon": "4h",
+               "hit": i % 2 == 0, "forward": 0.01 if i % 2 == 0 else -0.02}
+              for i, r in enumerate(recs)]
+    evidence.append_lines(evidence.archive_path(), recs)
+    evidence.append_lines(evidence.grades_path(), grades)
+    s = evidence.summary("4h", now_ms=NOW)
+
+    cal = s["calibration"]
+    b75 = next(b for b in cal["bins"] if b["bucket"] == "75-100")
+    assert b75["n"] == 6 and b75["mean_conf"] == 80.0
+    assert b75["hit_rate"] == pytest.approx(0.5)
+    # ECE = |0.5 - 0.8| (one populated bin, full weight)
+    assert cal["ece"] == pytest.approx(0.3, abs=1e-3)
+
+    br = s["brier"]
+    assert br["n"] == 6
+    # conf 0.8, alternating hit/miss → mean((0.2)², (0.8)²) = 0.34
+    assert br["score"] == pytest.approx(0.34, abs=1e-3)
+    assert br["ref"] > 0 and -1.0 <= br["skill"] <= 1.0
+
+    base = s["baselines"]
+    assert base["coin_mean"] == 0.0
+    assert base["coin_sd"] > 0
+    assert 0.0 < base["p_value"] <= 1.0  # add-one floor: never a fake 0.0
+    assert base["seed"] == 42 and base["permutations"] == 1000
+
+
+def test_baselines_p_value_add_one_floor():
+    import random
+
+    # one graded forward: the seeded sign-flip null is fully replicable, so the
+    # exact ge is known and the p-value must follow (1+ge)/(K+1) — not ge/K
+    rec = _rec("PF", TS, verdict="BUY", dir=1, price=100.0)
+    grade = {"ts": TS, "symbol": "PF", "horizon": "4h", "hit": True, "forward": 0.02}
+    base = evidence.baselines([(rec, grade)])
+    rng = random.Random(evidence.PERMUTATION_SEED)
+    ge = sum(1 for _ in range(evidence.PERMUTATION_K) if rng.random() < 0.5)
+    assert base["p_value"] == round((1 + ge) / (evidence.PERMUTATION_K + 1), 4)
+    assert base["p_value"] >= 1.0 / (evidence.PERMUTATION_K + 1)
+
+
+def test_calibration_gating_and_zero_sample_ece():
+    def pair(conf: int, hit: bool):
+        r = _rec("CUSDT", TS, verdict="BUY", conf=conf, price=100.0, dir=1)
+        return (r, {"ts": r["ts"], "symbol": "CUSDT", "horizon": "4h", "hit": hit,
+                    "forward": 0.01})
+
+    # zero graded samples → ece is None (never a fabricated 0.0)
+    empty = evidence.calibration([])
+    assert empty["ece"] is None
+    assert len(empty["bins"]) == 4 and all(b["n"] == 0 for b in empty["bins"])
+
+    # one populated bin with n=3 (< GATE_SUPPRESS_N): gated:true, feeds NO ece
+    small = evidence.calibration([pair(80, True), pair(80, False), pair(80, True)])
+    assert small["ece"] is None  # no bin large enough → honest None, not 0.0
+    b = next(x for x in small["bins"] if x["bucket"] == "75-100")
+    assert b["n"] == 3 and b["gated"] is True and b["hit_rate"] == pytest.approx(0.6667)
+
+    # n=5 bin: feeds the ECE and renders gated:false
+    fed = evidence.calibration([pair(80, True)] * 5)
+    b5 = next(x for x in fed["bins"] if x["bucket"] == "75-100")
+    assert b5["n"] == 5 and b5["gated"] is False
+    assert fed["ece"] == pytest.approx(abs(1.0 - 0.8), abs=1e-3)
+
+
+def test_summary_slices_classify_unclassified():
+    # one v2 record with regime/tier, one legacy record without them
+    r_new = _rec("NEW1", TS, verdict="BUY", conf=60, price=100.0, dir=1)
+    r_new.update({"regime": "TREND", "divergence_tier": "STRONG"})
+    r_old = _rec("OLD1", TS - HOUR, verdict="BUY", conf=60, price=100.0, dir=1)  # no v2 fields
+    grades = [
+        {"ts": r_new["ts"], "symbol": "NEW1", "horizon": "4h", "hit": True, "forward": 0.02},
+        {"ts": r_old["ts"], "symbol": "OLD1", "horizon": "4h", "hit": True, "forward": 0.02},
+    ]
+    evidence.append_lines(evidence.archive_path(), [r_new, r_old])
+    evidence.append_lines(evidence.grades_path(), grades)
+    s = evidence.summary("4h", now_ms=NOW)
+    reg_buckets = s["by_regime"]["buckets"]
+    assert reg_buckets["TREND"]["n"] == 1 and reg_buckets["unclassified"]["n"] == 1
+    tier_buckets = s["by_divergence_tier"]["buckets"]
+    assert tier_buckets["STRONG"]["n"] == 1 and tier_buckets["unclassified"]["n"] == 1
+
+
+def test_stability_endpoint_math():
+    base_ts = NOW - 48 * HOUR
+    rows = []
+    for i in range(8):
+        v = "BUY" if i % 4 != 3 else "SELL"  # 6 BUY / 2 SELL
+        rows.append(_rec("AGREE", base_ts + i * HOUR, verdict=v, price=100.0))
+    evidence.append_lines(evidence.archive_path(), rows)
+    out = evidence.stability(limit_per_symbol=8)
+    row = next(r for r in out if r["s"] == "AGREE")
+    assert row["k"] == 8
+    assert row["agree_frac"] == pytest.approx(0.75)  # 6/8 on the BUY side
+    assert row["median_gap_min"] == 60.0
+    assert row["last_ts"] == rows[-1]["ts"]
+
+
+def test_stability_measures_directional_rows_only():
+    # 3 BUY + 1 NEUTRAL used to read 0.75 (the NEUTRAL diluted the denominator);
+    # agreement now runs over DIRECTIONAL rows only: 3/3 on the BUY side, k=3
+    rows = [
+        _rec("MIX", NOW - 4 * HOUR, verdict="BUY", price=100.0),
+        _rec("MIX", NOW - 3 * HOUR, verdict="BUY", price=100.0),
+        _rec("MIX", NOW - 2 * HOUR, verdict="NEUTRAL", price=100.0),
+        _rec("MIX", NOW - HOUR, verdict="BUY", price=100.0),
+    ]
+    evidence.append_lines(evidence.archive_path(), rows)
+    row = next(r for r in evidence.stability(limit_per_symbol=8) if r["s"] == "MIX")
+    assert row["k"] == 3
+    assert row["agree_frac"] == pytest.approx(1.0)
+
+    # all-neutral tail: nothing directional to agree with → honest null, k=0
+    neutral_rows = [_rec("FLAT", NOW - (i + 1) * HOUR, verdict="NEUTRAL", price=100.0)
+                    for i in range(3)]
+    evidence.append_lines(evidence.archive_path(), neutral_rows)
+    flat = next(r for r in evidence.stability(limit_per_symbol=8) if r["s"] == "FLAT")
+    assert flat["k"] == 0 and flat["agree_frac"] is None

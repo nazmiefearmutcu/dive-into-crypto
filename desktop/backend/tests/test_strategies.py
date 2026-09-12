@@ -56,3 +56,14 @@ def test_mtf_confluence_split_no_gate():
 def test_mtf_empty_is_neutral():
     c = mtf.confluence([])
     assert c["direction"] == 0 and c["gate"] is False and c["score"] == 0.0
+
+
+def test_mtf_score_clipped_to_pm100():
+    # fully-aligned max-confidence stack sits exactly at the clip bounds — the
+    # score is CLIPPED to ±100 (microstructure parity), never rescaled past it
+    m = [{"tf": tf, "signal": "BUY", "confidence": 100} for tf in
+         ("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d")]
+    up = mtf.confluence(m)
+    assert up["score"] == 100.0 and up["direction"] == 1 and up["label"] == "STRONG"
+    down = mtf.confluence([{**r, "signal": "SELL"} for r in m])
+    assert down["score"] == -100.0 and down["direction"] == -1 and down["label"] == "STRONG"

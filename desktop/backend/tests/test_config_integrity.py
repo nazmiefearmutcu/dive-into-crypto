@@ -10,7 +10,7 @@ from diveintocrypto_desktop.engine.indicators.atr_filter import ATRFilterIndicat
 from diveintocrypto_desktop.engine.loader import _CONFIG_PATH, load_config
 from diveintocrypto_desktop.engine.signal_service import SignalService
 
-EXPECTED_INDICATOR_COUNT = 57
+EXPECTED_INDICATOR_COUNT = 60
 
 
 @pytest.fixture(scope="module")

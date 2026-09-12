@@ -1,0 +1,13 @@
+claim_id: CL-001-LONG-4H-EDGE
+registered_at: '2026-09-12T00:00:00Z'
+engine_version: desktop-0.3.0
+claim: 'LONG verdicts hit (price moves >=1% favorably before moving >=1% against)
+  more often than not at the 4h horizon.'
+metric: hit_rate
+filter:
+  verdict: LONG
+horizon: 4h
+min_n: 30
+threshold:
+  op: '>='
+  value: 0.5

@@ -192,3 +192,28 @@ def test_per_tf_handles_invalid_start_price_or_whale():
     assert r == dv.NONE_TF
 
 
+
+
+# ── divergence tiers (v0.3): fixed published constants, annotation only ───────
+def test_tier_for_fixed_boundaries():
+    assert dv.TIER_BOUNDARIES == (5.0, 25.0, 55.0)
+    assert dv.tier_for(4.999) == "NONE"
+    assert dv.tier_for(5.0) == "WEAK"
+    assert dv.tier_for(24.9) == "WEAK"
+    assert dv.tier_for(25.0) == "MODERATE"
+    assert dv.tier_for(54.9) == "MODERATE"
+    assert dv.tier_for(55.0) == "STRONG"
+    assert dv.tier_for(100.0) == "STRONG"
+    assert dv.tier_for(-60.0) == "STRONG"   # sign-agnostic on |score|
+    assert dv.tier_for(0.0) == "NONE"
+
+
+def test_tier_annotation_does_not_change_elimination():
+    # whale_regime_for is untouched by tiers: same inputs → same (regime, adverse)
+    sym = dv.SymbolResult(score=-30.0, direction=1)  # bullish divergence signal
+    confirm = dv.whale_regime_for(sym, 1, 5.0)       # LONG verdict, divergence agrees
+    assert confirm == ("confirm", False)
+    adverse = dv.whale_regime_for(sym, -1, 5.0)      # SHORT verdict, divergence opposes
+    assert adverse == ("adverse", True)
+    below = dv.whale_regime_for(sym, -1, 35.0)       # below display threshold → neutral
+    assert below == ("neutral", False)

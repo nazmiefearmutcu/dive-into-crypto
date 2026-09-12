@@ -1,6 +1,6 @@
 [project]
 name = "diveintocrypto-desktop"
-version = "0.1.0"
+version = "0.3.0"
 description = "Dive Into Crypto — Desktop Edition backend (Crypcodile-fed scanner service)"
 requires-python = ">=3.12"
 # crypcodile is pinned to an exact upstream commit via a PEP 508 direct reference

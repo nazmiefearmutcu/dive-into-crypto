@@ -10,6 +10,13 @@ progress record (``/api/scan/progress``) and an optional async mode
 (``/api/scan?async=1`` returns a ``scan_id`` immediately). Every verdict is
 appended to the evidence archive (``scan/evidence.py``) and market-structure
 annotations (BTC beta / correlation / clusters) ride along on scan rows.
+
+v0.3.0 additive surfaces: macro/sentiment (``/api/macro``), Deribit options slice
+(``/api/options``), evidence depth (Wilson-gated stats, calibration, Brier,
+stability, replay grid, IC + weight suggestions), the claims registry
+(``/api/claims``), the thin decisions reader (``/api/evidence/decisions``),
+multi-TF / historical symbol views (``?tf=`` / ``?end_ms=``) and the lightweight
+watch ticker (``/api/pulse``).
 """
 
 from __future__ import annotations
@@ -22,20 +29,32 @@ import time
 from collections import deque
 from pathlib import Path
 
-from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from diveintocrypto_desktop.data import binance_klines as kl
+from diveintocrypto_desktop.data import deribit as drb
+from diveintocrypto_desktop.data import funding as fnd
+from diveintocrypto_desktop.data import open_interest as oi_mod
+from diveintocrypto_desktop.data import sentiment as senti
 from diveintocrypto_desktop.data import universe as uni
 from diveintocrypto_desktop.data.http import close_session
+from diveintocrypto_desktop.scan import claims as claims_mod
 from diveintocrypto_desktop.scan import evidence
 from diveintocrypto_desktop.scan import progress as progress_mod
+from diveintocrypto_desktop.scan import replay as replay_mod
 from diveintocrypto_desktop.scan import scanner
 from diveintocrypto_desktop.scan import structure as st
 from diveintocrypto_desktop.scan import symbol_builder as sb
 
-_UI_DIST = Path(__file__).resolve().parents[4] / "ui" / "dist"
+# Frozen-app support (PyInstaller): bundled resources live under ``sys._MEIPASS``
+# in onefile builds; in a normal checkout the UI sits 4 levels above this file.
+_BASE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[4]))
+_UI_DIST = _BASE_DIR / "ui" / "dist"
+
+VERSION = "0.3.0"
 
 # Real request log (most-recent-first) for the Network Log screen.
 _LOG: deque[dict] = deque(maxlen=200)
@@ -44,9 +63,13 @@ _LOG: deque[dict] = deque(maxlen=200)
 _scan_cache: dict[str, tuple[float, dict]] = {}
 _SCAN_TTL = 20.0
 
-# Per-symbol detail TTL (10s): /api/symbol costs ~21 upstream calls.
+# Per-symbol detail TTL (10s): /api/symbol costs ~21+ upstream calls.
 _SYMBOL_TTL = 10.0
 _SYMBOL_CACHE_MAX = 128
+
+# /api/pulse: 10s cache (a watch list refresh must stay cheap).
+_PULSE_TTL = 10.0
+_PULSE_MAX_SYMBOLS = 20
 
 # Async scans: the fire-and-forget task keeps a strong reference via this set
 # (a bare create_task can be garbage-collected mid-flight); results are parked
@@ -111,6 +134,7 @@ def create_app() -> FastAPI:
     _symbol_cache: dict[str, tuple[float, dict]] = {}
     _async_tasks: set[asyncio.Task] = set()
     _async_results: dict[str, tuple[float, dict]] = {}
+    _pulse_cache: dict[tuple[str, ...], tuple[float, list[dict]]] = {}
 
     def _park_result(scan_id: str, res: dict) -> None:
         now = time.monotonic()
@@ -159,8 +183,9 @@ def create_app() -> FastAPI:
         _configure_logging()
         yield
         await close_session()
+        await drb.close_session()
 
-    app = FastAPI(title="Dive Into Crypto — Desktop", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Dive Into Crypto — Desktop", version=VERSION, lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware, allow_origins=["http://127.0.0.1", "http://localhost"],
         allow_origin_regex=r"http://(127\.0\.0\.1|localhost):\d+", allow_methods=["GET", "POST"], allow_headers=["*"],
@@ -168,7 +193,7 @@ def create_app() -> FastAPI:
 
     @app.get("/api/health")
     async def health() -> dict:
-        return {"ok": True, "service": "dive-into-crypto-desktop", "version": "0.1.0", "ui_built": _UI_DIST.exists()}
+        return {"ok": True, "service": "dive-into-crypto-desktop", "version": VERSION, "ui_built": _UI_DIST.exists()}
 
     @app.get("/api/universe")
     async def universe(limit: int = 60) -> list[dict]:
@@ -313,24 +338,174 @@ def create_app() -> FastAPI:
         return out
 
     @app.get("/api/symbol/{symbol}")
-    async def symbol(symbol: str) -> JSONResponse:
+    async def symbol(
+        symbol: str,
+        tf: str = Query("1h"),
+        end_ms: int | None = Query(None, ge=0),
+    ) -> JSONResponse:
+        """Full data-contract object. ``tf`` selects the primary timeframe (default
+        ``1h``); ``end_ms`` requests a HISTORICAL view as of that instant (klines
+        are fetched with that ``endTime``)."""
         key = symbol.upper()
+        if tf not in kl.TF_LIST:
+            raise HTTPException(status_code=422, detail=f"tf must be one of {kl.TF_LIST}")
+        cache_key = f"{key}:{tf}:{end_ms or 0}"
         t0 = time.monotonic()
-        hit = _symbol_cache.get(key)
+        hit = _symbol_cache.get(cache_key)
         if hit and t0 - hit[0] < _SYMBOL_TTL:
             _log(f"Built {key} · {hit[1].get('finalSignal', '?')} (cache)", 200, int((time.monotonic() - t0) * 1000))
             return JSONResponse(hit[1])
         try:
-            obj = await sb.build_symbol(key)
+            obj = await sb.build_symbol(key, primary_tf=tf, end_ms=end_ms)
         except Exception as e:  # surface honestly, do not fabricate (and do not cache)
             _log(f"GET symbol {symbol} FAILED: {str(e)[:60]}", 502, int((time.monotonic() - t0) * 1000))
             return JSONResponse({"error": "symbol_fetch_failed", "symbol": symbol}, status_code=502)
         if len(_symbol_cache) >= _SYMBOL_CACHE_MAX:
             oldest = min(_symbol_cache, key=lambda k: _symbol_cache[k][0])
             _symbol_cache.pop(oldest, None)
-        _symbol_cache[key] = (time.monotonic(), obj)
+        _symbol_cache[cache_key] = (time.monotonic(), obj)
         _log(f"Built {key} · {obj['finalSignal']} ({obj['confidence']}%)", 200, int((time.monotonic() - t0) * 1000))
         return JSONResponse(obj)
+
+    @app.get("/api/pulse")
+    async def pulse(symbols: str = Query(..., description="Comma-separated symbols, e.g. BTC,ETH (≤20)")) -> list[dict]:
+        """Lightweight watch-list ticker: ``[{s, price, ch, funding_rate,
+        next_funding_time_ms, oi_delta_pct}]`` (10s cache, ≤20 symbols).
+
+        ``price``/``funding_rate``/``next_funding_time_ms`` come from ONE batch
+        premiumIndex call; ``ch`` rides the cached universe; ``oi_delta_pct`` is
+        the 5m open-interest change over the last ~2h (null when unavailable)."""
+        raw = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+        if not raw:
+            raise HTTPException(status_code=422, detail="symbols required")
+        if len(raw) > _PULSE_MAX_SYMBOLS:
+            raise HTTPException(status_code=422, detail=f"max {_PULSE_MAX_SYMBOLS} symbols")
+        syms = [s if s.endswith("USDT") else f"{s}USDT" for s in raw]
+        key = tuple(syms)
+        now = time.monotonic()
+        cached = _pulse_cache.get(key)
+        if cached and now - cached[0] < _PULSE_TTL:
+            return cached[1]
+
+        try:
+            prem_all = await fnd.premium_index_all()
+        except Exception as e:
+            _log(f"GET /api/pulse FAILED: {str(e)[:60]}", 502, 0)
+            return JSONResponse({"error": "pulse_unavailable", "detail": str(e)[:80]}, status_code=502)
+
+        ch_map = {}
+        try:
+            ch_map = {r["s"]: r.get("ch") for r in await uni.list_universe(limit=None)}
+        except Exception:
+            pass
+
+        async def one(sym: str) -> dict:
+            prem = prem_all.get(sym) or {}
+            ch = ch_map.get(sym)
+            oi_delta = None
+            try:
+                hist = await oi_mod.fetch_oi_hist(sym, "5m", limit=24)
+                if len(hist) >= 2 and hist[0]["oi"]:
+                    oi_delta = round((hist[-1]["oi"] - hist[0]["oi"]) / hist[0]["oi"] * 100.0, 3)
+            except Exception:
+                pass
+            return {
+                "s": sym,
+                "price": prem.get("mark_price"),
+                "ch": ch,
+                "funding_rate": prem.get("last_funding_rate"),
+                "next_funding_time_ms": prem.get("next_funding_time") or None,
+                "oi_delta_pct": oi_delta,
+            }
+
+        rows = list(await asyncio.gather(*(one(s) for s in syms)))
+        _pulse_cache[key] = (time.monotonic(), rows)
+        _log(f"Pulse · {len(rows)} symbols", 200, 0)
+        return rows
+
+    @app.get("/api/macro")
+    async def macro() -> dict:
+        """Sentiment/macro backdrop — independent failure domain from market data.
+
+        ``fng`` (alternative.me Fear & Greed, 1h cache / daily cadence),
+        ``stablecoin`` (exchange-native proxy off the shared ticker payload) and
+        ``defillama`` (best-effort aggregate) each fail independently."""
+        t0 = time.monotonic()
+        try:
+            out = await senti.macro_snapshot()
+        except Exception as e:
+            _log(f"GET /api/macro FAILED: {str(e)[:60]}", 502, int((time.monotonic() - t0) * 1000))
+            return JSONResponse({"error": "macro_unavailable", "detail": str(e)[:80]}, status_code=502)
+        _log("Macro snapshot", 200, int((time.monotonic() - t0) * 1000))
+        return out
+
+    @app.get("/api/options")
+    async def options() -> dict:
+        """Deribit staged slice (BTC + ETH): DVOL level, put/call OI ratio, 30d ATM IV.
+
+        Independent venue: its own timeout + circuit-breaker. Unreachable → the
+        currency's block is ``{"unavailable": "deribit_unreachable"}`` — never a
+        fabricated number, never a blocker for other data."""
+        return await drb.options_overview()
+
+    @app.get("/api/evidence/stability")
+    async def evidence_stability() -> list[dict]:
+        """Per-symbol verdict self-agreement over the last 8 archived records."""
+        return await asyncio.to_thread(evidence.stability)
+
+    @app.get("/api/evidence/decisions")
+    async def evidence_decisions(
+        symbol: str | None = Query(None),
+        from_ms: int | None = Query(None, ge=0),
+        to_ms: int | None = Query(None, ge=0),
+        limit: int = Query(500, ge=1, le=2000),
+    ) -> list[dict]:
+        """Thin archive reader: archived verdicts for ``symbol`` in a ts window."""
+        sym = symbol.upper() if symbol else None
+        return await asyncio.to_thread(evidence.decisions, sym, from_ms, to_ms, limit)
+
+    @app.post("/api/evidence/replay")
+    async def evidence_replay(horizon: str = Query(evidence.DEFAULT_HORIZON, pattern=_HORIZON_PATTERN)) -> dict:
+        """Counterfactual threshold grid over the archive (bounded, in-thread).
+
+        STRICTLY report-only: nothing writes to engine configuration; the
+        response carries ``report_only: true``."""
+        return await asyncio.to_thread(replay_mod.replay_grid, horizon)
+
+    @app.get("/api/evidence/ic")
+    async def evidence_ic(horizon: str = Query(evidence.DEFAULT_HORIZON, pattern=_HORIZON_PATTERN)) -> dict:
+        """Per-indicator Spearman IC vs graded forward return (report-only)."""
+        return await asyncio.to_thread(replay_mod.ic_table, None, None, horizon)
+
+    @app.post("/api/evidence/suggest-weights")
+    async def evidence_suggest_weights(horizon: str = Query(evidence.DEFAULT_HORIZON, pattern=_HORIZON_PATTERN)) -> dict:
+        """IC-based weight suggestions (normalized, capped 3× shipped).
+
+        Written to ``runtime/weight_suggestions.json``; NEVER read by the engine."""
+        ic = await asyncio.to_thread(replay_mod.ic_table, None, None, horizon)
+        out = await asyncio.to_thread(replay_mod.suggest_weights, ic, None)
+        path = replay_mod.write_suggestions(out)
+        out["written_to"] = str(path) if path else None
+        return out
+
+    @app.get("/api/claims")
+    async def claims_list() -> dict:
+        """Registered claims + current evaluation (PENDING/CONFIRMED/REFUTED).
+
+        Evaluated ONLY on grades with ts > the claim's registered_at."""
+        rows = await asyncio.to_thread(claims_mod.list_evaluations)
+        return {"claims": rows, "generated_at": evidence._iso(time.time())}
+
+    @app.post("/api/claims", status_code=201)
+    async def claims_register(claim: dict) -> dict:
+        """Register a NEW claim (registry files are immutable by convention)."""
+        try:
+            path = await asyncio.to_thread(claims_mod.register, claim)
+        except claims_mod.ClaimExistsError as e:
+            return JSONResponse({"error": "claim_exists", "detail": str(e)}, status_code=409)
+        except claims_mod.ClaimError as e:
+            return JSONResponse({"error": "invalid_claim", "detail": str(e)}, status_code=422)
+        return {"registered": True, "file": path.name, "claim": claim}
 
     @app.get("/api/leaders")
     async def leaders(limit: int = 8) -> dict:

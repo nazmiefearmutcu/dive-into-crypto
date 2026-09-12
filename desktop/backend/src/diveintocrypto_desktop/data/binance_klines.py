@@ -78,13 +78,16 @@ def _drop_unfinished(recs: list, interval: str, now_ns: int) -> list:
     return out if out else recs[-1:]
 
 
-async def fetch_klines(symbol: str, interval: str, limit: int = 300) -> list[dict]:
+async def fetch_klines(symbol: str, interval: str, limit: int = 300,
+                       end_ms: int | None = None) -> list[dict]:
     """Return the most recent ``limit`` FINISHED candles for ``symbol`` at ``interval``.
 
     Each candle is ``{t, o, h, l, c, v}`` with ``t`` in nanoseconds UTC. The
-    current in-progress candle is never returned.
+    current in-progress candle is never returned. ``end_ms`` fetches the window
+    ENDING at that instant (historical views); the anti-repaint rule then drops
+    candles that were still unfinished *as of ``end_ms``*.
     """
-    now_ms = int(time.time() * 1000)
+    now_ms = int(end_ms if end_ms is not None else time.time() * 1000)
     raw = await _fetch_raw(symbol, interval, limit + 1, now_ms)
     local_ts = now_ms * 1_000_000
     recs = parse_klines_page(raw, _VENUE, symbol, interval, local_ts)
@@ -115,10 +118,11 @@ async def fetch_klines_range(
     ]
 
 
-async def fetch_all_tf(symbol: str, limit: int = 300, intervals: list[str] | None = None) -> dict[str, list[dict]]:
-    """Fetch all 12 timeframes for ``symbol`` concurrently."""
+async def fetch_all_tf(symbol: str, limit: int = 300, intervals: list[str] | None = None,
+                       end_ms: int | None = None) -> dict[str, list[dict]]:
+    """Fetch all 12 timeframes for ``symbol`` concurrently (optionally as-of ``end_ms``)."""
     tfs = intervals or TF_LIST
-    results = await asyncio.gather(*(fetch_klines(symbol, tf, limit) for tf in tfs))
+    results = await asyncio.gather(*(fetch_klines(symbol, tf, limit, end_ms=end_ms) for tf in tfs))
     return dict(zip(tfs, results))
 
 

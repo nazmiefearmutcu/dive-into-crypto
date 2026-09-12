@@ -64,6 +64,10 @@ from diveintocrypto_desktop.engine.indicators.range_expansion import RangeExpans
 from diveintocrypto_desktop.engine.indicators.kalman_trend import KalmanTrendIndicator
 from diveintocrypto_desktop.engine.indicators.half_life_reversion import HalfLifeReversionIndicator
 from diveintocrypto_desktop.engine.indicators.rolling_sharpe import RollingSharpeIndicator
+# --- Price-action pattern library (2026-09-12) ---
+from diveintocrypto_desktop.engine.indicators.engulfing import EngulfingIndicator
+from diveintocrypto_desktop.engine.indicators.liquidity_sweep import LiquiditySweepIndicator
+from diveintocrypto_desktop.engine.indicators.pivot_structure import PivotStructureIndicator
 from diveintocrypto_desktop.engine.utils.logger import get_logger
 
 logger = get_logger("services.signal_service")
@@ -138,6 +142,10 @@ class SignalService:
             KalmanTrendIndicator,
             HalfLifeReversionIndicator,
             RollingSharpeIndicator,
+            # --- Price-action pattern library (2026-09-12) ---
+            EngulfingIndicator,
+            LiquiditySweepIndicator,
+            PivotStructureIndicator,
         ]
         return [cls(self.config) for cls in indicator_classes]
 

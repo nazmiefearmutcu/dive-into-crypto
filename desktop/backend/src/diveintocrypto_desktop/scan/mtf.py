@@ -2,9 +2,12 @@
 
 Scores agreement across the per-timeframe verdicts, weighting higher timeframes more and
 scaling by each TF's confidence. A strong, aligned higher-TF stack = high-confidence
-confluence; a split stack = low. Surfaces a signed score, the dominant direction, the
-higher-TF agreement fraction, and a boolean gate (whether the higher-TF stack agrees) so
-the UI/ranking can require confluence before acting. Additive — does not change any verdict.
+confluence; a split stack = low. Surfaces a signed score CLIPPED to ±100 (microstructure
+semantics: clip, never rescale — the weighted mean of ±1 directions × ≤1 confidence
+factors already lives in [-1, 1], the clip only guards degenerate inputs), the dominant
+direction, the higher-TF agreement fraction, and a boolean gate (whether the higher-TF
+stack agrees) so the UI/ranking can require confluence before acting. Additive — does
+not change any verdict.
 """
 
 from __future__ import annotations
@@ -43,7 +46,10 @@ def confluence(multi_tf: list[dict], min_gate: float = 0.6) -> dict[str, Any]:
     if wsum == 0.0:
         return {"score": 0.0, "direction": 0, "gate": False, "htf_agree": 0.0, "label": "NEUTRAL"}
 
-    score = round(acc / wsum * 100.0, 1)
+    # microstructure parity: clip to ±100 — never rescale (the weighted mean of
+    # ±1 directions × ≤1 confidence factors is already inside [-1, 1]; the clip
+    # only guards degenerate/out-of-range inputs)
+    score = round(max(-100.0, min(100.0, acc / wsum * 100.0)), 1)
     dom = 1 if score > 0 else -1 if score < 0 else 0
     nonzero = [d for d in htf_dirs if d != 0]
     htf_agree = (sum(1 for d in nonzero if d == dom) / len(nonzero)) if nonzero else 0.0

@@ -48,10 +48,16 @@ indicator_thresholds:
     long_period: 21
     short_period: 9
     strong_divergence_pct: 0.02
+  engulfing:
+    body_ratio: 0.7
   ichimoku:
     kijun_period: 26
     senkou_b_period: 52
     tenkan_period: 9
+  liquidity_sweep:
+    atr_period: 14
+    lookback: 10
+    strong_penetration_atr: 0.5
   macd:
     fast_period: 12
     signal_period: 9
@@ -66,6 +72,8 @@ indicator_thresholds:
   obv:
     divergence_lookback: 10
     sma_period: 20
+  pivot_structure:
+    k: 2
   psar:
     af_increment: 0.02
     af_max: 0.2
@@ -164,6 +172,10 @@ indicator_weights:
   kalman_trend: 1.4
   half_life_reversion: 1.0
   rolling_sharpe: 1.2
+  # --- Price-action pattern library (2026-09-12) ---
+  engulfing: 1.2
+  liquidity_sweep: 1.4
+  pivot_structure: 1.1
 microstructure:
   enabled: true
   window: 24

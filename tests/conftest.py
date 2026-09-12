@@ -54,6 +54,9 @@ import diveintocrypto_desktop.data.open_interest as oi_mod
 import diveintocrypto_desktop.data.ratios as rat
 import diveintocrypto_desktop.data.funding as fnd
 import diveintocrypto_desktop.data.universe as uni
+import diveintocrypto_desktop.data.basis as bs
+import diveintocrypto_desktop.data.orderbook as ob
+import diveintocrypto_desktop.data.spot as spot_mod
 import diveintocrypto_desktop.scan.symbol_builder as sb
 from diveintocrypto_desktop.api.app import create_app
 
@@ -171,6 +174,11 @@ _orig_funding_hist = fnd.funding_hist
 _orig_list_universe = uni.list_universe
 _orig_ticker_24hr = sb._ticker_24hr
 _orig_fetch_agg_trades = cvd_mod.fetch_agg_trades
+_orig_premium_index_all = fnd.premium_index_all
+_orig_premium_index_klines = bs.premium_index_klines
+_orig_delivery_symbols = bs.delivery_symbols
+_orig_orderbook_snapshot = ob.snapshot
+_orig_spot_snapshot = spot_mod.snapshot
 
 def generate_mock_candles(symbol: str, interval: str, limit: int = 300) -> list[dict]:
     now_ns = int(time.time() * 1000) * 1_000_000
@@ -350,7 +358,7 @@ def mock_data_layer():
         if not ("BTC" in s or "ETH" in s or "SOL" in s or "KEYSTORE" in s):
             raise ValueError(f"Invalid symbol: {symbol}")
 
-    async def mock_fetch_klines(symbol, interval, limit=300):
+    async def mock_fetch_klines(symbol, interval, limit=300, end_ms=None):
         check_symbol(symbol)
         return generate_mock_candles(symbol, interval, limit)
     async def mock_fetch_oi_hist(symbol, period="5m", limit=48):
@@ -382,6 +390,31 @@ def mock_data_layer():
         check_symbol(symbol)
         return generate_mock_agg_trades(symbol, limit)
 
+    async def mock_premium_index_all():
+        # one batch premiumIndex payload for every mocked symbol
+        rows = {}
+        for sym in ("BTCUSDT", "ETHUSDT", "SOLUSDT", "KEYSTOREUSDT"):
+            try:
+                rows[sym] = await mock_premium_index(sym)
+            except ValueError:
+                continue
+        return rows
+
+    async def mock_premium_index_klines(symbol, interval="5m", limit=200):
+        # drifting premium-percent series (−0.02% → +0.02%) for the z-score
+        n = 100
+        return [{"t": 1_700_000_000_000 + i * 300_000, "premium_pct": -0.02 + 0.04 * i / n}
+                for i in range(n)]
+
+    async def mock_delivery_symbols():
+        return {}  # no quarterly contracts in the mock exchange
+
+    async def mock_orderbook_snapshot(symbol):
+        return {"unavailable": "book_too_thin"}
+
+    async def mock_spot_snapshot(symbol, perp_price, perp_closes):
+        return {"unavailable": "no_spot_market"}
+
     kl.fetch_klines = mock_fetch_klines
     oi_mod.fetch_oi_hist = mock_fetch_oi_hist
     rat.global_account_ls = mock_global_account_ls
@@ -394,9 +427,14 @@ def mock_data_layer():
     uni.list_universe = mock_list_universe
     sb._ticker_24hr = mock_ticker_24hr
     cvd_mod.fetch_agg_trades = mock_fetch_agg_trades
+    fnd.premium_index_all = mock_premium_index_all
+    bs.premium_index_klines = mock_premium_index_klines
+    bs.delivery_symbols = mock_delivery_symbols
+    ob.snapshot = mock_orderbook_snapshot
+    spot_mod.snapshot = mock_spot_snapshot
 
     yield
-    
+
     kl.fetch_klines = _orig_fetch_klines
     oi_mod.fetch_oi_hist = _orig_fetch_oi_hist
     rat.global_account_ls = _orig_global_account_ls
@@ -409,6 +447,11 @@ def mock_data_layer():
     uni.list_universe = _orig_list_universe
     sb._ticker_24hr = _orig_ticker_24hr
     cvd_mod.fetch_agg_trades = _orig_fetch_agg_trades
+    fnd.premium_index_all = _orig_premium_index_all
+    bs.premium_index_klines = _orig_premium_index_klines
+    bs.delivery_symbols = _orig_delivery_symbols
+    ob.snapshot = _orig_orderbook_snapshot
+    spot_mod.snapshot = _orig_spot_snapshot
 
 def get_free_port():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
