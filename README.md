@@ -1,208 +1,106 @@
-```
-┌─ DIVE INTO CRYPTO ─────────────────────────────────────────────┐
-│                                                                │
-│   Binance USDT-M perpetual-futures scanner.                    │
-│   60 indicators · 12 timeframes · whale-divergence filter ·    │
-│   one confidence-scored consensus verdict per symbol.          │
-│                                                                │
-│   No account. No API keys. No sign-up. Public data only.       │
-└────────────────────────────────────────────────────────────────┘
-```
+# Dive Into Crypto
 
-[![CI](https://github.com/nazmiefearmutcu/dive-into-crypto/actions/workflows/ci.yml/badge.svg)](https://github.com/nazmiefearmutcu/dive-into-crypto/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-39ff9e?style=flat-square)](LICENSE)
-[![Last commit](https://img.shields.io/github/last-commit/nazmiefearmutcu/dive-into-crypto?style=flat-square&color=39ff9e)](https://github.com/nazmiefearmutcu/dive-into-crypto/commits)
-![Python](https://img.shields.io/badge/python-3.12+-1c7a52?style=flat-square)
-![Kotlin](https://img.shields.io/badge/kotlin-compose-1c7a52?style=flat-square)
-![React](https://img.shields.io/badge/ui-react-1c7a52?style=flat-square)
+Dive Into Crypto scans Binance USDT-M perpetual futures and summarizes technical signals across 12 timeframes. It provides a ranked market view and a detailed breakdown of each symbol through a desktop browser interface and a native Android app.
 
-Point it at the futures market and it tells you, per symbol, whether the evidence leans **long,
-short, or neutral** — and how much to trust that read. Every symbol runs a weighted vote of **60
-technical indicators across all 12 timeframes**, gets cross-checked against **top-trader
-positioning** (whale flow that diverges from price is empirically contrarian), and collapses into a
-single verdict with a 0–100 confidence and a LOW/MEDIUM/HIGH risk read.
+The scanner combines 60 indicators with positioning and futures-market context. Its confidence values describe the engine's scoring rules; they are not probabilities of a profitable trade.
 
-It is not a bot. It places no orders, holds no keys, and reads nothing but public Binance
-market data. It is an instrument for *seeing* the market, not trading it for you.
+## What it does
 
-> **Not financial advice. Not an automated trader.** Crypto derivatives are high-risk; every
-> decision is yours. See [Disclaimer](#disclaimer).
+- Calculates trend, momentum, volatility, volume, statistical and price-action indicators from market candles.
+- Produces a weighted consensus with a direction, confidence score, risk assessment and individual indicator reasons.
+- Ranks symbols across timeframes from one minute to one day, using a coarse scan followed by a more detailed candidate scan.
+- Adds open-interest, funding, taker-flow, regime and multi-timeframe context to the technical read.
+- Compares top-trader long/short positioning with price and filters conflicting candidates.
+- Records desktop scan verdicts for later outcome grading, replay and evidence review.
 
----
+Public market-data endpoints do not require exchange credentials. The application does not place orders or hold funds.
 
-## Two editions, one engine
+## Editions
 
 | | Desktop | Android |
 | --- | --- | --- |
-| **Stack** | Python (FastAPI) + React terminal UI | Kotlin · Jetpack Compose |
-| **Data** | [Crypcodile](https://github.com/nazmiefearmutcu/Crypcodile)-fed, highest fidelity | Binance USDT-M public REST + WS |
-| **Runs** | local, terminal-launched | on your device, single APK |
-| **Engine** | full **60 indicators + 3 overlays** | full **60 indicators + 3 overlays** |
+| Interface | React UI served by a local Python service | Kotlin and Jetpack Compose |
+| Runtime | Python 3.12+ and a browser | Android 8.0+ |
+| Data access | Pinned Crypcodile dependency and direct public-data adapters | Public REST and WebSocket clients |
+| Signal calculation | Python reference implementation | Kotlin implementation with reference-fixture tests |
 
-Both run the same engine. Every indicator is pinned to the shared Python reference by fixture
-(see [Parity](#parity)); the desktop engine is the reference, the Kotlin engine is its
-fixture-verified mirror.
+## Architecture
 
----
-
-## The interface — "Depth Terminal"
-
-Not a dashboard. A precision instrument: a blueprint grid, schematic corner-brackets, hairline
-rulers, tabular numerics, one phosphor accent per theme, and glow only where something is alive.
-Four themes — **Phosphor · Amber · Ice · Paper** — switch live.
-
-| Scanner — the ranked sweep | Panel — one symbol, in depth |
-| --- | --- |
-| ![Scanner](docs/screenshots/desktop-scanner.png) | ![Panel](docs/screenshots/desktop-panel.png) |
-
----
-
-## What the engine actually does
-
-**1 · Fifty-seven indicators, one weighted vote.**
-Each indicator returns a five-level signal (`STRONG_BUY +2 … STRONG_SELL −2`); the consensus is a
-weighted average with verdict thresholds, a conflict override that forces NEUTRAL on too much
-disagreement, ADX-driven regime adaptation, and a confidence score. The families:
-
-```
-TREND        ema/sma cross · macd · ichimoku · psar · adx/di · supertrend · vortex ·
-             aroon · schaff · trix · kst · coppock · kalman · donchian · keltner · elder-ray
-MOMENTUM     roc · awesome · rvi · cmo · tsi · qstick
-OSCILLATOR   rsi · stochastic · williams %r · cci · connors-rsi · stoch-rsi · ultimate · fisher · wavetrend
-VOLUME       obv · mfi · cmf · vwap · chaikin · klinger · a/d line · force-index · vwma cross
-VOLATILITY   bollinger · %b · squeeze · choppiness · atr-filter · atr-percentile · hist-vol · mass · range-expansion
-STATISTICAL  z-score reversion · linreg slope+R² · half-life (OU) · rolling sharpe · hurst · balance-of-power
+```mermaid
+flowchart LR
+    Binance[Binance public market data] --> Desktop[Python data adapters]
+    Deribit[Optional Deribit options data] --> Desktop
+    Desktop --> Engine[Indicators and consensus]
+    Engine --> Scanner[Ranking, positioning and evidence]
+    Scanner --> API[Local FastAPI service]
+    API --> React[React browser interface]
+    Binance --> Android[Kotlin data clients]
+    Android --> Kotlin[Kotlin signal engine]
+    Kotlin --> Compose[Jetpack Compose interface]
 ```
 
-**2 · Three futures-native overlays** (they never touch the parity-locked vote — they annotate it):
+The desktop backend separates data retrieval, indicator calculation, consensus, scanning and the HTTP/WebSocket API. It serves the committed UI bundle, so Node.js is only needed when developing the frontend. The Android app performs its calculations on the device; fixture tests compare its indicator outputs with the Python reference.
 
-- **Microstructure** — a bundle over open interest, funding, taker buy/sell and long/short ratios:
-  OI-price divergence, OI-breakout confirmation, funding z-score fade, taker aggression, L/S
-  crowding fade, and a smart-vs-dumb-money spread.
-- **Regime-adaptive weighting** — reads ADX + choppiness, routes trend vs. oscillator families.
-- **Multi-timeframe confluence** — a gate that asks the higher timeframes to agree before it fires.
-
-**3 · Whale-divergence filter.**
-On top of the indicators, it watches top-trader long/short positioning and looks for it to trend
-*against* price over a window. A symbol whose whale flow contradicts its indicator verdict is
-**eliminated** from the ranking and back-filled by the next clean survivor.
-
----
-
-## Data sources
-
-Public Binance USDT-M Futures endpoints only — no authentication.
-
-| Data | Endpoint |
-| --- | --- |
-| Candles (OHLCV) | `fapi/v1/klines` |
-| Open interest history | `futures/data/openInterestHist` |
-| Top-trader long/short | `futures/data/topLongShort{Account,Position}Ratio` |
-| Global long/short | `futures/data/globalLongShortAccountRatio` |
-| Taker buy/sell | `futures/data/takerlongshortRatio` |
-| Funding / mark / index | `fapi/v1/premiumIndex`, `fapi/v1/fundingRate` |
-
-> Binance market data is geo-restricted in some regions — a network condition, not an app bug.
-
----
+Most inputs come from Binance Futures, including candles, funding, open interest and long/short ratios. The desktop also has a separate optional Deribit adapter for BTC/ETH options and volatility metrics. A failed Deribit request does not block the main scan.
 
 ## Run the desktop edition
 
-Requires **Python 3.12+** and [`uv`](https://docs.astral.sh/uv/). The UI ships prebuilt — no Node
-needed to run it.
+Requirements: **Python 3.12+**, **uv**, internet access to the market-data providers, and GitHub read access to the pinned **Crypcodile** dependency. Crypcodile is a private repository; an anonymous installation cannot currently resolve it. Configure Git authentication for an account with access before running `uv sync`.
 
 ```bash
 git clone https://github.com/nazmiefearmutcu/dive-into-crypto.git
 cd dive-into-crypto/desktop/backend
 uv sync
-uv run dive-desktop          # serves 127.0.0.1:8780 and opens the terminal UI
+uv run dive-desktop
 ```
 
-Nothing leaves your machine except public Binance requests. Details:
-**[desktop/README.md](desktop/README.md)**. Android: **[android/README.md](android/README.md)**.
+The service opens `http://127.0.0.1:8780`. Use `uv run dive-desktop --no-open` to start without opening a browser, or `--port 8888` to select another port.
 
-> **Full-universe scans are real work.** The scanner can sweep the whole Binance USDT-M
-> universe (`/api/scan?universe_limit=500`, cap 500). That is ~2000+ public requests
-> (a coarse 4h/12h/1d sweep of all 500, then the remaining 9 timeframes for the top
-> `depth_top` rows) and takes **minutes** — use `&async=1` and poll
-> `/api/scan/progress?scan_id=…` for large universes. Concurrency adapts automatically
-> to Binance rate-limit pressure (429/451). Every verdict is also archived to
-> `desktop/backend/runtime/evidence.jsonl` so the engine can grade itself later
-> (`GET /api/evidence`, `POST /api/evidence/grade`); delete the folder to reset it.
+For large universes, the desktop API supports asynchronous scans: `/api/scan?async=1` returns a scan identifier that can be followed through `/api/scan/progress`. See the [API reference](docs/api.md) for request parameters and response contracts.
 
----
+## Android
 
-## Releases
-
-Tagged releases are built by CI: pushing a `v*` tag produces the Android release **APK +
-AAB** and attaches them to a GitHub Release — signed when the release-keystore secrets
-are configured, unsigned (but still published) otherwise. The desktop edition can be
-packaged on demand into a standalone folder. Secret names, the keystore how-to and the
-packaging details: **[docs/packaging.md](docs/packaging.md)** and
-[CONTRIBUTING.md](CONTRIBUTING.md#release-process).
-
----
-
-## Parity
-
-Cross-language parity is enforced **per indicator**, not per screen, against a `BTCUSDT 1h × 300`
-fixture (signal + score, exact): the original 15-indicator core has its long-standing fixture gate,
-and the 42 extended indicators have their own (`ExtendedIndicatorsFixtureTest`) — every Kotlin
-indicator must reproduce the Python reference bit-for-signal. The three overlays (microstructure ·
-regime · MTF-confluence) are ported with mirrored unit tests.
+Check [Releases](https://github.com/nazmiefearmutcu/dive-into-crypto/releases) for available Android artifacts. Build a debug APK with **JDK 17** and the **Android SDK** configured for the Gradle project:
 
 ```bash
-cd desktop/backend && uv run pytest -q      # engine, parity, parsers  (offline)
-uv run pytest -m live -q                     # network-gated, against live Binance
-cd desktop/ui && npm ci && npm test          # UI: no-fabricated-data guarantees
+cd android
+./gradlew :app:assembleDebug
+./gradlew :app:testDebugUnitTest
 ```
 
----
+On Windows, use `gradlew.bat` instead of `./gradlew`. The app requires Android API 26 or later. Release signing and artifact packaging are described in the [packaging guide](docs/packaging.md).
 
-## Nothing is synthesised
+## Data and practical limits
 
-When a data source is unavailable it is shown as unavailable, never faked. A failed fetch renders an
-explicit **DATA SOURCE UNAVAILABLE** state naming the underlying error — it does not fill the screen
-with plausible-looking numbers. This matters here specifically: Binance market data is geo-restricted
-in some regions (Türkiye included), so the failure path is a *normal* condition, not an edge case.
+Scans depend on provider availability, geographic access, rate limits and the amount of history returned. A full-market scan can take minutes. Missing or stale data should be considered when reading a verdict.
 
-There is one fabricated dataset in the repo, `desktop/ui/src/app/mock.js`, and it exists only so a
-developer can exercise the UI without a backend. It is **manual-only** — nothing in the app calls it —
-and while it is active the UI renders a fixed `DEMO DATA — NOT LIVE MARKET DATA` banner across the
-viewport plus an inline `DEMO` marker on every fabricated price, verdict and rationale, so a
-fabricated signal cannot be screenshotted without the warning in frame.
+The desktop UI keeps a separate, explicitly labeled demo mode for interface development. A failed live request does not automatically populate live values from the demo generator. Historical fixtures and synthetic test inputs are development material, not live market observations.
 
-Both properties are pinned by tests (`desktop/ui/test/demo-mode.test.mjs`): one asserts a failed fetch
-leaves every data global empty and never reaches the demo generator, another asserts the banner and
-per-value markers render whenever demo mode is on.
+Consensus scores summarize indicator agreement. They do not establish predictive accuracy, and recorded outcomes require an appropriate evaluation period and sample size. This is a research and analysis tool, provided without a guarantee of accuracy or profitability.
 
-> Earlier revisions did auto-invoke the demo generator when the universe fetch threw, with no on-screen
-> indication. Given the geo-restriction above that path could fire routinely — if you ran a build from
-> before this note, treat any signal you saw as unverified.
+## Development
 
----
+```bash
+# From desktop/backend: offline engine and parser tests
+uv run pytest -q
 
-## Repository layout
-
-```
-dive-into-crypto/
-├─ .github/          CI workflow (backend · UI · android jobs)
-├─ android/          native Kotlin/Compose edition (Gradle)
-├─ desktop/
-│  ├─ backend/       Python · FastAPI · the reference engine (60 indicators + overlays)
-│  └─ ui/            React "Depth Terminal" — prebuilt bundle + design reference
-├─ tests/            root E2E suite (offline, opaque-box tiers 1–4)
-└─ docs/             specs · api reference · screenshots
+# Opt-in tests against live providers
+uv run pytest -m live -q
 ```
 
----
+Frontend development requires Node.js 18+:
 
-## Disclaimer
+```bash
+cd desktop/ui
+npm ci
+npm test
+npm run build
+```
 
-Dive Into Crypto is an educational and research tool. It gives no financial advice, executes no
-trades, and makes no guarantee of accuracy or profitability. Cryptocurrency derivatives are
-high-risk. Use it at your own risk.
+See the [desktop guide](desktop/README.md), [Android guide](android/README.md), [testing guide](docs/testing.md), [contribution guide](CONTRIBUTING.md) for further details.
 
 ## License
 
-[MIT](LICENSE) © nazmiefearmutcu
+[MIT](LICENSE).
+
+Created By Nazmi Efe Armutcu (Aylin)
