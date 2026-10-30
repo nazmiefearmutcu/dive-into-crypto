@@ -103,4 +103,4 @@ See the [desktop guide](desktop/README.md), [Android guide](android/README.md), 
 
 [MIT](LICENSE).
 
-Created By Nazmi Efe Armutcu (Aylin)
+Created By Aylin (Nazmi Efe Armutcu)
