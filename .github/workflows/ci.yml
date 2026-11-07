@@ -79,7 +79,7 @@ jobs:
           java-version: "17"
 
       # Gradle wrapper + dependency cache (keeps Android job well under timeout).
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
 
       - name: Unit tests + assemble debug APK
         working-directory: android

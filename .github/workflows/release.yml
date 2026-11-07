@@ -48,7 +48,7 @@ jobs:
           java-version: "17"
 
       - name: Set up Gradle caching
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
 
       # Step-level `if:` cannot evaluate secrets in every position we need, so
       # the guard is an env-mirror check inside the step — the documented
