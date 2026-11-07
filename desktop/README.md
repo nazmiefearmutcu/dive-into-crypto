@@ -1,4 +1,4 @@
-# Dive Into Crypto — Desktop
+# Dive into Crypto — Desktop
 
 A single-window terminal for the Binance USDT-M perpetual-futures market. The **reference**
 consensus engine — 60 indicators across 12 timeframes, three futures-native overlays, and a

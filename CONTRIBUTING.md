@@ -1,4 +1,4 @@
-# Contributing to Dive Into Crypto
+# Contributing to Dive into Crypto
 
 Thanks for your interest. This repo has three editions sharing one engine, so contributions
 touch one of four areas: the Python engine/backend (`desktop/backend`), the React UI

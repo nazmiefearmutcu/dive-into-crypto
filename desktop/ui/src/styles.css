@@ -67,7 +67,8 @@ body::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:60;opa
 
 .rail{grid-row:3/4;display:flex;flex-direction:column;align-items:center;gap:2px;padding:10px 0;border-right:1px solid var(--line2);background:var(--bg2);overflow-y:auto}
 .rail::-webkit-scrollbar{width:0}
-.mark{width:38px;height:38px;margin-bottom:10px;flex:none}
+.mark{width:56px;height:52px;margin-bottom:10px;flex:none;text-align:center;color:var(--accent)}
+.mark span{display:block;font-family:var(--font-d);font-size:9px;font-weight:700;letter-spacing:.08em}
 .rail-btn{position:relative;width:56px;height:48px;flex:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;border:1px solid transparent;border-radius:3px;background:transparent;color:var(--dim);cursor:pointer;font-family:var(--font-d);font-size:7.5px;font-weight:600;letter-spacing:.04em;transition:all .12s}
 .rail-btn svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:1.6}
 .rail-btn:hover{color:var(--ink);background:var(--panel)}

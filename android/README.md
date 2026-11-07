@@ -1,14 +1,14 @@
-# Dive Into Crypto
+# Dive into Crypto
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Last commit](https://img.shields.io/github/last-commit/nazmiefearmutcu/dive-into-crypto)](https://github.com/nazmiefearmutcu/dive-into-crypto/commits)
-[![Stars](https://img.shields.io/github/stars/nazmiefearmutcu/dive-into-crypto?style=social)](https://github.com/nazmiefearmutcu/dive-into-crypto/stargazers)
+[![Last commit](https://img.shields.io/github/last-commit/nazmiefearmutcu/dive-into-crypto)](https://github.com/nazmiefearmutcu/Dive-into-Crypto/commits)
+[![Stars](https://img.shields.io/github/stars/nazmiefearmutcu/dive-into-crypto?style=social)](https://github.com/nazmiefearmutcu/Dive-into-Crypto/stargazers)
 ![Kotlin](https://img.shields.io/badge/Kotlin-7F52FF?logo=kotlin&logoColor=white)
 ![Jetpack Compose](https://img.shields.io/badge/Jetpack%20Compose-4285F4?logo=jetpackcompose&logoColor=white)
 
-**Dive Into Crypto is a financial scanner** that watches the entire Binance USDT‑M perpetual‑futures market and tells you, per symbol, whether the evidence leans long, short, or neutral. It runs **60 technical indicators across 12 timeframes**, cross‑checks the result against **whale (top‑trader) positioning**, and collapses everything into a single confidence‑scored consensus verdict. It is a native Android app, it runs entirely **on your device**, and it reads only **public** Binance market data — no account, no API keys, no sign‑up.
+**Dive into Crypto is a financial scanner** that watches the entire Binance USDT‑M perpetual‑futures market and tells you, per symbol, whether the evidence leans long, short, or neutral. It runs **60 technical indicators across 12 timeframes**, cross‑checks the result against **whale (top‑trader) positioning**, and collapses everything into a single confidence‑scored consensus verdict. It is a native Android app, it runs entirely **on your device**, and it reads only **public** Binance market data — no account, no API keys, no sign‑up.
 
-> ⚠️ Dive Into Crypto is an analysis and research tool, **not financial advice** and **not an automated trader**. It places no orders. Markets are risky; you are responsible for your own decisions.
+> ⚠️ Dive into Crypto is an analysis and research tool, **not financial advice** and **not an automated trader**. It places no orders. Markets are risky; you are responsible for your own decisions.
 
 - **Platform:** Android 8.0+ (minSdk 26), single signed APK, sideload install
 - **Stack:** Kotlin Multiplatform · Jetpack Compose · Ktor · kotlinx.serialization
@@ -36,7 +36,7 @@
 
 ## What you see
 
-Dive Into Crypto has eight screens. The four primary ones live in the bottom bar; the rest are behind the "More" menu.
+Dive into Crypto has eight screens. The four primary ones live in the bottom bar; the rest are behind the "More" menu.
 
 ### Scanner — the ranked market sweep
 The headline screen. It scans the whole futures universe and shows a ranked table of the strongest setups. Each row gives you:
@@ -68,7 +68,7 @@ A live detail view for the active symbol:
 Pick any of the 12 timeframes and see that timeframe's consensus card plus the full 15‑indicator vote table for it.
 
 ### Positions (OI · L/S) — microstructure
-A leaderboard driven by **open interest, taker buy/sell flow, and long/short ratios** rather than candles — Dive Into Crypto's directed microstructure consensus (see below).
+A leaderboard driven by **open interest, taker buy/sell flow, and long/short ratios** rather than candles — Dive into Crypto's directed microstructure consensus (see below).
 
 ### Performance (Leaders)
 Top movers by 24 h % change.
@@ -122,7 +122,7 @@ All Binance USDT‑M perpetual‑futures symbols, with stablecoin pairs removed,
 
 ## Data sources
 
-Dive Into Crypto reads only **public** Binance Futures endpoints. No authentication is required.
+Dive into Crypto reads only **public** Binance Futures endpoints. No authentication is required.
 
 | Data | Endpoint |
 | --- | --- |
@@ -139,7 +139,7 @@ Dive Into Crypto reads only **public** Binance Futures endpoints. No authenticat
 > Binance market data may be geo‑restricted in some regions; that is a network/runtime condition independent of the app.
 
 ### Honesty — nothing is synthesised
-Dive Into Crypto **never fabricates market data**. Earlier builds contained two violations, both removed in 0.2.0:
+Dive into Crypto **never fabricates market data**. Earlier builds contained two violations, both removed in 0.2.0:
 
 - When the live WebSocket went quiet, the app used to **invent ticks** (random walk around the last close) and even **random OI / long‑short / taker‑ratio points** to keep charts "moving". All random‑data synthesis is deleted.
 - Instead, when the live stream is quiet the last **real** data is kept and the UI state exposes an explicit staleness flag (`isStale` + `dataAgeMs`), rendered as a STALE chip. The same applies when the WebSocket reconnects (exponential backoff with jitter, 1 s → 30 s cap) — silence is labelled, never papered over.
@@ -203,13 +203,13 @@ The engine also ships three strategy overlays, and since 0.2.0 they are actually
 | **Microstructure** | Directed bundle over OI / funding / taker / L‑S series (−100…+100 + label) | Scanner head rows (`microScore/microLabel`), Panel |
 
 ### Microstructure consensus (Positions screen)
-Independently of the indicators, Dive Into Crypto computes a **directed** verdict from market microstructure along three axes — **price state**, **open‑interest momentum**, and **taker aggression** — mapped through a 27‑cell (3×3×3) regime table to a score in roughly −95…+50, then adjusted by a whale‑positioning override. That score buckets into the same five‑level signal (`≥ 60 STRONG_BUY · ≥ 20 BUY · ≤ −20 SELL · ≤ −60 STRONG_SELL`) and is what powers the OI · L/S leaderboard.
+Independently of the indicators, Dive into Crypto computes a **directed** verdict from market microstructure along three axes — **price state**, **open‑interest momentum**, and **taker aggression** — mapped through a 27‑cell (3×3×3) regime table to a score in roughly −95…+50, then adjusted by a whale‑positioning override. That score buckets into the same five‑level signal (`≥ 60 STRONG_BUY · ≥ 20 BUY · ≤ −20 SELL · ≤ −60 STRONG_SELL`) and is what powers the OI · L/S leaderboard.
 
 ---
 
 ## Whale‑divergence filtering
 
-On top of the indicators, Dive Into Crypto watches **top‑trader long/short positioning** (Binance's `topLongShortPositionRatio`) and looks for it to **diverge from price**.
+On top of the indicators, Dive into Crypto watches **top‑trader long/short positioning** (Binance's `topLongShortPositionRatio`) and looks for it to **diverge from price**.
 
 - It compares the recent price trend against the recent whale long/short trend over a rolling window. Same direction → no signal; **opposite directions → divergence**.
 - The divergence magnitude is a whale‑dominant blend: `magnitude = 0.80 × whaleStrength + 0.20 × priceStrength`, scaled by a timeframe factor so higher timeframes dominate.
@@ -277,7 +277,7 @@ If `keystore.properties` is absent, the release build is simply left unsigned ra
 
 ## Disclaimer
 
-Dive Into Crypto is an educational and research tool. It does not give financial advice, it does not execute trades, and it makes no guarantee of accuracy or profitability. Cryptocurrency derivatives are high‑risk. Use it at your own risk.
+Dive into Crypto is an educational and research tool. It does not give financial advice, it does not execute trades, and it makes no guarantee of accuracy or profitability. Cryptocurrency derivatives are high‑risk. Use it at your own risk.
 
 ---
 

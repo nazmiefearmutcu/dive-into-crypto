@@ -1,7 +1,7 @@
-# Dive Into Crypto — Performance Benchmarks
+# Dive into Crypto — Performance Benchmarks
 
 These are **OFFLINE, compute-only micro-benchmarks** of the Kotlin Multiplatform
-consensus engine that powers Dive Into Crypto. They run on the JVM under the
+consensus engine that powers Dive into Crypto. They run on the JVM under the
 `androidUnitTest` source set with **no network, no Binance API calls, and no
 Android framework** — every measurement is pure indicator math + consensus
 scoring over a deterministic synthetic OHLCV series (sine + linear drift,

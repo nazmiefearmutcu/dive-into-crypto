@@ -141,7 +141,7 @@ object VerdictCardRenderer {
 
         // Watermark (bottom-right, dimmed).
         canvas.drawText(
-            "dive-into-crypto", width - 72 * s, height - 52 * s,
+            "DVCRY", width - 72 * s, height - 52 * s,
             Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 color = TEXT_DIM; textSize = 26 * s; textAlign = Paint.Align.RIGHT
                 typeface = Typeface.MONOSPACE

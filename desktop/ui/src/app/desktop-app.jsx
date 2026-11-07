@@ -2166,7 +2166,7 @@ function Settings({theme,setTheme,lang,setLang}){
   const T=[["phosphor","Phosphor"],["amber","Amber"],["ice","Ice"],["paper","Paper (light)"]];
   return <>
     <div className="vhead"><span className="kicker">{L("set_kicker")}</span><h1>{L("set_h1")}</h1>
-      <div className="meta">DEPTH TERMINAL · v0.3.0</div></div>
+      <div className="meta">DVCRY · v0.3.0</div></div>
     <div className="panel"><div className="ph"><span className="tick">▸</span>{L("set_lang")}</div>
       <div className="pb" style={{display:"flex",gap:10,flexWrap:"wrap"}}>
         {[["tr","TR"],["en","EN"]].map(([code,label])=><button key={code} className="cta" style={{background:code===lang?"var(--accent)":"transparent",
@@ -2409,7 +2409,7 @@ function App(){
     </div>
     <PulseStrip sym={sym} onPick={(s)=>{setSym(s);}}/>
     <nav className="rail">
-      <div className="mark"><Mark/></div>
+      <div className="mark" aria-label="DVCRY"><Mark/><span>DVCRY</span></div>
       {NAV.map(n=><button key={n.id} className={"rail-btn"+(view===n.id?" on":"")}
         aria-current={view===n.id?"page":undefined} onClick={()=>setRoute(n.id)}><Svg d={ICONS[n.icon]}/>{L("nav_"+n.id)}</button>)}
       <div className="grow"/>

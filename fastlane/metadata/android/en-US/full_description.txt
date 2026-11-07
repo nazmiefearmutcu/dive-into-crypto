@@ -1,0 +1,16 @@
+DVCRY Deep Crypto Market Monitoring Tool
+
+Monitor Binance USDT-M perpetual futures with technical indicators, multi-timeframe analysis and market-positioning context.
+
+DVCRY brings together:
+- 60 technical indicators across 12 timeframes.
+- A ranked scanner and detailed symbol analysis.
+- Indicator consensus, confidence scores and risk context.
+- Open interest, funding and long/short positioning data.
+- A local portfolio view for positions you enter manually.
+
+The app uses public market data and does not require exchange credentials. It does not place orders, hold funds or provide a cryptocurrency wallet.
+
+Scores describe indicator agreement, not the probability of a profitable trade. Market data may be delayed, incomplete or unavailable because of provider restrictions, rate limits or connection problems.
+
+DVCRY is a market research and analysis tool. It does not provide personalized investment advice or guarantee accuracy or profitability.

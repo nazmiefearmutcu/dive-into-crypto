@@ -68,7 +68,7 @@ fun MobileTopBar(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            text = "DIVE",
+            text = "DVCRY",
             color = DiveColors.Accent,
             fontWeight = FontWeight.Black,
             fontSize = 18.sp,

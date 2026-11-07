@@ -185,7 +185,7 @@ def create_app() -> FastAPI:
         await close_session()
         await drb.close_session()
 
-    app = FastAPI(title="Dive Into Crypto — Desktop", version=VERSION, lifespan=lifespan)
+    app = FastAPI(title="DVCRY", version=VERSION, lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware, allow_origins=["http://127.0.0.1", "http://localhost"],
         allow_origin_regex=r"http://(127\.0\.0\.1|localhost):\d+", allow_methods=["GET", "POST"], allow_headers=["*"],

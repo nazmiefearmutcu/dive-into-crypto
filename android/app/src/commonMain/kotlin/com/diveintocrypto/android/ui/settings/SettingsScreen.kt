@@ -717,7 +717,7 @@ private fun ThemeCard(title: String) {
                 )
                 Spacer(Modifier.height(2.dp))
                 Text(
-                    text = "Dive Into Crypto brand — fixed",
+                    text = "DVCRY brand — fixed",
                     color = DiveColors.TextMuted,
                     fontSize = 12.sp,
                 )
@@ -740,7 +740,7 @@ private fun Swatch(color: Color) {
 @Composable
 private fun AboutCard(title: String) {
     SettingsCard(title = title) {
-        AboutRow("App", "Dive Into Crypto")
+        AboutRow("App", "DVCRY")
         Spacer(Modifier.height(8.dp))
         AboutRow("Version", AppInfo.versionName)
         Spacer(Modifier.height(8.dp))
@@ -750,7 +750,7 @@ private fun AboutCard(title: String) {
         Spacer(Modifier.height(8.dp))
         AboutRow("Data source", "Binance USDT-M Futures")
         Spacer(Modifier.height(8.dp))
-        AboutRow("Indicators", "60 (Dive Into Crypto consensus engine)")
+        AboutRow("Indicators", "60 (DVCRY consensus engine)")
         Spacer(Modifier.height(8.dp))
         AboutRow("Timeframe count", "12")
     }

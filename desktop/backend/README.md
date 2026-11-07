@@ -1,6 +1,6 @@
-# Dive Into Crypto — Desktop backend
+# Dive into Crypto — Desktop backend
 
-The **reference** scanner service. Computes the canonical Dive Into Crypto consensus — **60
+The **reference** scanner service. Computes the canonical Dive into Crypto consensus — **60
 indicators across 12 timeframes**, three futures-native overlays (microstructure · regime-adaptive
 weighting · MTF-confluence), and a whale-divergence filter — over live Binance USDT-M perpetual
 futures, and serves it to the Depth Terminal UI over local HTTP/WS.

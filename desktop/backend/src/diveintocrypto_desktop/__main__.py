@@ -14,7 +14,7 @@ import webbrowser
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(prog="dive-desktop", description="Dive Into Crypto — Desktop Edition")
+    parser = argparse.ArgumentParser(prog="dive-desktop", description="DVCRY — Desktop Edition")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8780)
     parser.add_argument("--no-open", action="store_true", help="do not open a browser window")
@@ -34,7 +34,7 @@ def main() -> None:
                 pass
         threading.Thread(target=_open, daemon=True).start()
 
-    print(f"Dive Into Crypto — Desktop  →  {url}  (Ctrl+C to stop)")
+    print(f"DVCRY — Desktop  →  {url}  (Ctrl+C to stop)")
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
 
 

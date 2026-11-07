@@ -94,7 +94,7 @@ jobs:
             SIGN_LINE="**Unsigned build** — the KEYSTORE_BASE64 secret was not set, so Android will ask for confirmation before installing. See docs/packaging.md."
           fi
           {
-            echo "# Dive Into Crypto ${GITHUB_REF_NAME}"
+            echo "# DVCRY ${GITHUB_REF_NAME}"
             echo
             echo "${SIGN_LINE}"
             echo
@@ -105,7 +105,7 @@ jobs:
           } > release-notes.md
           gh release create "$GITHUB_REF_NAME" \
             --repo "$GITHUB_REPOSITORY" \
-            --title "Dive Into Crypto ${GITHUB_REF_NAME}" \
+            --title "DVCRY ${GITHUB_REF_NAME}" \
             --notes-file release-notes.md \
             --verify-tag
 

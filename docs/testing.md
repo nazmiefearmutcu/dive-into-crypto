@@ -1,6 +1,6 @@
 # Testing
 
-Dive Into Crypto has **four test suites** — two Python, one JavaScript, one Kotlin/Gradle.
+Dive into Crypto has **four test suites** — two Python, one JavaScript, one Kotlin/Gradle.
 All of them run offline by default; live-network tests are opt-in. This page consolidates the
 former root-level `TEST_INFRA.md` and `TEST_READY.md`.
 

@@ -1,4 +1,4 @@
-# Changelog — Dive Into Crypto · Desktop Edition
+# Changelog — Dive into Crypto · Desktop Edition
 
 All notable changes to the desktop edition are documented here.
 

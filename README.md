@@ -1,8 +1,18 @@
-# Dive Into Crypto
+# Dive into Crypto
 
-Dive Into Crypto scans Binance USDT-M perpetual futures and summarizes technical signals across 12 timeframes. It provides a ranked market view and a detailed breakdown of each symbol through a desktop browser interface and a native Android app.
+**DVCRY** (Dive into Crypto) scans Binance USDT-M perpetual futures and summarizes technical signals across 12 timeframes. It provides a ranked market view and a detailed breakdown of each symbol through a desktop browser interface and a native Android app.
 
 The scanner combines 60 indicators with positioning and futures-market context. Its confidence values describe the engine's scoring rules; they are not probabilities of a profitable trade.
+
+## Name and store listing
+
+The project name is **Dive into Crypto**; the app displays **DVCRY** on Android and desktop.
+The full marketing name is **DVCRY Deep Crypto Market Monitoring Tool**.
+Google Play limits app titles to 30 characters, so the prepared listing uses
+**DVCRY: Crypto Market Monitor** as its title and the full marketing name as its short description.
+Store text is prepared under [`fastlane/metadata/android/en-US`](fastlane/metadata/android/en-US).
+It is a publication draft, not a live Google Play listing. See the
+[Google Play release roadmap](docs/google-play-release.md) for the remaining steps.
 
 ## What it does
 
@@ -48,7 +58,7 @@ Most inputs come from Binance Futures, including candles, funding, open interest
 Requirements: **Python 3.12+**, **uv**, internet access to the market-data providers, and GitHub read access to the pinned **Crypcodile** dependency. Crypcodile is a private repository; an anonymous installation cannot currently resolve it. Configure Git authentication for an account with access before running `uv sync`.
 
 ```bash
-git clone https://github.com/nazmiefearmutcu/dive-into-crypto.git
+git clone https://github.com/nazmiefearmutcu/Dive-into-Crypto.git dive-into-crypto
 cd dive-into-crypto/desktop/backend
 uv sync
 uv run dive-desktop
@@ -60,7 +70,7 @@ For large universes, the desktop API supports asynchronous scans: `/api/scan?asy
 
 ## Android
 
-Check [Releases](https://github.com/nazmiefearmutcu/dive-into-crypto/releases) for available Android artifacts. Build a debug APK with **JDK 17** and the **Android SDK** configured for the Gradle project:
+Check [Releases](https://github.com/nazmiefearmutcu/Dive-into-Crypto/releases) for available Android artifacts. Build a debug APK with **JDK 17** and the **Android SDK** configured for the Gradle project:
 
 ```bash
 cd android
