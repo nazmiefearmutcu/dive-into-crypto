@@ -8,7 +8,7 @@ kotlinx-datetime = "0.6.1"
 atomicfu = "0.25.0"
 ktor = "3.0.3"
 # JetBrains multiplatform AndroidX ports
-androidx-lifecycle = "2.8.4"
+androidx-lifecycle = "2.11.0"
 androidx-navigation = "2.8.0-alpha10"
 # Android-target-only
 androidx-core = "1.13.1"
