@@ -144,5 +144,5 @@ def test_websocket_live_endpoint_error_handling():
 # NOTE: live API behaviour is verified by a real subprocess end-to-end (T9), not
 # via TestClient — TestClient runs each request on a fresh event loop, which the
 # process-wide aiohttp session (correct under uvicorn's single loop) does not
-# support. See tests/e2e_smoke.sh.
+# support. See desktop/backend/tests/e2e_smoke.sh.
 

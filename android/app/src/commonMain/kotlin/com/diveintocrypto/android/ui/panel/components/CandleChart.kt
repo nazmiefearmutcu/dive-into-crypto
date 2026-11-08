@@ -38,6 +38,7 @@ import com.diveintocrypto.android.domain.cvd.CvdBucket
 import com.diveintocrypto.android.domain.model.Candle
 import com.diveintocrypto.android.engine.analytics.VolCone
 import com.diveintocrypto.android.platform.format
+import com.diveintocrypto.android.ui.i18n.LocalDiveStrings
 import com.diveintocrypto.android.ui.panel.PanelUiState
 import com.diveintocrypto.android.ui.theme.DiveColors
 import com.diveintocrypto.android.ui.theme.DiveFonts
@@ -71,8 +72,9 @@ fun CandleChartCard(
     modifier: Modifier = Modifier,
     cone: VolCone.ConeEnv? = null,
 ) {
+    val strings = LocalDiveStrings.current
     DiveCard(
-        title = "${state.activeSymbol} · ${state.timeframe.uppercase()} · FİYAT",
+        title = strings.panelChartTitle(state.activeSymbol, state.timeframe),
         modifier = modifier,
     ) {
         if (state.chartCandles.isEmpty()) {
@@ -87,7 +89,7 @@ fun CandleChartCard(
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    text = "VERİ YOK — yenile",
+                    text = strings.panelNoData,
                     color = DiveColors.Warn,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold,
@@ -125,7 +127,7 @@ fun CandleChartCard(
         if (cone != null) {
             Spacer(Modifier.height(4.dp))
             Text(
-                text = UiLabels.CONE_CAPTION,
+                text = UiLabels.coneCaption(strings),
                 color = DiveColors.TextDim,
                 fontSize = 9.sp,
                 lineHeight = 12.sp,
@@ -136,7 +138,7 @@ fun CandleChartCard(
         Spacer(Modifier.height(8.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                text = "CVD DELTA · 1 dk",
+                text = strings.panelCvdLabel,
                 color = DiveColors.TextDim,
                 fontSize = 9.sp,
                 fontWeight = FontWeight.Bold,
@@ -146,7 +148,7 @@ fun CandleChartCard(
             Spacer(Modifier.width(8.dp))
             if (cvdUnavailable) {
                 Text(
-                    text = "VERİ YOK (akış hatası)",
+                    text = strings.panelCvdFlowError,
                     color = DiveColors.Warn,
                     fontSize = 9.sp,
                     fontWeight = FontWeight.Bold,
@@ -167,7 +169,7 @@ fun CandleChartCard(
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
-                        text = if (cvdUnavailable) "CVD alınamadı" else "CVD verisi yok",
+                        text = if (cvdUnavailable) strings.panelCvdUnavailable else strings.panelCvdNoData,
                         color = DiveColors.TextDim,
                         fontSize = 10.sp,
                         fontFamily = DiveFonts.body,
@@ -241,7 +243,8 @@ private fun DrawScope.drawPriceChart(
     val volTop = size.height * 0.84f
     val volBottom = size.height - 2.dp.toPx()
 
-    val range = ChartMath.chartPriceRange(candles, bbUpper, bbLower)
+    // The EMA lines are part of the viewport too: they can sit beyond the candles' own range.
+    val range = ChartMath.chartPriceRange(candles, bbUpper, bbLower, overlays = listOf(ema20, ema50))
     fun yOf(v: Double): Float = ChartMath.scaleY(v, range, priceTop, priceBottom)
     fun xCenter(i: Int): Float = plotRight * (i + 0.5f) / n
 
@@ -252,10 +255,11 @@ private fun DrawScope.drawPriceChart(
     }
 
     // ── CONE ±envelope bands (anchored on the LAST close) ─────────
-    // Inner band = ±envLowPct, outer = ±envHighPct — the 24h log-normal
-    // expected-move envelope P0·exp(±σ√24) as % of the last close.
-    // Percentile-free by construction: these are historical-σ projections,
-    // NOT probability bands — the caption below the chart says exactly that.
+    // Outer = the published asymmetric 24h log-normal envelope (up = envHighPct,
+    // down = −envLowPct), P0·exp(±σ√24) as % of the last close.
+    // Inner = ±vol24hPct, the √t projection named in the σ label — it lies inside the
+    // outer band by construction (down < σ√24 < up). Percentile-free by construction:
+    // these are historical-σ projections, NOT probability bands — the caption says so.
     if (cone != null) {
         val last = candles.last().close
         if (last > 0.0) {
@@ -284,7 +288,7 @@ private fun DrawScope.drawPriceChart(
             }
             // Outer envelope first (behind), inner on top.
             band(cone.envLowPct, cone.envHighPct, alpha = 0.07f)
-            band(cone.envLowPct, cone.envLowPct, alpha = 0.10f)
+            band(cone.vol24hPct, cone.vol24hPct, alpha = 0.10f)
 
             // σ label — top-left, honest (√t projection from trailing σ1h).
             val sigmaText = "σ1h ${cone.sigma1hPct.format(2)}% · 24h ±${cone.vol24hPct.format(2)}%"

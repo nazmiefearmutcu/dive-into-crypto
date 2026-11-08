@@ -11,6 +11,7 @@ import com.diveintocrypto.android.domain.evidence.EvidenceGrader
 import com.diveintocrypto.android.platform.nowMillis
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -19,7 +20,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 
 /**
@@ -34,16 +37,26 @@ import kotlinx.coroutines.sync.withPermit
  *
  * PLUS verdict-evidence self-grading (domain/evidence): the archived scanner
  * verdicts are graded against forward klines — hit-rate + median forward return
- * per verdict bucket and confidence band. Grading runs inside viewModelScope
- * ([refreshEvidence] is public + cancellable), is capped at [GRADE_SYMBOL_CAP]
- * symbols per pass and resumable via the persisted last-graded timestamp.
+ * per verdict bucket and confidence band. Every statistic is rebuilt over the WHOLE
+ * eligible archive on every pass (cumulative), never over the last pass alone.
+ * Candle fetches are capped at [GRADE_SYMBOL_CAP] symbols per pass; records still
+ * without an outcome keep the state honestly `stale` and are retried next pass.
  */
 class PerformanceViewModel(private val container: AppContainer) : ViewModel() {
 
     private val _ui = MutableStateFlow(PerformanceUiState())
     val ui: StateFlow<PerformanceUiState> = _ui.asStateFlow()
 
-    private var evidenceJob: kotlinx.coroutines.Job? = null
+    private var evidenceJob: Job? = null
+
+    /**
+     * Final grading outcomes for this ViewModel's lifetime. A non-null value is a graded
+     * forward return; a null value marks a record that no fetched candle history can
+     * ever cover. Records whose fetch failed or whose horizon candle is not reached yet
+     * are absent and retried. Only touched while holding [gradeLock].
+     */
+    private val settled = HashMap<GradeKey, Double?>()
+    private val gradeLock = Mutex()
 
     init {
         // Watchlist rows read live prices from the all-market ticker engine
@@ -58,7 +71,7 @@ class PerformanceViewModel(private val container: AppContainer) : ViewModel() {
         load()
     }
 
-    private fun load() = viewModelScope.launch(kotlinx.coroutines.Dispatchers.Default) {
+    private fun load() = viewModelScope.launch(Dispatchers.Default) {
         try {
             val all = container.repository.ticker24hAll()
                 .filter { it.symbol.endsWith("USDT") && it.symbol !in BinanceFuturesClient.SKIP_SYMBOLS }
@@ -78,154 +91,151 @@ class PerformanceViewModel(private val container: AppContainer) : ViewModel() {
                     lastUpdateMs = nowMillis(),
                 )
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (t: Throwable) {
-            _ui.update { it.copy(isLoading = false, error = t.message ?: "network error") }
+            _ui.update { it.copy(isLoading = false, error = t.toMarketDataFailure()) }
         }
     }
 
     // ── VERDICT EVIDENCE (Android self-grading) ─────────────────────────────
 
     /**
-     * Selects the grading horizon (hours: 1 / 4 / 24 supported by the UI).
-     * Changing the horizon invalidates the resume cursor so the next pass
-     * re-grades from the archive start under the new horizon.
+     * Selects the grading horizon (hours: 1 / 4 / 24 supported by the UI). Outcomes are
+     * keyed by horizon, so the statistics shown always belong to the selected horizon.
      */
     fun setEvidenceHorizon(hours: Long) {
         _ui.update { it.copy(evidence = it.evidence.copy(horizonHours = hours)) }
-        container.evidenceStore.setLastGradedMs(0L)
         refreshEvidence()
     }
 
     /**
      * Runs one grading pass (cancellable — a new call cancels the previous one).
-     * Records older than `now − horizon` with `ts > lastGradedMs` are graded:
-     * for each record the forward return is taken from the engine's (cached)
-     * 1h klines — newest close vs. the close of the candle covering the record.
-     * Bounded to [GRADE_SYMBOL_CAP] distinct symbols per pass; anything left
-     * over keeps the state honestly `stale` and is picked up next pass.
+     * Records older than `now − horizon` are eligible. For each record the forward
+     * return runs from the verdict-time price to the close of the 1h candle covering
+     * `ts + horizon` (see EvidenceGrader). Candles are fetched only for symbols with
+     * unsettled records, capped at [GRADE_SYMBOL_CAP] per pass.
      */
     fun refreshEvidence() {
         evidenceJob?.cancel()
         evidenceJob = viewModelScope.launch(Dispatchers.Default) {
             _ui.update { it.copy(evidence = it.evidence.copy(isGrading = true, error = null)) }
             try {
-                val store = container.evidenceStore
-                val records = store.readAll()
-                val horizonHours = _ui.value.evidence.horizonHours
-                val horizonMs = horizonHours * 3_600_000L
-                val cutoff = nowMillis() - horizonMs
-                val lastGraded = store.lastGradedMs()
-
-                val pending = records.filter { it.ts <= cutoff && it.ts > lastGraded }
-                if (pending.isEmpty()) {
-                    _ui.update {
-                        it.copy(
-                            evidence = it.evidence.copy(
-                                archived = records.size,
-                                stale = false,
-                                isGrading = false,
-                                lastGradedMs = lastGraded.takeIf { lg -> lg > 0L },
-                            ),
-                        )
-                    }
-                    return@launch
-                }
-
-                // Cap symbols per pass (spec: 40); the rest stay stale → next pass.
-                val symbols = pending.map { it.symbol }.distinct().take(GRADE_SYMBOL_CAP)
-                val bySymbol = pending.filter { it.symbol in symbols }.groupBy { it.symbol }
-
-                val graded = mutableListOf<Pair<com.diveintocrypto.android.domain.evidence.VerdictRecord, Double>>()
-                val gate = Semaphore(GRADE_PARALLELISM)
-                coroutineScope {
-                    bySymbol.keys.map { sym ->
-                        async {
-                            gate.withPermit {
-                                val candles = try {
-                                    container.repository.futuresHistory(sym, "1h", limit = 48)
-                                } catch (e: CancellationException) {
-                                    throw e
-                                } catch (_: Throwable) {
-                                    emptyList()
-                                }
-                                if (candles.isEmpty()) return@withPermit
-                                val openTimes = candles.map { it.openTime }
-                                val closes = candles.map { it.close }
-                                for (rec in bySymbol[sym].orEmpty()) {
-                                    val fwd = EvidenceGrader.forwardReturnPct(openTimes, closes, rec.ts)
-                                        ?: continue
-                                    graded += rec to fwd
-                                }
-                            }
-                        }
-                    }.awaitAll()
-                }
-
-                val grade = EvidenceGrader.grade(
-                    graded.map { (rec, fwd) ->
-                        EvidenceGrader.GradedSample(
-                            verdict = rec.verdict,
-                            confidence = rec.confidence,
-                            dominantDir = rec.dominantDir,
-                            forwardReturnPct = fwd,
-                            ts = rec.ts,
-                        )
-                    },
-                )
-                // v2 calibration + skill + rolling windows (all PURE — no extra I/O).
-                val gradedSamples = graded.map { (rec, fwd) ->
-                    EvidenceGrader.GradedSample(
-                        verdict = rec.verdict,
-                        confidence = rec.confidence,
-                        dominantDir = rec.dominantDir,
-                        forwardReturnPct = fwd,
-                        ts = rec.ts,
-                    )
-                }
-                val ece = EvidenceGrader.ece(gradedSamples)
-                val brier = EvidenceGrader.brier(gradedSamples)
-                val windows = EvidenceGrader.gradeWindows(gradedSamples, nowMillis())
-
-                // Resume cursor = newest graded record (only successfully graded
-                // ones advance it — failed symbols stay stale and are retried).
-                val maxGradedTs = graded.maxOfOrNull { it.first.ts } ?: lastGraded
-                val newCursor = maxOf(lastGraded, maxGradedTs)
-                store.setLastGradedMs(newCursor)
-                val stillStale = records.any { it.ts <= cutoff && it.ts > newCursor }
-
-                _ui.update {
-                    it.copy(
-                        evidence = EvidenceState(
-                            archived = records.size,
-                            graded = grade.graded,
-                            byVerdict = grade.byVerdict,
-                            byConfidence = grade.byConfidence,
-                            ece = ece.ece,
-                            eceBins = ece.bins,
-                            brier = brier?.brier,
-                            brierSkill = brier?.skill,
-                            windows = windows,
-                            stale = stillStale,
-                            isGrading = false,
-                            horizonHours = horizonHours,
-                            lastGradedMs = newCursor.takeIf { c -> c > 0L },
-                        ),
-                    )
-                }
+                gradeLock.withLock { runGradingPass() }
             } catch (e: CancellationException) {
                 throw e
             } catch (t: Throwable) {
                 _ui.update {
-                    it.copy(evidence = it.evidence.copy(isGrading = false, error = t.message ?: "grading failed"))
+                    it.copy(evidence = it.evidence.copy(isGrading = false, error = t.toMarketDataFailure()))
                 }
             }
+        }
+    }
+
+    /** One grading pass. Runs under [gradeLock]. */
+    private suspend fun runGradingPass() {
+        val store = container.evidenceStore
+        val records = store.readAll()
+        val horizonHours = _ui.value.evidence.horizonHours
+        val horizonMs = horizonHours * 3_600_000L
+        val cutoff = nowMillis() - horizonMs
+        val eligible = records.filter { it.ts <= cutoff }
+
+        // Forget outcomes of records that have been evicted from the archive ring.
+        val live = eligible.mapTo(HashSet()) { EvidenceGradingPass.keyOf(it, horizonHours) }
+        settled.keys.removeAll { it.horizonHours == horizonHours && it !in live }
+
+        // Fetch only what is still unsettled, newest symbols first, capped per pass.
+        val symbols = EvidenceGradingPass.symbolsToFetch(eligible, settled, horizonHours, GRADE_SYMBOL_CAP)
+        if (symbols.isNotEmpty()) {
+            val unsettledBySymbol = eligible
+                .filter { it.symbol in symbols && EvidenceGradingPass.keyOf(it, horizonHours) !in settled }
+                .groupBy { it.symbol }
+            val gate = Semaphore(GRADE_PARALLELISM)
+            // Each fetch returns its own result map; the shared cache is written only after
+            // every fetch has finished, so no two coroutines ever mutate one collection.
+            val results: List<Map<GradeKey, Double?>?> = coroutineScope {
+                symbols.map { sym ->
+                    async {
+                        gate.withPermit {
+                            val unsettled = unsettledBySymbol[sym].orEmpty()
+                            // Enough 1h candles to reach the horizon candle of the OLDEST unsettled record.
+                            val oldestTs = unsettled.minOfOrNull { it.ts } ?: nowMillis()
+                            val candlesNeeded = ((nowMillis() - oldestTs) / 3_600_000L + 3L)
+                                .coerceIn(48L, 1000L).toInt()
+                            val candles = try {
+                                container.repository.futuresHistory(sym, "1h", limit = candlesNeeded)
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (_: Throwable) {
+                                // Fetch failed: no outcome is recorded, so these records are retried next pass.
+                                null
+                            }
+                            if (candles.isNullOrEmpty()) {
+                                null
+                            } else {
+                                val openTimes = candles.map { it.openTime }
+                                val closes = candles.map { it.close }
+                                val windowStart = openTimes.first()
+                                unsettled.mapNotNull { rec ->
+                                    val key = EvidenceGradingPass.keyOf(rec, horizonHours)
+                                    val forward = EvidenceGrader.forwardReturnPct(
+                                        openTimes, closes, rec.ts, rec.price, horizonMs, nowMillis(),
+                                    )
+                                    val entry: Pair<GradeKey, Double?>? = when {
+                                        forward != null -> key to forward
+                                        // Older than the fetched history, or archived without a usable
+                                        // verdict-time price: no candle or base can ever grade it.
+                                        rec.ts < windowStart || !(rec.price > 0.0) -> key to null
+                                        // Horizon candle not closed yet: stays pending, retried next pass.
+                                        else -> null
+                                    }
+                                    entry
+                                }.toMap()
+                            }
+                        }
+                    }
+                }.awaitAll()
+            }
+            results.forEach { result -> if (result != null) settled.putAll(result) }
+        }
+
+        // Cumulative statistics over the whole eligible archive, not just this pass.
+        val samples = EvidenceGradingPass.gradedSamples(eligible, settled, horizonHours)
+        val grade = EvidenceGrader.grade(samples)
+        val ece = EvidenceGrader.ece(samples)
+        val brier = EvidenceGrader.brier(samples)
+        val windows = EvidenceGrader.gradeWindows(samples, nowMillis())
+        val newest = EvidenceGradingPass.newestGradedTs(eligible, settled, horizonHours)
+        val pending = EvidenceGradingPass.pendingCount(eligible, settled, horizonHours)
+        store.setLastGradedMs(newest ?: 0L)
+
+        _ui.update {
+            it.copy(
+                evidence = EvidenceState(
+                    archived = records.size,
+                    graded = grade.graded,
+                    byVerdict = grade.byVerdict,
+                    byConfidence = grade.byConfidence,
+                    ece = ece.ece,
+                    eceBins = ece.bins,
+                    brier = brier?.brier,
+                    brierSkill = brier?.skill,
+                    windows = windows,
+                    stale = pending > 0,
+                    isGrading = false,
+                    horizonHours = horizonHours,
+                    lastGradedMs = newest,
+                    error = null,
+                ),
+            )
         }
     }
 
     companion object {
         const val TOP_N = 10
 
-        /** Distinct symbols graded per pass (spec cap: 40). */
+        /** Distinct symbols whose candles are fetched per pass (spec cap: 40). */
         const val GRADE_SYMBOL_CAP = 40
 
         /** Concurrent kline fetches during grading (engine caches absorb repeats). */
@@ -237,7 +247,7 @@ class PerformanceViewModel(private val container: AppContainer) : ViewModel() {
  * Verdict-evidence self-audit state (v2).
  *
  * @param archived total records in the JSONL ring
- * @param graded records graded in the latest pass
+ * @param graded records with a final outcome in the cumulative statistics
  * @param byVerdict hit-rate/median-forward-return per verdict (BUY/SELL/…);
  *                  v2 buckets carry Wilson 95% bounds + the small-sample gate
  * @param byConfidence same per confidence band (0-25 / 26-50 / 51-75 / 76-100)
@@ -246,8 +256,9 @@ class PerformanceViewModel(private val container: AppContainer) : ViewModel() {
  * @param brier Brier score of stated confidences vs 0/1 outcomes; null = no samples
  * @param brierSkill Brier Skill Score vs the constant base-rate forecast (>0 = skill); null when degenerate
  * @param windows rolling-window grades keyed "7d"/"30d"/"all"
- * @param stale true when archived records older than the horizon are NOT yet
- *              graded (capped pass or failed fetches) — honest lag signal
+ * @param stale true when archived records older than the horizon still have NO outcome
+ *              (failed fetches, horizon not reached, or capped pass) — honest lag signal
+ * @param error classified failure of the last grading pass; null when it completed
  */
 data class EvidenceState(
     val archived: Int = 0,
@@ -263,7 +274,7 @@ data class EvidenceState(
     val isGrading: Boolean = false,
     val horizonHours: Long = 4,
     val lastGradedMs: Long? = null,
-    val error: String? = null,
+    val error: MarketDataFailure? = null,
 )
 
 data class PerformanceUiState(
@@ -272,7 +283,7 @@ data class PerformanceUiState(
     val losers: List<Ticker24h> = emptyList(),
     val byVolume: List<Ticker24h> = emptyList(),
     val isLoading: Boolean = true,
-    val error: String? = null,
+    val error: MarketDataFailure? = null,
     val lastUpdateMs: Long? = null,
     /** ADDITIVE: verdict-evidence self-grading state (domain/evidence). */
     val evidence: EvidenceState = EvidenceState(),

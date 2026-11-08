@@ -5,6 +5,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class DeribitNormalizeTest {
@@ -49,6 +50,35 @@ class DeribitNormalizeTest {
         assertEquals(0.0001, dt.fundingRate!!, 1e-12)
         val f = recs[1] as Funding
         assertEquals(0.0001, f.fundingRate, 1e-12); assertEquals(8, f.intervalHours)
+        // fundingRate comes from current_funding (funding_8h is not read); no forward field is mapped.
+        assertNull(dt.predictedFundingRate)
+        assertNull(f.predictedFundingRate)
+    }
+
+    @Test fun tradeWithoutPriceOrAmountIsDroppedNotZeroFilled() {
+        val msg = obj("""
+        {"params":{"channel":"trades.BTC-PERPETUAL.100ms","data":[
+          {"instrument_name":"BTC-PERPETUAL","timestamp":1700000000000,"trade_id":"t1",
+           "amount":10.0,"direction":"buy"},
+          {"instrument_name":"BTC-PERPETUAL","timestamp":1700000000001,"trade_id":"t2",
+           "price":95000.0,"direction":"buy"},
+          {"instrument_name":"BTC-PERPETUAL","timestamp":1700000000002,"trade_id":"t3",
+           "price":95001.0,"amount":2.0,"direction":"buy"}
+        ]}}""")
+        val recs = DeribitNormalize.normalizeMessage(msg, localTs = 9L)
+        assertEquals(1, recs.size)
+        assertEquals(95001.0, (recs[0] as Trade).price)
+    }
+
+    @Test fun bookLevelWithoutPriceIsDroppedNotZeroFilled() {
+        val snap = obj("""
+        {"params":{"channel":"book.BTC-PERPETUAL.100ms","data":{
+          "instrument_name":"BTC-PERPETUAL","timestamp":1700000000000,"type":"snapshot",
+          "change_id":100,"bids":[["new",95000.0,5.0],["new",null,1.0]],"asks":[["new",95010.0]]
+        }}}""")
+        val s = DeribitNormalize.normalizeMessage(snap, localTs = 9L)[0] as BookSnapshot
+        assertEquals(listOf(Level(95000.0, 5.0)), s.bids)
+        assertTrue(s.asks.isEmpty())
     }
 
     @Test fun tradesWithLiquidationEmitsTradeAndLiquidation() {

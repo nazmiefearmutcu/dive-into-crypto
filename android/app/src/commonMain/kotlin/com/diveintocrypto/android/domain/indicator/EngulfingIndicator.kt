@@ -14,9 +14,12 @@ import com.diveintocrypto.android.platform.format
  * (|close - open|) fully engulfs the prior bar's body, and the two bars have
  * opposite colours:
  *
- *   bullish: current close > open, prior close < open,
- *            open_cur <= open_prior AND close_cur >= close_prior
- *   bearish: mirrored (current red body engulfs prior green body)
+ *   bullish: prior red (close_prev < open_prev) and current green
+ *            (close_cur > open_cur), current body containing the prior body:
+ *            open_cur <= close_prev AND close_cur >= open_prev
+ *   bearish: prior green (close_prev > open_prev) and current red
+ *            (close_cur < open_cur), current body containing the prior body:
+ *            open_cur >= close_prev AND close_cur <= open_prev
  *
  * Strength grading: STRONG when the engulfing candle's body carves out most
  * of its total range (body / (high - low) >= `body_ratio`, default 0.7) and
@@ -50,10 +53,11 @@ class EngulfingIndicator(config: IndicatorConfig) : BaseIndicator(config) {
             "strong_ratio" to bodyRatioMin,
         )
 
+        // Body containment: the current real body must cover the prior real body.
         val bullish = cur.close > cur.open && prev.close < prev.open &&
-            cur.open <= prev.open && cur.close >= prev.close
+            cur.open <= prev.close && cur.close >= prev.open
         val bearish = cur.close < cur.open && prev.close > prev.open &&
-            cur.open >= prev.open && cur.close <= prev.close
+            cur.open >= prev.close && cur.close <= prev.open
         val strong = bodyCur > bodyPrev && ratio >= bodyRatioMin
 
         if (bullish) {

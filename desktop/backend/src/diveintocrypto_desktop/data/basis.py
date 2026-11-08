@@ -122,8 +122,11 @@ def reset_delivery_cache() -> None:
 async def premium_index_klines(symbol: str, interval: str = "5m", limit: int = 200) -> list[dict]:
     """Trailing premiumIndexKlines ``[{t, premium_pct}]`` for one symbol.
 
-    ``premium_pct`` is Binance's own mark-vs-index premium percent series —
-    the z-score baseline. Empty list on failure (caller decides honesty).
+    Binance returns the mark-vs-index premium as a FRACTION (e.g. ``-0.00045``, the
+    same scale as ``(mark - index) / index`` and the funding rate). It is converted
+    to percent here so it is on the same scale as the current premium that
+    :func:`basis_block` z-scores against it. Empty list on failure (caller decides
+    honesty).
     """
     rows: list[dict[str, Any]] = await get_json(
         f"{FAPI_V1}/premiumIndexKlines", {"symbol": symbol, "interval": interval, "limit": limit}
@@ -131,10 +134,14 @@ async def premium_index_klines(symbol: str, interval: str = "5m", limit: int = 2
     out: list[dict] = []
     for r in rows:
         try:
-            out.append({"t": int(r[0]), "premium_pct": _safe_float(r[1])})
+            t = int(r[0])
         except (IndexError, TypeError, ValueError):
             continue
-    return [r for r in out if r["premium_pct"] is not None]
+        frac = _safe_float(r[1]) if len(r) > 1 else None
+        if frac is None:
+            continue
+        out.append({"t": t, "premium_pct": frac * 100.0})
+    return out
 
 
 def basis_zscore(premium_pct_series: list[float], current_pct: float | None) -> float | None:

@@ -15,7 +15,10 @@ from __future__ import annotations
 import asyncio
 import os
 import random
-from typing import Any, Awaitable, Callable, TypeVar
+from contextlib import contextmanager
+from contextvars import ContextVar
+from email.utils import parsedate_to_datetime
+from typing import Any, Awaitable, Callable, Iterator, TypeVar
 
 import aiohttp
 from aiolimiter import AsyncLimiter
@@ -64,6 +67,86 @@ class TransientUpstreamError(Exception):
         super().__init__(f"upstream {status}")
 
 
+class BinanceApiError(Exception):
+    """A non-retryable 4xx answer whose JSON body carries a Binance error code
+    (e.g. HTTP 400 ``{"code": -1121, "msg": "Invalid symbol."}``).
+
+    The code is kept on the exception: aiohttp's ``ClientResponseError`` string
+    omits the body, so callers cannot match on the code otherwise.
+    """
+
+    def __init__(self, status: int, code: int, msg: str) -> None:
+        self.status = status
+        self.code = code
+        self.msg = msg
+        super().__init__(f"upstream {status} code={code} msg={msg!r}")
+
+
+def describe_failure(exc: BaseException) -> str:
+    """A stable, user-safe failure code for an upstream error (never Binance's raw text).
+
+    HTTP 451 is the region block; HTTP 403 is a separate, non-transient "forbidden"
+    state. Any other HTTP status is a generic error with the status in parentheses;
+    everything else (timeouts, connection errors) is the generic code. The raw
+    message belongs in the Python logger, not in API payloads or the Network Log.
+    """
+    status = getattr(exc, "status", None)
+    if status == 451:
+        return "region_blocked"
+    if status == 403:
+        return "forbidden"
+    if isinstance(status, int):
+        return f"upstream_unavailable ({status})"
+    return "upstream_unavailable"
+
+
+_RESPONSE_META: ContextVar[dict | None] = ContextVar("response_meta", default=None)
+
+
+@contextmanager
+def capture_response_meta() -> Iterator[dict]:
+    """Collect transport metadata (the upstream server clock) of the responses
+    fetched by the current task. Context-local, so concurrent fetches stay apart."""
+    holder: dict = {}
+    token = _RESPONSE_META.set(holder)
+    try:
+        yield holder
+    finally:
+        _RESPONSE_META.reset(token)
+
+
+def _server_date_ms(resp: aiohttp.ClientResponse) -> int | None:
+    """The response's ``Date`` header as epoch milliseconds (second precision)."""
+    raw = resp.headers.get("Date")
+    if not raw:
+        return None
+    try:
+        return int(parsedate_to_datetime(raw).timestamp() * 1000)
+    except (TypeError, ValueError, IndexError):
+        return None
+
+
+def prune_oldest(cache: dict, maxsize: int) -> None:
+    """Keep at most ``maxsize`` entries of a symbol-keyed cache.
+
+    Values shaped ``(timestamp, payload)`` are dropped stalest-first; other values
+    (no timestamp) are dropped in insertion order. Keeps client-supplied keys from
+    growing a module-level cache without bound.
+    """
+    overflow = len(cache) - maxsize
+    if overflow <= 0:
+        return
+
+    def stamp(key: Any) -> float:
+        value = cache[key]
+        if isinstance(value, tuple) and value and isinstance(value[0], (int, float)):
+            return float(value[0])
+        return 0.0
+
+    for key in sorted(cache, key=stamp)[:overflow]:  # stable sort keeps insertion order on ties
+        cache.pop(key, None)
+
+
 def retry_delay(attempt: int, retry_after: float | None = None) -> float:
     """Backoff before retry ``attempt`` (0-based). Honors Retry-After when present."""
     if retry_after is not None and retry_after > 0:
@@ -109,11 +192,24 @@ def _retry_after_seconds(resp: aiohttp.ClientResponse) -> float | None:
         return None  # HTTP-date form: fall back to exponential backoff
 
 
-async def get_json(url: str, params: dict[str, Any] | None = None, *, rate_limited: bool = False) -> Any:
+async def get_json(
+    url: str,
+    params: dict[str, Any] | None = None,
+    *,
+    rate_limited: bool = False,
+    retry_timeouts: bool = False,
+) -> Any:
     """GET a JSON document with transient-failure retries.
 
     Set ``rate_limited`` for futures/data endpoints (shared 40/60s limiter).
+    Set ``retry_timeouts`` to also retry client-side timeouts (the scan-critical
+    klines / open-interest paths), not just 429/5xx.
     """
+
+    def should_retry(e: Exception) -> bool:
+        if isinstance(e, TransientUpstreamError):
+            return True
+        return retry_timeouts and isinstance(e, asyncio.TimeoutError)
 
     async def send() -> Any:
         session = await get_session()
@@ -126,15 +222,36 @@ async def get_json(url: str, params: dict[str, Any] | None = None, *, rate_limit
                 return await _read_json(session, url, params)
         return await _read_json(session, url, params)
 
-    return await run_with_retries(send)
+    return await run_with_retries(send, should_retry=should_retry)
 
 
 async def _read_json(session: aiohttp.ClientSession, url: str, params: dict[str, Any] | None) -> Any:
     async with session.get(url, params=params) as resp:
+        meta = _RESPONSE_META.get()
+        if meta is not None:
+            meta["server_ms"] = _server_date_ms(resp)
         if resp.status in _RETRYABLE_STATUSES:
             raise TransientUpstreamError(resp.status, _retry_after_seconds(resp))
+        if resp.status >= 400:
+            body = await _error_body(resp)
+            if body is not None and body.get("code") is not None:
+                try:
+                    code = int(body["code"])
+                except (TypeError, ValueError):
+                    code = None
+                if code is not None:
+                    raise BinanceApiError(resp.status, code, str(body.get("msg", ""))[:120])
         resp.raise_for_status()
         return await resp.json()
+
+
+async def _error_body(resp: aiohttp.ClientResponse) -> dict | None:
+    """The JSON error object of a failed response, or None when it has none."""
+    try:
+        body = await resp.json(content_type=None)
+    except Exception:  # noqa: BLE001 - a non-JSON error page is simply "no body"
+        return None
+    return body if isinstance(body, dict) else None
 
 
 _session: aiohttp.ClientSession | None = None

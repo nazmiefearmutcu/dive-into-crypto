@@ -3,6 +3,7 @@ package com.diveintocrypto.android.domain.consensus
 import com.diveintocrypto.android.domain.model.IndicatorResult
 import com.diveintocrypto.android.domain.model.Signal
 import com.diveintocrypto.android.domain.model.SignalDetail
+import kotlin.math.round
 
 data class ScoreBreakdown(
     val weightedScore: Double,
@@ -26,7 +27,6 @@ object Scorer {
         var weightedSum = 0.0
         var buy = 0; var sell = 0; var neutral = 0
         var strongBuy = 0; var strongSell = 0
-        var totalDirectional = 0
         val details = ArrayList<SignalDetail>(results.size)
 
         for (r in results) {
@@ -38,7 +38,6 @@ object Scorer {
             val wScore = r.score * w
             weightedSum += wScore
             totalWeight += w
-            totalDirectional++
 
             when (r.signal) {
                 Signal.STRONG_BUY -> { strongBuy++; buy++ }
@@ -50,9 +49,12 @@ object Scorer {
             details += SignalDetail(r.name, r.signal, w, wScore, r.reason)
         }
 
+        // scorer.py: weighted_score = round(weighted_avg, 4). Rounding happens BEFORE the
+        // thresholds and the risk module see the value, so boundary cases agree with desktop.
         val weightedAvg = if (totalWeight > 0) weightedSum / totalWeight else 0.0
+        val weightedScore = round(weightedAvg * 10000.0) / 10000.0
         return ScoreBreakdown(
-            weightedScore = weightedAvg,
+            weightedScore = weightedScore,
             weightedSum = weightedSum,
             totalWeight = totalWeight,
             buyCount = buy,
@@ -61,7 +63,8 @@ object Scorer {
             strongBuyCount = strongBuy,
             strongSellCount = strongSell,
             activeSignals = buy + sell,
-            totalSignals = totalDirectional,
+            // scorer.py: total_signals = len(results), so zero-weight filters are counted too.
+            totalSignals = results.size,
             signalDetails = details,
         )
     }

@@ -47,7 +47,8 @@ class ConsensusEngineTest {
     }
 
     @Test
-    fun `even split forces NEUTRAL via conflict ratio`() {
+    fun `weak balanced split is NEUTRAL from the score band`() {
+        // 2 buy / 2 sell / 1 neutral: score = 0.2/8.0 = 0.025, inside the neutral band.
         val out = engine.evaluate(listOf(
             r("rsi", Signal.BUY),
             r("macd", Signal.BUY),
@@ -55,6 +56,25 @@ class ConsensusEngineTest {
             r("ema_cross", Signal.SELL),
             r("stochastic", Signal.NEUTRAL),
         ))
+        assertEquals(Signal.NEUTRAL, out.finalSignal)
+        assertFalse(out.shouldTrade)
+    }
+
+    @Test
+    fun `conflict guard forces NEUTRAL when a 3-vs-3 split still has a bullish score`() {
+        // Weighted score = (3.0 + 4.0 + 3.0 - 1.8 - 1.2 - 1.0) / 9.0 = 0.667, which is the BUY
+        // band on its own. minority/active = 3/6 = 0.5 > 0.4, so the conflict guard must win.
+        val out = engine.evaluate(listOf(
+            r("rsi", Signal.STRONG_BUY),
+            r("macd", Signal.STRONG_BUY),
+            r("bollinger", Signal.STRONG_BUY),
+            r("ema_cross", Signal.SELL),
+            r("stochastic", Signal.SELL),
+            r("williams_r", Signal.SELL),
+        ))
+        assertTrue(out.weightedScore >= 0.4, "score alone would be BUY")
+        assertEquals(3, out.buyCount)
+        assertEquals(3, out.sellCount)
         assertEquals(Signal.NEUTRAL, out.finalSignal)
         assertFalse(out.shouldTrade)
     }
@@ -187,6 +207,51 @@ class ConsensusEngineTest {
         // Verify keyword swapping (e.g. short -> long, falling -> rising, bearish -> bullish)
         assertTrue(lastOut.reason.contains("Classic deleveraging washout, most consistent with short covering and bullish follow-through"))
         assertTrue(lastOut.reason.contains("Bullish now, but exhaustion risk rises late in the move"))
+    }
+
+    @Test
+    fun `a feed with one real sample does not turn its neutral padding into a z-score history`() {
+        val size = 300
+        val candles = makeCandles(size, 1000.0, -10.0)
+        val oi = makeOi(size, 1000.0, 100.0)
+        val acc = makeLongShort(size, 1.0, 0.1)
+        val global = makeLongShort(size, 1.0, 0.1)
+        val pos = makeLongShort(size, 2.0, -0.05)
+        val taker = makeTaker(size, 0.9, -0.01)
+        // Funding only reports the last candle: 299 zero-padded candles must not form its std/mean.
+        val lastOnly = listOf(FundingRatePoint(timestamp = candles.last().openTime, fundingRate = 0.0001))
+
+        val withLastOnly = engine.evaluateMultimodal(
+            candles = candles, rawOi = oi, rawAcc = acc, rawPos = pos,
+            rawGlobal = global, rawTaker = taker, rawFunding = lastOnly,
+        ).last()
+        val withNone = engine.evaluateMultimodal(
+            candles = candles, rawOi = oi, rawAcc = acc, rawPos = pos,
+            rawGlobal = global, rawTaker = taker, rawFunding = emptyList(),
+        ).last()
+
+        assertEquals(withNone.weightedScore, withLastOnly.weightedScore, 1e-9)
+        assertEquals(withNone.finalSignal, withLastOnly.finalSignal)
+    }
+
+    @Test
+    fun `multimodal reasons carry no trade-setup wording`() {
+        val size = 60
+        val out = engine.evaluateMultimodal(
+            candles = makeCandles(size, 1000.0, -10.0),
+            rawOi = makeOi(size, 1000.0, 100.0),
+            rawAcc = makeLongShort(size, 1.0, 0.1),
+            rawPos = makeLongShort(size, 2.0, -0.05),
+            rawGlobal = makeLongShort(size, 1.0, 0.1),
+            rawTaker = makeTaker(size, 0.9, -0.01),
+            rawFunding = makeFunding(size, 0.0001),
+        )
+        val banned = listOf("no-trade", "candidate", "best rebound", "trade signal")
+        for (o in out) {
+            for (word in banned) {
+                assertFalse(o.reason.contains(word, ignoreCase = true), "'$word' found in: ${o.reason}")
+            }
+        }
     }
 
     @Test

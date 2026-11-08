@@ -1,6 +1,5 @@
 """Ichimoku Cloud indicator."""
 
-from typing import Any
 import pandas as pd
 
 from diveintocrypto_desktop.engine.indicators.base import BaseIndicator, IndicatorResult, Signal
@@ -55,10 +54,9 @@ class IchimokuIndicator(BaseIndicator):
             "cloud_bottom": round(cloud_bottom, 2),
         }
 
-        # Determine cloud position
+        # Determine cloud position ("in cloud" is the neither-above-nor-below branch below)
         above_cloud = current_close > cloud_top
         below_cloud = current_close < cloud_bottom
-        in_cloud = not above_cloud and not below_cloud
 
         # Tenkan/Kijun cross
         tk_bullish_cross = prev_tenkan <= prev_kijun and current_tenkan > current_kijun

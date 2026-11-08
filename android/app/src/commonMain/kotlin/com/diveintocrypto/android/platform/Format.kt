@@ -1,7 +1,7 @@
 package com.diveintocrypto.android.platform
 
 import kotlin.math.abs
-import kotlin.math.round
+import kotlin.math.floor
 
 /**
  * Multiplatform replacement for `String.format(Locale.US, "%[,].Nf", value)`.
@@ -11,7 +11,10 @@ import kotlin.math.round
  *   - `grouped`  → US thousands separator on the integer part, e.g. "1,234.56"
  *   - `plus`     → force a leading "+" on non-negative values (printf "%+.Nf")
  *
- * Decimal point is always '.', matching Locale.US.
+ * Decimal point is always '.', matching Locale.US. Exact ties round HALF_UP
+ * (away from zero for the magnitude), as printf/String.format do — e.g.
+ * `0.125.format(2)` → "0.13" and `2.5.format(0)` → "3". Kotlin's `round` is
+ * ties-to-even, so it is deliberately not used here.
  */
 fun Double.format(decimals: Int, grouped: Boolean = false, plus: Boolean = false): String {
     if (isNaN()) return "NaN"
@@ -23,7 +26,8 @@ fun Double.format(decimals: Int, grouped: Boolean = false, plus: Boolean = false
     var factor = 1L
     repeat(decimals) { factor *= 10 }
 
-    val scaled = round(absValue * factor).toLong()
+    // HALF_UP on the magnitude: floor(x + 0.5). Double.toLong() saturates on overflow.
+    val scaled = floor(absValue * factor + 0.5).toLong()
     val intUnits = scaled / factor
     val fracUnits = scaled % factor
 

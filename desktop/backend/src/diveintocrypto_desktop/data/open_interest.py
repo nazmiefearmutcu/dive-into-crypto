@@ -1,14 +1,19 @@
-"""Open-interest history via Crypcodile's Binance OI parser."""
+"""Open-interest history via Crocodile's Binance OI parser.
+
+``/futures/data/openInterestHist`` is a futures/data endpoint, so it goes through
+the shared 40/60s limiter in :mod:`diveintocrypto_desktop.data.http` like the
+long/short ratio series it is always fetched alongside. Rows are normalised by
+Crocodile's public ``parse_open_interest_hist`` into canonical ``OpenInterest``
+records.
+"""
 
 from __future__ import annotations
 
-import asyncio
 import time
-from typing import Any
 
-from crypcodile.exchanges.binance.backfill import _live_fetch_open_interest_hist, parse_open_interest_hist
+from crocodile.crypto.exchanges.binance.backfill import parse_open_interest_hist
 
-from diveintocrypto_desktop.data.http import FAPI_DATA, TransientUpstreamError, run_with_retries
+from diveintocrypto_desktop.data.http import FAPI_DATA, get_json
 
 _VENUE = "binance-usdm"
 
@@ -21,24 +26,15 @@ async def fetch_oi_hist(symbol: str, period: str = "5m", limit: int = 48) -> lis
     if period not in OI_PERIODS:
         period = "5m"
     now_ms = int(time.time() * 1000)
-
-    async def send() -> Any:
-        return await _live_fetch_open_interest_hist(
-            symbol=symbol,
-            period=period,
-            start_time_ms=None,
-            end_time_ms=now_ms,
-            limit=limit,
-            rest_base=FAPI_DATA,
-        )
-
-    raw = await run_with_retries(
-        send,
-        should_retry=lambda e: isinstance(e, TransientUpstreamError) or isinstance(e, asyncio.TimeoutError),
+    raw = await get_json(
+        f"{FAPI_DATA}/futures/data/openInterestHist",
+        {"symbol": symbol, "period": period, "limit": limit, "endTime": now_ms},
+        rate_limited=True,
+        retry_timeouts=True,
     )
     local_ts = now_ms * 1_000_000
     recs = parse_open_interest_hist(raw, _VENUE, symbol, local_ts)
     return [
-        {"t": r.exchange_ts, "oi": r.open_interest, "oi_value": r.open_interest_value}
+        {"t": r.source_ts, "oi": r.open_interest, "oi_value": r.open_interest_value}
         for r in recs
     ]

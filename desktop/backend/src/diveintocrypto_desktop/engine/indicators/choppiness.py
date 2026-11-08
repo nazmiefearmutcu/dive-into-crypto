@@ -17,10 +17,15 @@ class ChoppinessIndexIndicator(BaseIndicator):
         choppy_threshold = self.thresholds.get("choppy_threshold", 61.8)
         trending_threshold = self.thresholds.get("trending_threshold", 38.2)
 
+        # A lookback below 1 bar is not a valid window: report insufficient data
+        # instead of dividing by log10(1) or pandas-erroring on a negative window.
+        if period < 1:
+            return self._make_result(Signal.NEUTRAL, "Choppiness data insufficient")
+
         high = df["high"]
         low = df["low"]
         close = df["close"]
-        
+
         tr1 = high - low
         tr2 = (high - close.shift()).abs()
         tr3 = (low - close.shift()).abs()

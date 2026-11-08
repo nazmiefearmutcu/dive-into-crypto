@@ -33,18 +33,18 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.diveintocrypto.android.AppContainer
 import com.diveintocrypto.android.platform.format
 import com.diveintocrypto.android.platform.nowMillis
 import com.diveintocrypto.android.ui.common.UiLabels
+import com.diveintocrypto.android.ui.i18n.LocalDiveStrings
 import com.diveintocrypto.android.ui.panel.components.CandleChartCard
+import com.diveintocrypto.android.ui.panel.components.ChartMath
 import com.diveintocrypto.android.ui.panel.components.LiveTfGrid
 import com.diveintocrypto.android.ui.panel.components.PageHeader
 import com.diveintocrypto.android.ui.panel.components.SignalDistributionCard
@@ -71,6 +71,7 @@ import kotlinx.coroutines.delay
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PanelScreen(container: AppContainer) {
+    val strings = LocalDiveStrings.current
     val vm: PanelViewModel = viewModel { PanelViewModel(container) }
     val state by vm.ui.collectAsStateWithLifecycle()
 
@@ -88,7 +89,7 @@ fun PanelScreen(container: AppContainer) {
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             PageHeader(
-                title = "Active Coin",
+                title = strings.panelTitleActiveCoin,
                 lastUpdateMs = state.lastUpdateMs,
                 stale = state.lastUpdateMs?.let { (nowMillis() - it) > 30_000 } ?: false,
                 onRefresh = { vm.refresh() },
@@ -104,9 +105,9 @@ fun PanelScreen(container: AppContainer) {
                 onSelectSymbol = vm::selectSymbol
             )
 
-            if (state.errorMessage != null) {
+            state.errorMessage?.let { message ->
                 ErrorBanner(
-                    message = state.errorMessage!!,
+                    message = message,
                     onRetry = { vm.refresh() }
                 )
             }
@@ -128,7 +129,7 @@ fun PanelScreen(container: AppContainer) {
             )
 
             DiveCard(
-                title = "${state.activeSymbol} · 12-Timeframe Consensus Confidence",
+                title = strings.panelTfGridTitle(state.activeSymbol),
                 modifier = Modifier.alpha(if (state.isLoading) 0.5f else 1f)
             ) {
                 LiveTfGrid(items = state.multiTf)
@@ -146,7 +147,7 @@ fun PanelScreen(container: AppContainer) {
                 modifier = Modifier.alpha(if (state.isLoading) 0.5f else 1f)
             )
 
-            // 0.3.0 PARITY BLOCKS — funding lens · basis · planning strip.
+            // 0.3.0 PARITY BLOCKS — funding lens · basis · volatility band.
             // Every field is nullable-honest ("—" = the fetch/math could not be done).
             FundingCard(
                 lens = state.fundingLens,
@@ -159,7 +160,7 @@ fun PanelScreen(container: AppContainer) {
                 modifier = Modifier.alpha(if (state.isLoading) 0.5f else 1f)
             )
 
-            PlanningStripCard(
+            VolatilityCard(
                 plan = state.planning,
                 modifier = Modifier.alpha(if (state.isLoading) 0.5f else 1f)
             )
@@ -169,6 +170,16 @@ fun PanelScreen(container: AppContainer) {
                 sell = state.distSell,
                 neutral = state.distNeutral,
                 modifier = Modifier.alpha(if (state.isLoading) 0.5f else 1f)
+            )
+
+            // PERMANENT NOTICE — the Panel is an analytics view, never investment advice.
+            Text(
+                text = strings.disclaimerShort,
+                color = DiveColors.TextDim,
+                fontSize = 10.sp,
+                lineHeight = 14.sp,
+                fontFamily = DiveFonts.body,
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 8.dp),
             )
         }
     }
@@ -180,6 +191,7 @@ private fun ErrorBanner(
     onRetry: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val strings = LocalDiveStrings.current
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -189,7 +201,7 @@ private fun ErrorBanner(
             .padding(horizontal = 14.dp, vertical = 12.dp)
     ) {
         Text(
-            text = "ERROR",
+            text = strings.panelErrorTitle,
             color = DiveColors.Red,
             fontSize = 12.sp,
             fontWeight = FontWeight.Bold,
@@ -210,7 +222,7 @@ private fun ErrorBanner(
                 .padding(horizontal = 12.dp, vertical = 6.dp)
         ) {
             Text(
-                text = "Retry",
+                text = strings.btnRetry,
                 color = Color.White,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold
@@ -225,11 +237,12 @@ private fun SymbolSearchBar(
     onSearchChange: (String) -> Unit,
     onSelectSymbol: (String) -> Unit
 ) {
+    val strings = LocalDiveStrings.current
     val popularCoins = state.favorites.ifEmpty {
         listOf("BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "LINKUSDT", "AVAXUSDT")
     }
 
-    DiveCard(title = "Coin Selection and Search") {
+    DiveCard(title = strings.panelSearchTitle) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Box(
                 modifier = Modifier
@@ -240,7 +253,7 @@ private fun SymbolSearchBar(
                     .padding(horizontal = 12.dp, vertical = 10.dp),
             ) {
                 if (state.searchQuery.isEmpty()) {
-                    Text("e.g. BTCUSDT, SOLUSDT...", color = DiveColors.TextDim, fontSize = 13.sp)
+                    Text(strings.panelSearchPlaceholder, color = DiveColors.TextDim, fontSize = 13.sp)
                 }
                 BasicTextField(
                     value = state.searchQuery,
@@ -255,7 +268,7 @@ private fun SymbolSearchBar(
             if (state.searchQuery.isNotEmpty()) {
                 val results = state.filteredSymbols
                 if (results.isEmpty()) {
-                    Text("No matching coin found.", color = DiveColors.TextMuted, fontSize = 12.sp)
+                    Text(strings.panelNoMatch, color = DiveColors.TextMuted, fontSize = 12.sp)
                 } else {
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         results.take(6).forEach { symbol ->
@@ -276,7 +289,7 @@ private fun SymbolSearchBar(
                                     fontFamily = DiveFonts.body
                                 )
                                 if (symbol == state.activeSymbol) {
-                                    Text("Active", color = DiveColors.Accent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    Text(strings.panelActive, color = DiveColors.Accent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                 }
                             }
                         }
@@ -325,6 +338,7 @@ private fun SymbolSearchBar(
 // ═══════════════════════════════════════════════════════════════════════
 @Composable
 private fun StrategyOverlaysCard(state: PanelUiState, modifier: Modifier = Modifier) {
+    val strings = LocalDiveStrings.current
     val dirArrow: (Int) -> String = { d -> when { d > 0 -> "▲"; d < 0 -> "▼"; else -> "·" } }
     val dirColor: (Int?) -> Color = { d -> when {
         d != null && d > 0 -> DiveColors.Green
@@ -332,20 +346,21 @@ private fun StrategyOverlaysCard(state: PanelUiState, modifier: Modifier = Modif
         else -> DiveColors.TextMuted
     } }
 
+    val gate = if (state.mtfGate) strings.panelMtfGateOpen else strings.panelMtfGateClosed
     val mtfText = "${dirArrow(state.mtfDirection)} ${state.mtfScore.format(0, plus = true)} · " +
-        "${state.mtfLabel} · kapı ${if (state.mtfGate) "AÇIK ✓" else "KAPALI –"}"
+        "${state.mtfLabel} · $gate"
 
     val microText: String = state.microScore?.let { score ->
         val label = state.microLabel?.removePrefix("STRONG_") ?: "—"
-        val active = state.microActive?.let { " · $it sinyal" } ?: ""
+        val active = state.microActive?.let { " · ${strings.panelSignalsCount(it)}" } ?: ""
         "${dirArrow(state.microDirection ?: 0)} ${score.format(0, plus = true)} · $label$active"
     } ?: "—"
 
-    DiveCard(title = "STRATEJİ KATMANLARI (verdict'e dokunmaz)", modifier = modifier) {
+    DiveCard(title = strings.panelStrategyTitle, modifier = modifier) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             OverlayRow(
-                label = "REJİM",
-                value = "${state.regime} · skor ${state.regimeAdaptiveScore.format(1, plus = true)}",
+                label = strings.panelRegimeLabel,
+                value = "${state.regime} · ${state.regimeAdaptiveScore.format(1, plus = true)}",
                 valueColor = when (state.regime) {
                     "TREND" -> DiveColors.Cyan
                     "RANGE" -> DiveColors.Purple
@@ -353,7 +368,7 @@ private fun StrategyOverlaysCard(state: PanelUiState, modifier: Modifier = Modif
                 },
             )
             OverlayRow(label = "MTF", value = mtfText, valueColor = dirColor(state.mtfDirection))
-            OverlayRow(label = "MİKROYAPI", value = microText, valueColor = dirColor(state.microDirection))
+            OverlayRow(label = strings.panelMicroLabel, value = microText, valueColor = dirColor(state.microDirection))
         }
     }
 }
@@ -383,9 +398,13 @@ private fun OverlayRow(label: String, value: String, valueColor: Color) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// 0.3.0 parity cards — FUNDING · BASIS · PLANLAMA. All inputs come from the
+// 0.3.0 parity cards — FUNDING · BASIS · VOLATILITY. All inputs come from the
 // PanelViewModel's parity bundle; null = honest "—", never a fabricated zero.
 // ═══════════════════════════════════════════════════════════════════════
+
+/** Volatility-band decimals: keeps the ChartMath decimals at or above 1, and significant digits below 1. */
+private fun bandDecimals(price: Double): Int =
+    com.diveintocrypto.android.ui.performance.sigDecimalsBelowOne(price, ChartMath.priceDecimalsFor(price))
 
 /**
  * FUNDING card — predicted vs settled rate (% / 8h), simple APR, the regime
@@ -399,6 +418,7 @@ private fun FundingCard(
     regime: String,
     modifier: Modifier = Modifier,
 ) {
+    val strings = LocalDiveStrings.current
     // Tick once per second, seeded on each new lens emission; the countdown
     // counts DOWN from the fetched secondsToFunding. null → static "—".
     var elapsedSec by remember(lens?.secondsToFunding) { androidx.compose.runtime.mutableLongStateOf(0L) }
@@ -412,16 +432,19 @@ private fun FundingCard(
     }
     val secondsLeft = lens?.secondsToFunding?.let { (it - elapsedSec).coerceAtLeast(0L) }
 
-    val regimeColor = when (UiLabels.fundingRegimeLabel(lens?.predictedRatePct ?: 0.0)) {
-        "POZİTİF" -> DiveColors.Green
-        "NEGATİF" -> DiveColors.Red
+    val predictedRate = lens?.predictedRatePct ?: 0.0
+    val regimeLabel = UiLabels.fundingRegimeLabel(predictedRate, strings)
+    // Colour follows the sign of the predicted rate (same ±0.01 band as the label), never the localized text.
+    val regimeColor = when {
+        predictedRate > 0.01 -> DiveColors.Green
+        predictedRate < -0.01 -> DiveColors.Red
         else -> DiveColors.TextMuted
     }
 
-    DiveCard(title = "FUNDING", modifier = modifier) {
+    DiveCard(title = strings.panelFundingTitle, modifier = modifier) {
         if (lens == null) {
             Text(
-                text = "— (premiumIndex / funding geçmişi alınamadı)",
+                text = strings.panelFundingUnavailable,
                 color = DiveColors.TextDim,
                 fontSize = 12.sp,
                 fontFamily = DiveFonts.body,
@@ -432,8 +455,13 @@ private fun FundingCard(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            FundingCell("TAHMİNİ", "${lens.predictedRatePct.format(4, plus = true)}%", Modifier.weight(1f))
-            FundingCell("SON", "${lens.lastSettledRatePct.format(4, plus = true)}%", Modifier.weight(1f))
+            FundingCell(strings.panelFundingPredicted, "${lens.predictedRatePct.format(4, plus = true)}%", Modifier.weight(1f))
+            // Per-cell dash when only the settled history is missing; predicted + APR stay real.
+            FundingCell(
+                strings.panelFundingLast,
+                lens.lastSettledRatePct?.let { "${it.format(4, plus = true)}%" } ?: "—",
+                Modifier.weight(1f),
+            )
             FundingCell("APR", "${lens.aprPct.format(1, plus = true)}%", Modifier.weight(1f))
         }
         Spacer(Modifier.height(8.dp))
@@ -442,7 +470,7 @@ private fun FundingCard(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = "SETTLEMENT",
+                text = strings.panelFundingTimeLabel,
                 color = DiveColors.TextDim,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Bold,
@@ -459,7 +487,7 @@ private fun FundingCard(
             )
             Spacer(modifier = Modifier.weight(1f))
             Text(
-                text = UiLabels.fundingRegimeLabel(lens.predictedRatePct),
+                text = regimeLabel,
                 color = regimeColor,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Bold,
@@ -473,7 +501,7 @@ private fun FundingCard(
             )
             Spacer(Modifier.width(8.dp))
             Text(
-                text = "REJİM $regime",
+                text = strings.panelRegimeTag(regime),
                 color = DiveColors.TextDim,
                 fontSize = 9.sp,
                 fontFamily = DiveFonts.body,
@@ -509,10 +537,11 @@ private fun BasisCard(
     block: com.diveintocrypto.android.engine.analytics.BasisAnalytics.BasisBlock?,
     modifier: Modifier = Modifier,
 ) {
-    DiveCard(title = "BASİS", modifier = modifier) {
+    val strings = LocalDiveStrings.current
+    DiveCard(title = strings.panelBasisTitle, modifier = modifier) {
         if (block == null) {
             Text(
-                text = "— (mark/index fiyatı alınamadı)",
+                text = strings.panelBasisUnavailable,
                 color = DiveColors.TextDim,
                 fontSize = 12.sp,
                 fontFamily = DiveFonts.body,
@@ -526,7 +555,7 @@ private fun BasisCard(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "BASİS",
+                    text = strings.panelBasisTitle,
                     color = DiveColors.TextDim,
                     fontSize = 9.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -542,7 +571,7 @@ private fun BasisCard(
             }
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "YILLIK FONLAMA",
+                    text = strings.panelAnnFunding,
                     color = DiveColors.TextDim,
                     fontSize = 9.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -559,7 +588,7 @@ private fun BasisCard(
         }
         Spacer(Modifier.height(3.dp))
         Text(
-            text = "pozitif bps = perp pahalı (mark > index)",
+            text = strings.panelBasisCaption,
             color = DiveColors.TextDim,
             fontSize = 9.sp,
             fontFamily = DiveFonts.body,
@@ -568,18 +597,20 @@ private fun BasisCard(
 }
 
 /**
- * PLANLAMA strip — ATR%-based SL/TP/envelope geometry for the consensus
- * direction. INFORMATIONAL ONLY ("sadece bilgi"); no execution promise.
+ * VOLATILITY card — ATR% and the ATR-based volatility band around the last price.
+ * Descriptive only: no trade levels, no direction, no position guidance. The band
+ * is an illustrative ATR envelope, labelled with the short not-advice notice.
  */
 @Composable
-private fun PlanningStripCard(
+private fun VolatilityCard(
     plan: com.diveintocrypto.android.engine.analytics.PlanningStrip.Plan?,
     modifier: Modifier = Modifier,
 ) {
-    DiveCard(title = "PLANLAMA", modifier = modifier) {
+    val strings = LocalDiveStrings.current
+    DiveCard(title = strings.panelVolTitle, modifier = modifier) {
         if (plan == null) {
             Text(
-                text = "— (ATR%/yön/fiyat yok — NÖTR yönde plan kurulmaz)",
+                text = strings.panelPlanUnavailable,
                 color = DiveColors.TextDim,
                 fontSize = 12.sp,
                 fontFamily = DiveFonts.body,
@@ -590,23 +621,13 @@ private fun PlanningStripCard(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            PlanCell("YÖN", plan.direction, accent = true, modifier = Modifier.weight(1f))
             PlanCell("ATR%", plan.atrPct.format(2), modifier = Modifier.weight(1f))
-            PlanCell("R:R", plan.rr.format(1), modifier = Modifier.weight(1f))
-        }
-        Spacer(Modifier.height(6.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            PlanCell("SL", plan.slPrice.format(2), accent = false, danger = true, modifier = Modifier.weight(1f))
-            PlanCell("TP", plan.tpPrice.format(2), accent = false, good = true, modifier = Modifier.weight(1f))
-            PlanCell("BANT ALTI", plan.envLow.format(2), modifier = Modifier.weight(1f))
-            PlanCell("BANT ÜSTÜ", plan.envHigh.format(2), modifier = Modifier.weight(1f))
+            PlanCell(strings.panelBandLow, plan.envLow.format(bandDecimals(plan.envLow)), modifier = Modifier.weight(1f))
+            PlanCell(strings.panelBandHigh, plan.envHigh.format(bandDecimals(plan.envHigh)), modifier = Modifier.weight(1f))
         }
         Spacer(Modifier.height(3.dp))
         Text(
-            text = "sadece bilgi — ATR geometrisi, emir kurulmaz",
+            text = strings.panelPlanNote,
             color = DiveColors.TextDim,
             fontSize = 9.sp,
             fontFamily = DiveFonts.body,
@@ -618,9 +639,6 @@ private fun PlanningStripCard(
 private fun PlanCell(
     label: String,
     value: String,
-    accent: Boolean = false,
-    good: Boolean = false,
-    danger: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -641,12 +659,7 @@ private fun PlanCell(
         Spacer(Modifier.height(1.dp))
         Text(
             text = value,
-            color = when {
-                good -> DiveColors.Green
-                danger -> DiveColors.Red
-                accent -> DiveColors.Accent
-                else -> DiveColors.Text
-            },
+            color = DiveColors.Text,
             fontSize = 12.sp,
             fontWeight = FontWeight.Bold,
             fontFamily = DiveFonts.Mono,

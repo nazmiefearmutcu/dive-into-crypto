@@ -17,11 +17,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -44,14 +47,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.diveintocrypto.android.AppContainer
+import com.diveintocrypto.android.data.binance.isRegionBlocked
 import com.diveintocrypto.android.domain.alerts.AlertCondition
 import com.diveintocrypto.android.domain.alerts.AlertKind
 import com.diveintocrypto.android.domain.alerts.AlertRule
-import com.diveintocrypto.android.platform.format
-import com.diveintocrypto.android.ui.panel.components.ChartMath
+import com.diveintocrypto.android.ui.notifications.rememberNotificationPermission
 import com.diveintocrypto.android.ui.theme.DiveColors
 import com.diveintocrypto.android.ui.theme.DiveDims
 import com.diveintocrypto.android.ui.theme.DiveFonts
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 /**
@@ -79,6 +83,28 @@ fun AlertAddSheet(
 
     val tickers by container.liveTickerEngine.tickers.collectAsStateWithLifecycle()
 
+    // First alert on API 33+ asks for POST_NOTIFICATIONS once, with a short rationale. A permanent
+    // denial is handled by request() itself (it opens the app's notification settings).
+    val notifPermission = rememberNotificationPermission()
+    val rulesNow by container.rules.collectAsStateWithLifecycle()
+    var showPermissionRationale by remember { mutableStateOf(false) }
+
+    // Authoritative USDT-M universe; the live ticker map is the fallback until it loads.
+    // A failure is kept (not swallowed) so the sheet can say what happened and offer a retry.
+    var universe by remember { mutableStateOf<Set<String>?>(null) }
+    var universeFailure by remember { mutableStateOf<Throwable?>(null) }
+    var universeAttempt by remember { mutableStateOf(0) }
+    LaunchedEffect(universeAttempt) {
+        universeFailure = null
+        try {
+            universe = container.repository.futuresUniverse().toSet()
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (e: Exception) {
+            universeFailure = e
+        }
+    }
+
     var symbol by remember { mutableStateOf(presetSymbol.uppercase()) }
     var conditions by remember {
         mutableStateOf(listOf(ConditionDraft(presetKind, AlertRule.DIRECTION_ANY, AlertLabels.defaultThresholdText(presetKind, null))))
@@ -87,6 +113,20 @@ fun AlertAddSheet(
 
     val livePrice = tickers[symbol.uppercase()]?.price
 
+    // Symbol gate: true = listed, false = not on Binance USDT-M, null = blank or not known yet.
+    val loadedUniverse = universe
+    val symbolKnown: Boolean? = when {
+        symbol.isBlank() -> null
+        loadedUniverse != null -> symbol in loadedUniverse
+        tickers.isNotEmpty() -> symbol in tickers
+        else -> null
+    }
+
+    // A region block (HTTP 451) on the universe fetch will not clear by retrying: say so instead of
+    // checking forever. Any other failure is a network error with a retry.
+    val regionBlocked = universeFailure?.isRegionBlocked() == true
+    val universeFailed = universeFailure != null && !regionBlocked
+
     fun reseed(draft: ConditionDraft, kind: AlertKind): ConditionDraft =
         draft.copy(kind = kind, thresholdText = AlertLabels.defaultThresholdText(kind, livePrice))
 
@@ -94,7 +134,56 @@ fun AlertAddSheet(
         val parsed = AlertLabels.parseThreshold(draft.thresholdText)
         !AlertLabels.thresholdRequired(draft.kind) || (parsed != null && parsed > 0.0)
     }
-    val canAdd = symbol.isNotBlank() && conditions.isNotEmpty() && allConditionsValid
+    val canAdd = symbolKnown == true && conditions.isNotEmpty() && allConditionsValid
+
+    val saveRule: () -> Unit = {
+        val conds = conditions.map { d ->
+            val parsed = AlertLabels.parseThreshold(d.thresholdText)
+            AlertCondition(
+                kind = d.kind,
+                direction = if (d.kind == AlertKind.VERDICT) d.direction else AlertRule.DIRECTION_ANY,
+                threshold = if (AlertLabels.thresholdRequired(d.kind)) {
+                    AlertLabels.clampThreshold(d.kind, parsed ?: 0.0)
+                } else 0.0,
+            )
+        }
+        container.addRule(
+            symbol = symbol.trim(),
+            conditions = conds,
+            oneShot = cooldown.oneShot,
+            coalesceMs = if (cooldown.oneShot) AlertRule.COALESCE_DEFAULT_MS else cooldown.coalesceMs,
+        )
+        scope.launch { sheetState.hide() }.invokeOnCompletion { onDismiss() }
+    }
+
+    if (showPermissionRationale) {
+        AlertDialog(
+            onDismissRequest = { showPermissionRationale = false },
+            containerColor = DiveColors.BgCard,
+            titleContentColor = DiveColors.Text,
+            textContentColor = DiveColors.TextMuted,
+            title = { Text(strings.setTitleNotifications, fontSize = 16.sp, fontWeight = FontWeight.Bold) },
+            text = { Text(strings.b2AlertPermRationale, fontSize = 13.sp) },
+            confirmButton = {
+                TextButton(onClick = {
+                    showPermissionRationale = false
+                    // Launched synchronously from this click, before the sheet leaves composition.
+                    notifPermission.request()
+                    saveRule()
+                }) {
+                    Text(strings.btnRequestNotifPermission, color = DiveColors.Accent, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showPermissionRationale = false
+                    saveRule()
+                }) {
+                    Text(strings.b2AlertSaveWithoutPerm, color = DiveColors.TextMuted)
+                }
+            },
+        )
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -159,11 +248,52 @@ fun AlertAddSheet(
                 }
                 livePrice?.let {
                     Text(
-                        text = "${strings.livePricePrefix} ${'$'}${it.format(ChartMath.priceDecimalsFor(it))}",
+                        text = "${strings.livePricePrefix} ${'$'}${AlertLabels.formatPrice(it)}",
                         color = DiveColors.TextMuted,
                         fontSize = 10.sp,
                         fontFamily = DiveFonts.body,
                     )
+                }
+                if (regionBlocked) {
+                    Text(
+                        text = strings.errRegionBlockedBody,
+                        color = DiveColors.Red,
+                        fontSize = 10.sp,
+                        lineHeight = 13.sp,
+                        fontFamily = DiveFonts.body,
+                    )
+                } else if (symbolKnown == false) {
+                    Text(
+                        text = strings.alertErrUnknownSymbol,
+                        color = DiveColors.Red,
+                        fontSize = 10.sp,
+                        fontFamily = DiveFonts.body,
+                    )
+                } else if (symbolKnown == null && symbol.isNotBlank()) {
+                    if (universeFailed) {
+                        Text(
+                            text = strings.errNetwork,
+                            color = DiveColors.Red,
+                            fontSize = 10.sp,
+                            lineHeight = 13.sp,
+                            fontFamily = DiveFonts.body,
+                        )
+                        TextButton(onClick = { universeAttempt += 1 }) {
+                            Text(
+                                text = strings.btnRetry,
+                                color = DiveColors.Accent,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                    } else {
+                        Text(
+                            text = strings.alertSymbolChecking,
+                            color = DiveColors.TextDim,
+                            fontSize = 10.sp,
+                            fontFamily = DiveFonts.body,
+                        )
+                    }
                 }
             }
 
@@ -206,7 +336,8 @@ fun AlertAddSheet(
                                     val cur = AlertLabels.parseThreshold(d.thresholdText) ?: 0.0
                                     val step = AlertLabels.thresholdStepFor(d.kind, cur)
                                     d.copy(
-                                        thresholdText = AlertLabels.formatPrice(
+                                        thresholdText = AlertLabels.formatThreshold(
+                                            d.kind,
                                             AlertLabels.clampThreshold(d.kind, cur + delta * step),
                                         ),
                                     )
@@ -290,23 +421,11 @@ fun AlertAddSheet(
                         stateDescription = if (canAdd) strings.stateAddable else strings.stateDisabled
                     }
                     .clickable(enabled = canAdd) {
-                        val conds = conditions.map { d ->
-                            val parsed = AlertLabels.parseThreshold(d.thresholdText)
-                            AlertCondition(
-                                kind = d.kind,
-                                direction = if (d.kind == AlertKind.VERDICT) d.direction else AlertRule.DIRECTION_ANY,
-                                threshold = if (AlertLabels.thresholdRequired(d.kind)) {
-                                    AlertLabels.clampThreshold(d.kind, parsed ?: 0.0)
-                                } else 0.0,
-                            )
+                        if (notifPermission.needed && !notifPermission.granted && rulesNow.isEmpty()) {
+                            showPermissionRationale = true
+                        } else {
+                            saveRule()
                         }
-                        container.addRule(
-                            symbol = symbol.trim(),
-                            conditions = conds,
-                            oneShot = cooldown.oneShot,
-                            coalesceMs = if (cooldown.oneShot) AlertRule.COALESCE_DEFAULT_MS else cooldown.coalesceMs,
-                        )
-                        scope.launch { sheetState.hide() }.invokeOnCompletion { onDismiss() }
                     }
                     .padding(vertical = 13.dp),
                 contentAlignment = Alignment.Center,
@@ -317,6 +436,18 @@ fun AlertAddSheet(
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 1.sp,
+                )
+            }
+
+            // Always a visible way out: the sheet must never be a dead end (e.g. on a region block).
+            TextButton(
+                onClick = { scope.launch { sheetState.hide() }.invokeOnCompletion { onDismiss() } },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(
+                    text = strings.btnCancel,
+                    color = DiveColors.TextMuted,
+                    fontWeight = FontWeight.Bold,
                 )
             }
 
@@ -459,7 +590,11 @@ private fun ConditionRowCard(
             }
             if (!thresholdOk) {
                 Text(
-                    text = strings.errThresholdPositive,
+                    text = if (AlertLabels.isAmbiguousThousands(draft.thresholdText)) {
+                        strings.alertErrAmbiguousThreshold
+                    } else {
+                        strings.errThresholdPositive
+                    },
                     color = DiveColors.Red,
                     fontSize = 10.sp,
                     fontFamily = DiveFonts.body,

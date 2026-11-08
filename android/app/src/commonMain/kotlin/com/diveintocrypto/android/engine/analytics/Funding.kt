@@ -2,7 +2,7 @@ package com.diveintocrypto.android.engine.analytics
 
 import com.diveintocrypto.android.engine.schema.Funding
 
-/** Funding APR analytics — Kotlin port of `crypcodile/analytics/funding.py` (in-memory). */
+/** Funding APR analytics — Kotlin port of `crocodile/crypto/analytics/funding.py` (in-memory). */
 object FundingAnalytics {
     private const val DEFAULT_INTERVAL_HOURS = 8
 
@@ -24,7 +24,9 @@ object FundingAnalytics {
     /** Per-event APR + running cumulative funding, sorted by fundingTs ascending. */
     fun fundingApr(funding: List<Funding>): List<FundingRow> {
         if (funding.isEmpty()) return emptyList()
-        val sorted = funding.sortedBy { it.fundingTs }
+        // One row per settlement: WS reconnects re-emit settlements, so keep the last record
+        // for each fundingTs before cumulating (as the Python funding_apr does).
+        val sorted = funding.sortedBy { it.fundingTs }.associateBy { it.fundingTs }.values.toList()
         var running = 0.0
         return sorted.map { fr ->
             val ih = if (fr.intervalHours > 0) fr.intervalHours else DEFAULT_INTERVAL_HOURS
@@ -59,34 +61,42 @@ object FundingAnalytics {
      * @param predictedRatePct venue's PREDICTED funding for the NEXT settlement
      *        (premiumIndex.lastFundingRate), percent per 8h interval
      * @param lastSettledRatePct the actually SETTLED last funding (fundingRate history tail),
-     *        percent per 8h interval
+     *        percent per 8h interval; null when only the settled history is unavailable
+     *        (the predicted side and APR stay valid)
      * @param aprPct simple annualisation of the predicted rate, PERCENT per year
-     * @param secondsToFunding ms→s to [nextFundingMs]; null when the venue gave no time
+     *        (uses the symbol's own funding interval)
+     * @param secondsToFunding seconds until [nextFundingMs]; null when the venue gave no time
+     *        or the settlement is already in the past (a cached premium snapshot can be stale)
      */
     data class FundingLens(
         val predictedRatePct: Double,
-        val lastSettledRatePct: Double,
+        val lastSettledRatePct: Double?,
         val aprPct: Double,
         val secondsToFunding: Long?,
     )
 
     /**
-     * PURE funding lens. Rates are wire fractions (0.0001 = 0.01%); anything
-     * non-finite is rejected (null) — honest unavailability.
+     * PURE funding lens. Rates are wire fractions (0.0001 = 0.01%). A non-finite
+     * predicted rate rejects the whole lens (null) — honest unavailability. A missing or
+     * non-finite [lastSettledRate] (null) only blanks the settled field, so the predicted
+     * side and APR are still shown. [intervalHours] is the symbol's settlement cadence
+     * (8h unless the venue reports otherwise).
      */
     fun fundingLens(
         predictedRate: Double,
-        lastSettledRate: Double,
+        lastSettledRate: Double?,
         nextFundingMs: Long,
         nowMs: Long,
+        intervalHours: Int = DEFAULT_INTERVAL_HOURS,
     ): FundingLens? {
-        if (!predictedRate.isFinite() || !lastSettledRate.isFinite()) return null
+        if (!predictedRate.isFinite()) return null
         val predictedPct = predictedRate * 100.0
+        val untilFundingMs = nextFundingMs - nowMs
         return FundingLens(
             predictedRatePct = predictedPct,
-            lastSettledRatePct = lastSettledRate * 100.0,
-            aprPct = aprFromRate(predictedRate, DEFAULT_INTERVAL_HOURS) * 100.0,
-            secondsToFunding = if (nextFundingMs > 0) (nextFundingMs - nowMs) / 1000 else null,
+            lastSettledRatePct = lastSettledRate?.takeIf { it.isFinite() }?.let { it * 100.0 },
+            aprPct = aprFromRate(predictedRate, intervalHours) * 100.0,
+            secondsToFunding = if (nextFundingMs > 0 && untilFundingMs > 0) untilFundingMs / 1000 else null,
         )
     }
 }

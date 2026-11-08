@@ -23,6 +23,8 @@ def _hurst(logp: np.ndarray) -> float:
     for lag in lags:
         diff = logp[lag:] - logp[:-lag]
         sd = np.std(diff)
+        if not np.isfinite(sd):
+            return float("nan")  # never let NaN masquerade as a flat (H=0) series
         tau.append(sd if sd > 0 else 1e-10)
     slope = np.polyfit(np.log(lags), np.log(tau), 1)[0]
     return float(slope)
@@ -44,7 +46,12 @@ class HurstRegimeIndicator(BaseIndicator):
             return self._make_result(Signal.NEUTRAL, "Hurst insufficient data")
 
         w = close[-period:]
+        # NaN comparisons are False, so the <=0 guard above does not catch NaN bars.
+        if not np.isfinite(w).all():
+            return self._make_result(Signal.NEUTRAL, "Hurst insufficient data")
         h = _hurst(np.log(w))
+        if not np.isfinite(h):
+            return self._make_result(Signal.NEUTRAL, "Hurst insufficient data")
         move = (w[-1] - w[0]) / w[0] if w[0] else 0.0
         raw = {"hurst": round(h, 4), "move": round(float(move), 5)}
 

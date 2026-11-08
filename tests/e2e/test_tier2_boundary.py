@@ -1,19 +1,17 @@
 import pytest
 import math
-import httpx
-import re
 import asyncio
 import websockets
-from pathlib import Path
+from types import SimpleNamespace
 
-# Feature imports
+# Feature imports (production code only; Kotlin rules are read from source)
 from diveintocrypto_desktop.scan import divergence as dv
+from diveintocrypto_desktop.scan import structure as st
+from diveintocrypto_desktop.engine.consensus import regime as rg
 from diveintocrypto_desktop.engine.consensus.engine import ConsensusEngine
 from diveintocrypto_desktop.engine.indicators.base import IndicatorResult, Signal
-from tests.e2e.test_tier1_coverage import python_swap_keywords, calc_sample_variance
+from tests.e2e.helpers import frame_for, gradle_code
 
-# Resolved from this file so the check runs from any checkout.
-_GRADLE_KTS = Path(__file__).resolve().parents[2] / "android" / "app" / "build.gradle.kts"
 
 # ---------------------------------------------------------
 # Feature 1: Zero-Lag EMA (ZLEMA) tests
@@ -22,7 +20,7 @@ _GRADLE_KTS = Path(__file__).resolve().parents[2] / "android" / "app" / "build.g
 def test_zlema_input_less_than_lag():
     """Verify ZLEMA behavior when input series is shorter than the lag window."""
     data = [10.0, 11.0, 12.0]
-    # If window is 9, lag is (9-1)//2 = 4. 
+    # If window is 9, lag is (9-1)//2 = 4.
     # The max(0, i - lag) ensures max(0, 0 - 4) = 0 is accessed, preventing index out of bounds.
     out = dv._zlema(data, 9)
     assert len(out) == 3
@@ -58,39 +56,34 @@ def test_zlema_empty_input():
 
 # ---------------------------------------------------------
 # Feature 2: Bessel's Correction (N-1 Variance) tests
+# Production sample standard deviation: structure._std (divides by n - 1).
 # ---------------------------------------------------------
 
 def test_bessel_n_1_zero_division():
-    """Verify that Bessel corrected variance with N=1 handles division by zero and returns 0.0."""
-    data = [10.0]
-    var = calc_sample_variance(data)
-    assert var == 0.0
+    """A single reading has no sample variance: _std returns None, never NaN or a crash."""
+    assert st._std([10.0]) is None
 
 def test_bessel_empty_input():
-    """Verify Bessel corrected variance with empty input returns 0.0."""
-    var = calc_sample_variance([])
-    assert var == 0.0
+    """Sample standard deviation of an empty series is undefined (None)."""
+    assert st._std([]) is None
 
 def test_bessel_inf_nan_inputs():
-    """Verify variance calculation with NaN or Inf elements."""
+    """Verify variance calculation with NaN elements removed first."""
     data = [10.0, float('nan'), 20.0]
-    # Clean it up first to see if calculation works or handles nan
     clean_data = [x for x in data if not math.isnan(x)]
-    var = calc_sample_variance(clean_data)
-    assert var == 50.0
+    sd = st._std(clean_data)
+    assert sd * sd == pytest.approx(50.0)
 
 def test_bessel_extremely_small_variance():
     """Verify variance holds precision for extremely small differences."""
     data = [1.0000001, 1.0000002]
-    var = calc_sample_variance(data)
+    var = st._std(data) ** 2
     assert math.isclose(var, 5e-15, rel_tol=1e-5)
 
 def test_bessel_large_n_performance():
-    """Verify Bessel's standard deviation runs fast on larger datasets."""
+    """Verify Bessel's standard deviation runs on larger datasets and is positive."""
     data = [float(x) for x in range(1000)]
-    var = calc_sample_variance(data)
-    # Check that it computes successfully and value matches standard variance
-    assert var > 0.0
+    assert st._std(data) > 0.0
 
 # ---------------------------------------------------------
 # Feature 3: O(N+M) Two-Pointer Data Alignment tests
@@ -123,8 +116,7 @@ def test_alignment_out_of_order():
     p_vals = [20.0, 10.0, 30.0]
     w_times = [1000, 3000, 2000]
     w_vals = [1.1, 1.3, 1.2]
-    # Sorting timestamps before alignment is expected or the aligner handles it via dict mapping
-    # Since dv.align uses a dictionary mapping for ls_by_bucket internally, it naturally handles out-of-order ls_times!
+    # Since dv.align uses a dictionary mapping for ls_by_bucket internally, it naturally handles out-of-order ls_times.
     price, whale, matched = dv.align(p_times, p_vals, w_times, w_vals, 1000)
     assert matched == 3
     # Price remains in the order of price_times (2000, 1000, 3000)
@@ -140,7 +132,7 @@ def test_alignment_one_element():
     assert whale == [1.5]
 
 def test_alignment_huge_dataset():
-    """Verify alignment scales linearly and handles 100,000 items without timing out."""
+    """Verify alignment scales linearly and handles 10,000 items without timing out."""
     length = 10000  # Smaller scale for unit testing, but checks performance
     p_times = [i * 1000 for i in range(length)]
     p_vals = [float(i) for i in range(length)]
@@ -149,37 +141,6 @@ def test_alignment_huge_dataset():
     price, whale, matched = dv.align(p_times, p_vals, w_times, w_vals, 1000)
     assert matched == length
     assert len(price) == length
-
-# ---------------------------------------------------------
-# Feature 4: Regex swapKeywords GC Optimization tests
-# ---------------------------------------------------------
-
-def test_translation_no_keywords():
-    """Verify translation of string with no keywords yields identical output."""
-    text = "The quick brown fox jumps over the lazy dog."
-    assert python_swap_keywords(text) == text
-
-def test_translation_only_keywords():
-    """Verify translation of string containing only keywords."""
-    text = "long short bearish bullish"
-    assert python_swap_keywords(text) == "short long bullish bearish"
-
-def test_translation_extremely_large_input():
-    """Verify performance and memory stability on extremely large inputs (100KB)."""
-    text = "long bearish short bullish " * 4000
-    out = python_swap_keywords(text)
-    assert len(out) == len(text)
-    assert "short bullish long bearish" in out
-
-def test_translation_malformed_input():
-    """Verify regex doesn't break if input contains special regex control characters."""
-    text = "long? short.* bullish+ bearish?"
-    assert python_swap_keywords(text) == "short? long.* bearish+ bullish?"
-
-def test_translation_unicode_accents():
-    """Verify that unicode characters and accents are preserved."""
-    text = "long positions during a market çrash"
-    assert python_swap_keywords(text) == "short positions during a market çrash"
 
 # ---------------------------------------------------------
 # Feature 5: WebSocket & Cache tests
@@ -209,14 +170,16 @@ async def test_websocket_corrupt_payload(server_url):
 
 @pytest.mark.asyncio
 async def test_websocket_rapid_requests(server_url):
-    """Verify WebSocket handles rapid succession of symbol updates."""
+    """Verify WebSocket handles rapid succession of symbol updates: the last symbol sent wins."""
     ws_url = server_url.replace("http://", "ws://") + "/api/live"
     async with websockets.connect(ws_url) as ws:
         # Spam requests
         for symbol in ["BTCUSDT", "ETHUSDT", "SOLUSDT"]:
             await ws.send(symbol)
-        reply = await ws.recv()
-        assert reply is not None
+        # The server takes one queued symbol per tick, so the frame for the last one
+        # arrives after the earlier ones; read until it shows up.
+        data = await frame_for(ws, "SOLUSDT", attempts=6)
+        assert data["s"] == "SOLUSDT"
 
 @pytest.mark.asyncio
 async def test_websocket_high_concurrency(server_url):
@@ -237,70 +200,46 @@ async def test_websocket_close_frame(server_url):
     # No crash or error in logs
 
 # ---------------------------------------------------------
-# Feature 6: Secure Keystore Env Fallback tests
+# Feature 6: Secure Keystore Env Fallback tests (comments stripped before matching)
 # ---------------------------------------------------------
 
 def test_gradle_keystore_missing_env_missing():
-    """Verify Gradle file contains logic to handle both keystore.properties and Env var missing."""
-    path = _GRADLE_KTS
-    content = path.read_text()
-    # It checks if file exists, and uses Environment variables if not or as fallback
-    assert "System.getenv" in content
+    """Verify Gradle file reads signing environment variables as a fallback."""
+    assert "System.getenv(" in gradle_code()
 
 def test_gradle_keystore_env_partially_missing():
     """Verify logic for handling partially configured signing credentials."""
-    path = _GRADLE_KTS
-    content = path.read_text()
-    assert "STORE_PASSWORD" in content or "KEY_PASSWORD" in content
+    code = gradle_code()
+    assert '"STORE_PASSWORD"' in code
+    assert '"KEY_PASSWORD"' in code
 
 def test_gradle_syntax_check():
     """Verify build.gradle.kts contains valid Kotlin gradle configuration syntax."""
-    path = _GRADLE_KTS
-    content = path.read_text()
-    assert "plugins {" in content
-    assert "android {" in content
+    code = gradle_code()
+    assert "plugins {" in code
+    assert "android {" in code
 
 def test_gradle_malformed_env_values():
-    """Verify that environment variables are read as String variables."""
-    path = _GRADLE_KTS
-    content = path.read_text()
-    assert "getProperty" in content or "System.getenv" in content
+    """Verify that the keystore properties are read as String values."""
+    code = gradle_code()
+    assert "keystoreProps.getProperty(" in code
+    assert '"storePassword"' in code
 
 def test_gradle_non_existent_paths():
     """Verify keystore files are resolved using rootProject file locator."""
-    path = _GRADLE_KTS
-    content = path.read_text()
-    assert "rootProject.file" in content
+    assert "rootProject.file(" in gradle_code()
 
 # ---------------------------------------------------------
-# Feature 7: Client-Server Parity (Z-Score/ADX) tests
+# Feature 7: Client-Server Parity (ADX regime / consensus) tests
 # ---------------------------------------------------------
-
-def test_parity_zscore_zero_std():
-    """Verify Z-score calculation scales standard deviation bounds if standard deviation is zero."""
-    val = 10.0
-    mean = 10.0
-    std = 0.0
-    # Regularization floor as defined in ConsensusEngine.kt line 304/346: coerceAtLeast(0.02)
-    std_regularized = max(std, 0.02)
-    z = (val - mean) / std_regularized
-    assert z == 0.0
 
 def test_parity_adx_exact_thresholds():
-    """Verify ADX boundary edge states classification logic."""
-    adx_thresholds = [20.0, 25.0]
-    # exactly 20.0 is neutral/boundary
-    assert 20.0 >= adx_thresholds[0]
-    assert 25.0 >= adx_thresholds[1]
+    """ADX exactly at 25 is a strong trend and exactly at 20 is weak, in production."""
+    def adx(value: float) -> list:
+        return [SimpleNamespace(name="adx_di", raw_values={"adx": value})]
 
-def test_parity_extremely_high_zscore():
-    """Verify Z-score values do not cause overflow or infinity in mathematical limits."""
-    val = 1000000.0
-    mean = 1.0
-    std = 0.002
-    z = (val - mean) / std
-    assert math.isfinite(z)
-    assert z > 10000.0
+    assert rg.detect_regime(adx(25.0))["regime"] == "TREND"
+    assert rg.detect_regime(adx(20.0))["regime"] == "RANGE"
 
 def test_parity_empty_consensus_results():
     """Verify consensus engine evaluation handles empty results list by raising/handling neutral."""

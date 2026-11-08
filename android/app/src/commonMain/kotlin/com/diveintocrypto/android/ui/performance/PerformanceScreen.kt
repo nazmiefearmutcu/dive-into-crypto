@@ -101,7 +101,7 @@ fun PerformanceScreen(container: AppContainer) {
             if (state.totalSymbols > 0) {
                 DiveCard(title = strings.cardScannedUniverse) {
                     Text(
-                        text = "${state.totalSymbols} USDT-M futures symbols · stablecoins removed",
+                        text = strings.perfUniverseLine(state.totalSymbols),
                         color = DiveColors.TextMuted,
                         fontSize = 12.sp,
                     )
@@ -111,7 +111,7 @@ fun PerformanceScreen(container: AppContainer) {
             if (state.isLoading) {
                 LoadingCard()
             }
-            state.error?.let { ErrorCard(it) }
+            state.error?.let { ErrorCard(failure = it, onRetry = { vm.refresh() }) }
 
             LeaderboardCard(title = strings.cardGainers, rows = state.gainers, valueColor = DiveColors.Green)
             LeaderboardCard(title = strings.cardLosers, rows = state.losers, valueColor = DiveColors.Red)
@@ -179,7 +179,7 @@ private fun LeaderRow(rank: Int, ticker: Ticker24h, valueColor: Color, showVolum
                 fontFamily = DiveFonts.body,
             )
             Text(
-                "${'$'}${ticker.lastPrice.format(4, grouped = true)}",
+                "${'$'}${formatQuotePrice(ticker.lastPrice)}",
                 color = DiveColors.TextDim,
                 fontSize = 11.sp,
                 fontFamily = DiveFonts.body,
@@ -219,21 +219,43 @@ private fun LeaderRow(rank: Int, ticker: Ticker24h, valueColor: Color, showVolum
 @Composable
 private fun LoadingCard() {
     DiveCard(title = com.diveintocrypto.android.ui.i18n.LocalDiveStrings.current.cardLoading) {
-        Text("Fetching /fapi/v1/ticker/24hr...", color = DiveColors.TextMuted, fontSize = 12.sp)
+        Text(
+            com.diveintocrypto.android.ui.i18n.LocalDiveStrings.current.i18nPerfFetchingTicker,
+            color = DiveColors.TextMuted, fontSize = 12.sp,
+        )
     }
 }
 
+/**
+ * Localized data-source error with a manual retry. A regional block gets no retry
+ * button: retrying cannot succeed there, so the message explains it instead.
+ */
 @Composable
-private fun ErrorCard(msg: String) {
-    Box(
+private fun ErrorCard(failure: MarketDataFailure, onRetry: () -> Unit) {
+    val strings = com.diveintocrypto.android.ui.i18n.LocalDiveStrings.current
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(DiveDims.Radius))
             .background(DiveColors.RedTint15)
             .border(1.dp, DiveColors.RedTint25, RoundedCornerShape(DiveDims.Radius))
             .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text("Error: $msg", color = DiveColors.Red, fontSize = 13.sp)
+        Text(failure.text(strings), color = DiveColors.Red, fontSize = 13.sp)
+        if (failure !is MarketDataFailure.RegionBlocked) {
+            Text(
+                text = strings.btnRetry,
+                color = DiveColors.Accent,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = DiveFonts.body,
+                modifier = Modifier
+                    .semantics { role = Role.Button }
+                    .clickable(onClick = onRetry)
+                    .padding(vertical = 4.dp),
+            )
+        }
     }
 }
 
@@ -253,7 +275,11 @@ private fun formatVolume(v: Double): String = when {
 // window chips switching the displayed bucket set from [EvidenceState.windows].
 // ═══════════════════════════════════════════════════════════════════════
 
-/** Fixed verdict-bucket display order: LONG (BUY) · SHORT (SELL) · NEUTRAL. */
+/**
+ * Fixed verdict-bucket display order: LONG (BUY) · SHORT (SELL) · NEUTRAL.
+ * The ViewModel folds STRONG_BUY / STRONG_SELL into BUY / SELL before grading,
+ * so every graded sample lands in one of these three cards.
+ */
 private val VERDICT_BUCKETS: List<Pair<String, String>> = listOf(
     "BUY" to "LONG",
     "SELL" to "SHORT",
@@ -312,8 +338,8 @@ fun EvidenceCard(
                 if (evidence.stale) {
                     HonestChip(text = strings.chipPartial, color = DiveColors.Warn)
                 }
-                if (evidence.error != null) {
-                    HonestChip(text = "${strings.errorPrefix} ${evidence.error}", color = DiveColors.Red)
+                evidence.error?.let { failure ->
+                    HonestChip(text = "${strings.errorPrefix} ${failure.text(strings)}", color = DiveColors.Red)
                 }
             }
 
@@ -609,7 +635,9 @@ private fun VerdictBucketCard(label: String, stats: EvidenceBucketStats?, modifi
         } else {
             // v2 Wilson rendering: "57% [45–89] · n=214"; n<5 → "—"; gated → dim + note.
             val dimmed = stats.gated && stats.samples < 5
-            val note = UiLabels.smallSampleNote(stats.samples, stats.gated)
+            val note = UiLabels.smallSampleNote(
+                stats.samples, stats.gated, com.diveintocrypto.android.ui.i18n.LocalDiveStrings.current,
+            )
             Text(
                 text = UiLabels.hitRateLabel(stats.samples, stats.hitRate, stats.hitRateLo, stats.hitRateHi),
                 color = if (dimmed) DiveColors.TextMuted else DiveColors.Text,
@@ -698,7 +726,9 @@ private fun ConfidenceRow(band: String, stats: EvidenceBucketStats) {
                 fontFamily = DiveFonts.body,
             )
         }
-        UiLabels.smallSampleNote(stats.samples, stats.gated)?.let { note ->
+        UiLabels.smallSampleNote(
+            stats.samples, stats.gated, com.diveintocrypto.android.ui.i18n.LocalDiveStrings.current,
+        )?.let { note ->
             Text(
                 text = note,
                 color = DiveColors.TextDim,

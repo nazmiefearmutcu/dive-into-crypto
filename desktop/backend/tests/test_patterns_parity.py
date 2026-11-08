@@ -72,5 +72,6 @@ def test_pattern_raw_values_within_tolerance(name):
     raw = _results()[name].raw_values or {}
     for k, v in exp["raw"].items():
         assert k in raw, f"{name}: missing raw value {k}"
-        tol = max(0.1, abs(v) * 0.005)
+        # Relative 0.5% with a small absolute floor (a 0.1 floor swamped small ratios).
+        tol = max(1e-3, abs(v) * 0.005)
         assert abs(float(raw[k]) - float(v)) <= tol, f"{name}.{k}: {raw[k]} != {v} (tol {tol})"

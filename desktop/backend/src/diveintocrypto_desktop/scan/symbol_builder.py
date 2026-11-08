@@ -80,7 +80,9 @@ def _atr_pct(results: list) -> float | None:
 
 
 def _action(signal: str) -> str:
-    return "AL" if "BUY" in signal else "SAT" if "SELL" in signal else "BEKLE"
+    """Direction-only token for the row's ``action`` field: LONG / SHORT / NONE.
+    Describes the lean of the consensus; it is never an instruction to trade."""
+    return "LONG" if "BUY" in signal else "SHORT" if "SELL" in signal else "NONE"
 
 
 def _num(raw: dict | None, key: str) -> float | None:
@@ -141,11 +143,16 @@ def assemble(
     indicators = []
     if primary_results:
         for r in primary_results:
+            weight = float(weights.get(r.name, 1.0))
             indicators.append(
                 {
                     "name": r.name,
                     "signal": r.signal.value,
-                    "weight": float(weights.get(r.name, 1.0)),
+                    "weight": weight,
+                    # ``score`` is the signal's raw vote (-2..+2); ``weighted_score`` is
+                    # score × configured weight — the contribution the consensus sums.
+                    "score": int(r.score),
+                    "weighted_score": round(int(r.score) * weight, 4),
                     "value": _num(r.raw_values, _PRIMARY_VALUE.get(r.name, "")),
                 }
             )
@@ -296,18 +303,24 @@ async def build_symbol(
     spot lead/lag) are skipped entirely. ``price`` is the honest last close of
     the truncated window (labeled via ``price_note``); ``ch`` is omitted — a
     24h change measured NOW says nothing about the past window; ``cvd`` ships
-    as the explicit ``{"unavailable": "historical_view"}`` marker.
+    as the explicit ``{"unavailable": "historical_view"}`` marker. The OI, L/S
+    ratio, funding and divergence feeds have no endTime upstream, so they are not
+    fetched for historical views either: ``futures`` ships as an explicit
+    ``{"unavailable": "historical_view"}`` marker instead.
+
+    A live build whose ticker failed omits ``ch`` (never a fabricated 0.0).
     """
     historical = end_ms is not None
     if historical:
         meta: dict = {}
         cvd_snap = {"unavailable": "historical_view"}
-        candles_by_tf, oi, ratio_series, funding_rows = await asyncio.gather(
-            kl.fetch_all_tf(symbol, limit=300, end_ms=end_ms),
-            oi_mod.fetch_oi_hist(symbol, "5m", limit=48),
-            rat.fetch_ratio_series(symbol, "5m", limit=48),
-            fnd.funding_hist(symbol, limit=48),
-        )
+        # Only klines honour endTime. The OI / L/S ratio / funding feeds (and the
+        # divergence L/S window built on them) have no endTime upstream, so they
+        # are NOT fetched here: fetching them would pull post-end_ms data into an
+        # as-of view. They are reported as unavailable instead (see obj["futures"]).
+        candles_by_tf = await kl.fetch_all_tf(symbol, limit=300, end_ms=end_ms)
+        oi, ratio_series, funding_rows = [], {}, []
+        div_inputs: dict = {}
     else:
         candles_by_tf, oi, ratio_series, funding_rows, meta, cvd_snap = await asyncio.gather(
             kl.fetch_all_tf(symbol, limit=300, end_ms=end_ms),
@@ -317,7 +330,7 @@ async def build_symbol(
             _ticker_24hr(symbol),
             cvd_mod.snapshot(symbol),
         )
-    div_inputs = await _divergence_inputs(symbol, candles_by_tf)
+        div_inputs = await _divergence_inputs(symbol, candles_by_tf)
 
     fivem = candles_by_tf.get("5m") or []
     series_data = {
@@ -332,9 +345,12 @@ async def build_symbol(
 
     # HISTORICAL price = last close of the truncated window (never the live
     # ticker — meta is empty above); ``ch`` stays None → omitted downstream.
-    last_close = fivem[-1]["c"] if fivem else 0.0
+    # No closed 5m candle and no ticker → price stays None (JSON null), never 0.0.
+    last_close = fivem[-1]["c"] if fivem else None
     price = price if price is not None else (last_close if historical else meta.get("price", last_close))
-    ch = ch if ch is not None else (None if historical else meta.get("ch", 0.0))
+    # 24h change: only a real ticker value. A failed ticker stays None (omitted
+    # below) — never a 0.0 that reads as a real 0% move.
+    ch = ch if ch is not None else (None if historical else meta.get("ch"))
     name = name or symbol.replace("USDT", "")
 
     # ── panel-only extras (each fails independently, never blocks the build) ──
@@ -346,9 +362,12 @@ async def build_symbol(
         assemble, symbol, name, ch, price, candles_by_tf, series_data, div_inputs, primary_tf, cvd_snap, panel
     )
     if historical:
+        obj["futures"] = {"unavailable": "historical_view"}  # OI, L/S, funding, divergence
         obj.pop("ch", None)  # a live 24h change is meaningless for a past window
         if last_close:
             obj["price_note"] = "last close of the kline window ending at end_ms (historical view)"
+    if ch is None:
+        obj.pop("ch", None)  # unavailable 24h change is omitted, not zero
     return obj
 
 
@@ -377,7 +396,7 @@ async def _panel_extras(
     """
     panel: dict = {}
 
-    if end_ms:
+    if end_ms is not None:  # end_ms=0 is still a historical view
         return panel  # historical view: no live book / countdown / term structure
 
     # funding lens — the settled tail was already fetched above

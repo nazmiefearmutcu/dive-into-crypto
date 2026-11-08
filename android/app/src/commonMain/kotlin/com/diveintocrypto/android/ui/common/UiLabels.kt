@@ -1,6 +1,7 @@
 package com.diveintocrypto.android.ui.common
 
 import com.diveintocrypto.android.platform.format
+import com.diveintocrypto.android.ui.i18n.DiveStrings
 
 /**
  * PURE UI label helpers shared across the campaign screens (no Compose, no
@@ -8,6 +9,9 @@ import com.diveintocrypto.android.platform.format
  * they map the returned color TOKENS ("GREEN"/"RED"/"WARN"/"MUTED") onto
  * [com.diveintocrypto.android.ui.theme.DiveColors] at the call site so every
  * rule stays preset-aware.
+ *
+ * Every visible word comes from the [DiveStrings] catalog passed in (TR/EN);
+ * numeric output is language-neutral.
  */
 object UiLabels {
 
@@ -19,17 +23,29 @@ object UiLabels {
 
     // ── P&L formatting (Portföy rows) ─────────────────────────────────────
 
+    /**
+     * True when [x] rounds to zero at [decimals] places (HALF_UP, same rule as
+     * [format]). Sign and colour are decided AFTER this, so a value that prints as
+     * "0.00" never carries a "+" or "-" and never gets a RED/GREEN token.
+     */
+    private fun roundsToZero(x: Double, decimals: Int): Boolean {
+        var factor = 1.0
+        repeat(decimals) { factor *= 10.0 }
+        return kotlin.math.abs(x) * factor < 0.5
+    }
+
     /** Signed percent with 2 decimals; "—" when unknown (never a fake 0%). */
     fun pnlPercentLabel(pct: Double?): String = when {
         pct == null || !pct.isFinite() -> "—"
+        roundsToZero(pct, 2) -> "0.00%"
         else -> pct.format(2, plus = true) + "%"
     }
 
     /** Signed quote-currency P&L; "—" when unknown. Uses "," thousands grouping. */
     fun pnlNominalLabel(pnl: Double?): String = when {
         pnl == null || !pnl.isFinite() -> "—"
-        // Exact zero renders bare — a "+$0.00" would be noise, not a sign.
-        pnl == 0.0 -> "$0.00"
+        // Rounds to zero at cents (incl. -0.004): a bare "$0.00", never "+$0.00" / "-$0.00".
+        roundsToZero(pnl, 2) -> "$0.00"
         else -> {
             // Sign BEFORE the currency symbol: "+$1,234.56" / "-$9.99".
             val sign = if (pnl > 0) "+" else "-"
@@ -37,20 +53,41 @@ object UiLabels {
         }
     }
 
-    /** Token for a signed percent: >0 GREEN, <0 RED, else (incl. null) MUTED. */
+    /**
+     * Token for a signed value: MUTED when it rounds to zero at 2 decimals (matches the
+     * label, so "0.00%" is never coloured), GREEN when positive, RED when negative.
+     */
     fun pnlColorToken(pct: Double?): String = when {
-        pct == null || !pct.isFinite() || pct == 0.0 -> TOK_MUTED
+        pct == null || !pct.isFinite() || roundsToZero(pct, 2) -> TOK_MUTED
         pct > 0 -> TOK_GREEN
         else -> TOK_RED
     }
 
+    /**
+     * Price text for scanner/live-price cells, numeric part only (caller adds "$").
+     * Decimals follow magnitude so sub-cent contracts stay readable:
+     *   ≥ 1 → 2 decimals (grouped) · ≥ 0.01 → 4 · ≥ 0.0001 → 6 · smaller → 8.
+     * Anything that still rounds to zero at 8 decimals shows "<0.00000001".
+     */
+    fun priceLabel(price: Double?): String {
+        if (price == null || !price.isFinite()) return "—"
+        val mag = kotlin.math.abs(price)
+        return when {
+            mag >= 1.0 -> price.format(2, grouped = true)
+            mag >= 0.01 -> price.format(4, grouped = true)
+            mag >= 0.0001 -> price.format(6)
+            roundsToZero(price, 8) && mag != 0.0 -> "<0.00000001"
+            else -> price.format(8)
+        }
+    }
+
     // ── Engine-agreement tag (Portföy rows) ───────────────────────────────
 
-    /** "AGREE"→"UYUMLU" · "AGAINST"→"KARŞIT" · anything else/null → "BELİRSİZ". */
-    fun agreementTagLabel(tag: String?): String = when (tag) {
-        "AGREE" -> "UYUMLU"
-        "AGAINST" -> "KARŞIT"
-        else -> "BELİRSİZ"
+    /** "AGREE" → agreeTag · "AGAINST" → againstTag · anything else/null → unclearTag. */
+    fun agreementTagLabel(tag: String?, s: DiveStrings): String = when (tag) {
+        "AGREE" -> s.agreeTag
+        "AGAINST" -> s.againstTag
+        else -> s.unclearTag
     }
 
     /** Token for the agreement tag: AGREE GREEN · AGAINST RED · else MUTED. */
@@ -65,6 +102,7 @@ object UiLabels {
     /**
      * Tabular-numeric countdown: "H:MM:SS" ≥1h, "MM:SS" below.
      * null / negative → "—" (honest: no data, or the moment already passed).
+     * Purely numeric: it carries no words, so it needs no catalog.
      */
     fun countdownLabel(seconds: Long?): String {
         if (seconds == null || seconds < 0) return "—"
@@ -77,11 +115,11 @@ object UiLabels {
 
     // ── Evidence windows (7G / 30G / TÜMÜ) ────────────────────────────────
 
-    /** "7d"→"7G" · "30d"→"30G" · "all"→"TÜMÜ"; unknown passes through uppercased. */
-    fun windowLabel(window: String): String = when (window) {
-        "7d" -> "7G"
-        "30d" -> "30G"
-        "all" -> "TÜMÜ"
+    /** "7d" → window7d · "30d" → window30d · "all" → windowAll; unknown passes through uppercased. */
+    fun windowLabel(window: String, s: DiveStrings): String = when (window) {
+        "7d" -> s.window7d
+        "30d" -> s.window30d
+        "all" -> s.windowAll
         else -> window.uppercase()
     }
 
@@ -102,10 +140,10 @@ object UiLabels {
 
     /**
      * Small-sample honesty note: gated buckets (n in 5..19) render the dim
-     * "yetersiz örnek (n<20)" tag; n < 5 the label is already "—" so no note.
+     * small-sample tag (i18nSmallSampleNote); n < 5 the label is already "—" so no note.
      */
-    fun smallSampleNote(samples: Int, gated: Boolean): String? =
-        if (gated && samples in 5..19) "yetersiz örnek (n<20)" else null
+    fun smallSampleNote(samples: Int, gated: Boolean, s: DiveStrings): String? =
+        if (gated && samples in 5..19) s.i18nSmallSampleNote else null
 
     // ── Calibration badges ────────────────────────────────────────────────
 
@@ -140,14 +178,13 @@ object UiLabels {
 
     // ── Funding / cone captions ───────────────────────────────────────────
 
-    /** Funding regime from the PREDICTED rate (percent per 8h): NÖTR ±0.01 band. */
-    fun fundingRegimeLabel(predictedRatePct: Double): String = when {
-        predictedRatePct > 0.01 -> "POZİTİF"
-        predictedRatePct < -0.01 -> "NEGATİF"
-        else -> "NÖTR"
+    /** Funding regime from the PREDICTED rate (percent per 8h): NEUTRAL ±0.01 band. */
+    fun fundingRegimeLabel(predictedRatePct: Double, s: DiveStrings): String = when {
+        predictedRatePct > 0.01 -> s.i18nFundingPositive
+        predictedRatePct < -0.01 -> s.i18nFundingNegative
+        else -> s.i18nFundingNeutral
     }
 
     /** Honest vol-cone caption — a projection from history, never a prediction. */
-    const val CONE_CAPTION: String =
-        "√t ölçekli vol projeksiyonu · geçmiş σ'dan — yön/fiyat tahmini değil"
+    fun coneCaption(s: DiveStrings): String = s.i18nConeCaption
 }

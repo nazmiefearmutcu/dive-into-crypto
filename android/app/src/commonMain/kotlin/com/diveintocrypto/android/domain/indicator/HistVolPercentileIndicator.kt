@@ -79,6 +79,14 @@ class HistVolPercentileIndicator(config: IndicatorConfig) : BaseIndicator(config
         val base = closes[n - 1 - period]
         val move = if (base != 0.0) (closes[n - 1] - base) / base else 0.0
 
+        // The current vol must come from the latest bar's window: a NaN in the last
+        // `period` log-returns makes it NaN (pandas semantics), and ranking on the
+        // last valid (older) window would be stale.
+        val currentVolValid = logret.takeLast(period).none { it.isNaN() }
+        if (!currentVolValid || !move.isFinite()) {
+            return result(Signal.NEUTRAL, "HV%ile data invalid")
+        }
+
         val raw = mapOf<String, Double?>(
             "hv_percentile" to roundTo(pctile, 4),
             "move" to roundTo(move, 5),

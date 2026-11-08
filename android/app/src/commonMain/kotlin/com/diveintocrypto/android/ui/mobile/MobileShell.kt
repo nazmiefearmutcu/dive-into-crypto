@@ -17,6 +17,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
@@ -85,14 +86,19 @@ private val TWO_PANE_ROUTES: Set<NavRoute> = setOf(
     NavRoute.PANEL, NavRoute.SCANNER, NavRoute.POSITIONS, NavRoute.SIGNALS,
 )
 
+/**
+ * [openRoute] is a route slug the host was launched with (an alert notification opens
+ * [NavRoute.ALERTS]). It is applied once, by [PhoneNavHost], then forgotten.
+ */
 @Composable
-fun MobileShell(container: AppContainer) {
+fun MobileShell(container: AppContainer, openRoute: String? = null) {
     val strings = com.diveintocrypto.android.ui.i18n.LocalDiveStrings.current
     val nav: NavHostController = rememberNavController()
     val backStackEntry by nav.currentBackStackEntryAsState()
     val currentSlug = backStackEntry?.destination?.route
     val currentRoute = NavRoute.values().firstOrNull { it.slug == currentSlug }
         ?: NavRoute.Default
+    var pendingRoute by remember { mutableStateOf(openRoute) }
 
     Scaffold(
         topBar = {
@@ -126,12 +132,19 @@ fun MobileShell(container: AppContainer) {
             val twoPane = maxWidth >= TWO_PANE_MIN_WIDTH &&
                 // Two-pane hosts the 4 primary destinations; More-sheet routes
                 // (Alarmlar, Portföy, Leaders, …) render full-screen so they
-                // stay reachable on wide screens too.
+                // stay reachable on wide screens too. A pending deep link needs the
+                // nav host, so it forces the single-pane layout until it is applied.
+                pendingRoute == null &&
                 currentRoute in TWO_PANE_ROUTES
             if (twoPane) {
                 TabletTwoPane(container = container)
             } else {
-                PhoneNavHost(container = container, nav = nav)
+                PhoneNavHost(
+                    container = container,
+                    nav = nav,
+                    pendingRoute = pendingRoute,
+                    onPendingRouteApplied = { pendingRoute = null },
+                )
             }
 
             // In-app alert banner — overlays the top of WHICHEVER layout is showing
@@ -148,7 +161,12 @@ fun MobileShell(container: AppContainer) {
 
 /** Phone layout: the classic single-pane navigation host. */
 @Composable
-private fun PhoneNavHost(container: AppContainer, nav: NavHostController) {
+private fun PhoneNavHost(
+    container: AppContainer,
+    nav: NavHostController,
+    pendingRoute: String?,
+    onPendingRouteApplied: () -> Unit,
+) {
     NavHost(
         navController = nav,
         startDestination = NavRoute.Default.slug,
@@ -187,6 +205,18 @@ private fun PhoneNavHost(container: AppContainer, nav: NavHostController) {
         composable(NavRoute.LOGS.slug) { LogsScreen(container) }
         composable(NavRoute.APPEARANCE.slug) { AppearanceScreen() }
         composable(NavRoute.SETTINGS.slug) { SettingsScreen(container) }
+    }
+
+    // The graph is set by NavHost above, in this same composition, so navigating here is safe.
+    // Applied once: the pending route is cleared right after it is taken.
+    LaunchedEffect(pendingRoute) {
+        val target = pendingRoute ?: return@LaunchedEffect
+        onPendingRouteApplied()
+        nav.navigate(target) {
+            popUpTo(NavRoute.Default.slug) { saveState = true }
+            launchSingleTop = true
+            restoreState = true
+        }
     }
 }
 

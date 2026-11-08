@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 
 from diveintocrypto_desktop.data import basis as bs
@@ -36,7 +37,6 @@ from diveintocrypto_desktop.scan.constants import (
     DIVERGENCE_CANDIDATES,
     DIVERGENCE_MIN_SHOWN,
     DIVERGENCE_RANK_WEIGHT,
-    PERIOD_MS,
     TIME_WEIGHTS,
 )
 from diveintocrypto_desktop.scan.progress import ScanProgress
@@ -56,18 +56,30 @@ DETAIL_TFS = [tf for tf in kl.TF_LIST if tf not in COARSE_TFS]
 DEFAULT_DEPTH_TOP = 50
 MAX_DEPTH_TOP = 200
 
+# Divergence is computed for at most this many candidates: each makes 3
+# rate-limited futures/data calls, and 13*3=39 stays inside the 40/60s budget.
+# Reported as ``candidatesCap`` in the scan result.
+DIVERGENCE_CANDIDATE_CAP = min(DIVERGENCE_CANDIDATES, 13)
+
+# A status-less error whose text carries 429/451 as a standalone number (not
+# part of a longer digit run such as a timestamp or a 4510 ms timeout).
+_PRESSURE_TEXT = re.compile(r"(?<!\d)(?:429|451)(?!\d)")
+
 logger = logging.getLogger("trading_bot.scan.scanner")
 
 
 def _is_pressure(exc: BaseException | None) -> bool:
-    """True when ``exc`` looks like a Binance rate-limit / geo-block signal (429/451)."""
+    """True when ``exc`` is a Binance rate-limit / geo-block signal (429/451).
+
+    An exception that carries an integer HTTP ``status`` is classified by that
+    status alone; only status-less errors fall back to an anchored text match.
+    """
     if exc is None:
         return False
     status = getattr(exc, "status", None)
-    if status in (429, 451):
-        return True
-    text = str(exc)
-    return "429" in text or "451" in text
+    if isinstance(status, int):
+        return status in (429, 451)
+    return _PRESSURE_TEXT.search(str(exc)) is not None
 
 
 class AdaptiveGate:
@@ -153,12 +165,19 @@ class _GateSlot:
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> bool:
-        await self._gate.release(exc_val)
+        # The fetch error is caught inside the block and parked on the slot, so
+        # the gate must see it there — otherwise a 429/451 is released as clean.
+        await self._gate.release(exc_val if exc_val is not None else self.exc)
         return False
 
 
 def net_nss(multi_tf: list[dict]) -> tuple[int, float]:
-    """(dominantDir, netNss) — winning side's Σ(confidence²·timeWeight/100)."""
+    """(dominantDir, netNss) — winning side's Σ(confidence²·timeWeight/100).
+
+    A tie (including all-neutral, 0 vs 0) has no winning side: dominantDir 0 and
+    netNss 0.0, so it carries no weight in ranking and is never graded or ranked as
+    a directional bet.
+    """
     buy = sell = 0.0
     for m in multi_tf:
         tw = TIME_WEIGHTS.get(m["tf"], 50)
@@ -167,7 +186,30 @@ def net_nss(multi_tf: list[dict]) -> tuple[int, float]:
             buy += score
         elif "SELL" in m["signal"]:
             sell += score
-    return (1, buy) if buy >= sell else (-1, sell)
+    if buy == sell:
+        return 0, 0.0
+    return (1, buy) if buy > sell else (-1, sell)
+
+
+async def _fetch_phase(
+    u: dict,
+    tfs: list[str],
+    gate: AdaptiveGate,
+) -> tuple[dict, str | None]:
+    """Fetch the candles for ``tfs`` through the adaptive gate.
+
+    Returns ``(candles_by_tf, failure_reason)``; a failure yields ``{}`` and the reason.
+    """
+    symbol = u["s"]
+    candles_by_tf: dict = {}
+    async with _GateSlot(gate) as slot:
+        try:
+            candles_by_tf = await kl.fetch_all_tf(symbol, limit=300, intervals=tfs)
+        except Exception as e:
+            slot.exc = e
+    if not candles_by_tf:
+        return {}, str(slot.exc or "fetch failed")[:120]
+    return candles_by_tf, None
 
 
 async def _row_phase(
@@ -177,24 +219,33 @@ async def _row_phase(
     progress: ScanProgress | None,
 ) -> tuple[dict | None, dict, str | None]:
     """Build one scan row over ``tfs``. Returns ``(row, candles_by_tf, failure_reason)``;
-    ``row`` is None (with the reason set) when the fetch failed."""
+    ``row`` is None (with the reason set) when the fetch or the assembly failed."""
     symbol, name, price, ch = u["s"], u["name"], u["price"], u["ch"]
-    candles_by_tf: dict = {}
-    async with _GateSlot(gate) as slot:
-        try:
-            candles_by_tf = await kl.fetch_all_tf(symbol, limit=300, intervals=tfs)
-        except Exception as e:
-            slot.exc = e
-    if not candles_by_tf:
-        return None, {}, str(slot.exc or "fetch failed")[:120]
-    # assemble() is pure pandas — keep it off the event loop.
-    row = await asyncio.to_thread(sb.assemble, symbol, name, ch, price, candles_by_tf, {}, {})
+    candles_by_tf, reason = await _fetch_phase(u, tfs, gate)
+    if reason is not None:
+        return None, {}, reason
+    # assemble() is pure pandas — keep it off the event loop. One symbol's engine
+    # error drops that symbol (counted) instead of aborting the whole sweep.
+    try:
+        row = await asyncio.to_thread(sb.assemble, symbol, name, ch, price, candles_by_tf, {}, {})
+    except Exception as e:
+        return None, {}, f"assemble failed: {str(e)[:100]}"
     dom, nss = net_nss(row["multiTf"])
     row["dominantDir"] = dom
     row["netNss"] = round(nss, 2)
     if progress:
         progress.tick()
     return row, candles_by_tf, None
+
+
+async def _gather_all(aws) -> list:
+    """``gather`` that never leaves siblings running untracked: every task runs
+    to completion, then the first failure (if any) is re-raised."""
+    results = await asyncio.gather(*aws, return_exceptions=True)
+    for r in results:
+        if isinstance(r, BaseException):
+            raise r
+    return results
 
 
 async def _attach_divergence(row: dict, sem: asyncio.Semaphore) -> None:
@@ -300,21 +351,25 @@ async def scan(
     if progress:
         progress.set_phase("universe", total=1)
     universe = await uni.list_universe(limit=universe_limit)
+    # The universe prices were fetched just now: that instant is the verdict's
+    # as-of time (evidence grading measures forward returns from it).
+    snapshot_ms = int(time.time() * 1000)
     by_symbol = {u["s"]: u for u in universe}
     gate = AdaptiveGate()
 
     # ── phase 1: coarse sweep over the whole requested universe ──────────────
     if progress:
         progress.set_phase("phase1_coarse", total=len(universe))
-    phase1 = await asyncio.gather(*(_row_phase(u, COARSE_TFS, gate, progress) for u in universe))
+    phase1 = await _gather_all(_row_phase(u, COARSE_TFS, gate, progress) for u in universe)
     rows: list[dict] = []
     candles_by_symbol: dict[str, dict] = {}
     dropped = 0
-    for (row, candles, reason), u in zip(phase1, universe):
+    for (row, candles, reason), u in zip(phase1, universe, strict=True):
         if row is None:
             dropped += 1
             logger.warning("scan: dropped %s (coarse) — %s", u["s"], reason)
             continue
+        row["snapshot_ms"] = snapshot_ms
         rows.append(row)
         candles_by_symbol[u["s"]] = candles
     coarse_count = len(rows)
@@ -333,19 +388,26 @@ async def scan(
 
     async def deepen(row: dict) -> None:
         u = by_symbol[row["s"]]
-        new_row, detail, reason = await _row_phase(u, DETAIL_TFS, gate, progress)
-        if new_row is None:
+        # fetch only: the 9 detail TFs are assembled once, merged with the coarse 3
+        detail, reason = await _fetch_phase(u, DETAIL_TFS, gate)
+        if reason is not None:
             row["_drop_reason"] = reason
             return
         merged = {**candles_by_symbol.get(row["s"], {}), **detail}
-        full = await asyncio.to_thread(sb.assemble, row["s"], row["name"], row["ch"], row["price"], merged, {}, {})
+        try:
+            full = await asyncio.to_thread(sb.assemble, row["s"], row["name"], row["ch"], row["price"], merged, {}, {})
+        except Exception as e:
+            row["_drop_reason"] = f"assemble failed: {str(e)[:100]}"
+            return
         dom, nss = net_nss(full["multiTf"])
         full["dominantDir"] = dom
         full["netNss"] = round(nss, 2)
         full["_candles_by_tf"] = merged  # kept transiently for divergence + structure
         row.update(full)
+        if progress:
+            progress.tick()
 
-    await asyncio.gather(*(deepen(r) for r in selected))
+    await _gather_all(deepen(r) for r in selected)
     deep_failed = [r for r in selected if "_drop_reason" in r]
     if deep_failed:
         failed_ids = {id(r) for r in deep_failed}
@@ -358,10 +420,9 @@ async def scan(
     rows.sort(key=lambda r: r["netNss"], reverse=True)
     selected.sort(key=lambda r: r["netNss"], reverse=True)
 
-    # Divergence only for the top candidates of the deepened rows. Each candidate
-    # makes 3 rate-limited futures/data calls; cap at 13 (13*3=39 ≤ the 40/60s
-    # budget) so a live scan stays responsive instead of stalling on the limiter.
-    candidates = selected[: min(DIVERGENCE_CANDIDATES, 13)]
+    # Divergence only for the top candidates of the deepened rows (rate budget,
+    # see DIVERGENCE_CANDIDATE_CAP). Survivors + eliminated never exceed the cap.
+    candidates = selected[:DIVERGENCE_CANDIDATE_CAP]
     if progress:
         progress.set_phase("divergence", total=len(candidates))
     div_sem = asyncio.Semaphore(4)
@@ -421,4 +482,5 @@ async def scan(
         "droppedCount": dropped,
         "coarseCount": coarse_count,    # symbols that passed the coarse phase-1 sweep
         "depthTop": depth_top,
+        "candidatesCap": DIVERGENCE_CANDIDATE_CAP,  # max rows with whale divergence computed
     }

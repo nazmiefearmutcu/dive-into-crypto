@@ -26,7 +26,7 @@ object DiveColors {
     var BorderStrong by mutableStateOf(Color(0xFF232E38))
     var Text by mutableStateOf(Color(0xFFDFE7EA))
     var TextMuted by mutableStateOf(Color(0xFF7C8A92))
-    var TextDim by mutableStateOf(Color(0xFF3A454D))
+    var TextDim by mutableStateOf(Color(0xFF6E7A84))
     var Accent by mutableStateOf(Color(0xFF39FF9E))
     var Accent2 by mutableStateOf(Color(0xFF1C7A52))
     var Green by mutableStateOf(Color(0xFF4DFFA6))

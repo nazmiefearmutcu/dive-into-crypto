@@ -26,9 +26,9 @@ class AdxDiIndicator(config: IndicatorConfig) : BaseIndicator(config) {
         val strongTrend = config.getDouble("strong_trend", 25.0)
         val weakTrend = config.getDouble("weak_trend", 15.0)
 
-        // Python needs `period` for ATR + `period` for ADX rolling mean over DX
-        // plus the initial diff(). Be a touch conservative.
-        if (candles.size < 2 * period + 2) {
+        // No extra warm-up guard: the rolling means are NaN until their windows fill, and
+        // the NaN checks below report insufficient data, exactly as adx_di.py does.
+        if (period < 1 || candles.isEmpty()) {
             return result(Signal.NEUTRAL, "ADX/DI data insufficient")
         }
 

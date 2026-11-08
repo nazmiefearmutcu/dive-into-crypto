@@ -7,7 +7,7 @@ import io.ktor.client.engine.HttpClientEngineFactory
  *
  * Every Android-framework dependency that the shared (`commonMain`) code used
  * to reach for directly is funnelled through these `expect` declarations.
- * Android (`androidMain`) and iOS (`iosMain`) provide the `actual`s.
+ * Android (`androidMain`) provides the `actual`s; no other platform source set exists yet.
  */
 
 /** Debug-level log. Android → android.util.Log.d; iOS → println (Xcode console). */

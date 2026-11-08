@@ -55,17 +55,16 @@ class MfiIndicator(config: IndicatorConfig) : BaseIndicator(config) {
             negSum += negative[i]
         }
 
-        if (posSum == 0.0 && negSum == 0.0) {
-            return result(Signal.NEUTRAL, "MFI data insufficient (no price movement)", mapOf("mfi" to 50.0))
-        }
-
-        val mfi = if (negSum == 0.0) {
-            100.0
-        } else if (posSum == 0.0) {
-            0.0
-        } else {
-            val ratio = posSum / negSum
-            100.0 - (100.0 / (1.0 + ratio))
+        // Mirrors mfi.py's np.select: a flat money-flow window is MFI 50 and runs
+        // through the threshold ladder (no early return).
+        val mfi = when {
+            posSum == 0.0 && negSum == 0.0 -> 50.0
+            negSum == 0.0 -> 100.0
+            posSum == 0.0 -> 0.0
+            else -> {
+                val ratio = posSum / negSum
+                100.0 - (100.0 / (1.0 + ratio))
+            }
         }
         val raw = mapOf<String, Double?>("mfi" to round2(mfi))
 

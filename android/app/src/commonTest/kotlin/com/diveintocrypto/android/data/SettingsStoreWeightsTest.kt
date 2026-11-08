@@ -49,6 +49,26 @@ class SettingsStoreWeightsTest {
     }
 
     @Test
+    fun `legacy default weights migrate once while custom weights are kept`() {
+        val kv = InMemoryKeyValueStore()
+        // Old full defaults (sma_cross/psar) are moved to the new defaults; a user value is kept.
+        kv.putFloat("weight_sma_cross", 1.5f)
+        kv.putFloat("weight_psar", 1.2f)
+        kv.putFloat("weight_obv", 2.7f)
+        val store = SettingsStore(kv)
+        val weights = store.getSettings().weights
+        assertEquals(DEFAULT_FULL_WEIGHTS.getValue("sma_cross"), weights.getValue("sma_cross"), 1e-5)
+        assertEquals(DEFAULT_FULL_WEIGHTS.getValue("psar"), weights.getValue("psar"), 1e-5)
+        assertEquals(2.7, weights.getValue("obv"), 1e-5)
+        assertEquals(1, kv.getInt("weights_migration_version", 0))
+
+        // Once applied, a value that happens to equal an old default is a deliberate choice: left alone.
+        kv.putFloat("weight_ichimoku", 1.5f)
+        val reloaded = SettingsStore(kv)
+        assertEquals(1.5, reloaded.getSettings().weights.getValue("ichimoku"), 1e-5)
+    }
+
+    @Test
     fun `user weight override persists across store restart`() {
         val kv = InMemoryKeyValueStore()
         val store = SettingsStore(kv)

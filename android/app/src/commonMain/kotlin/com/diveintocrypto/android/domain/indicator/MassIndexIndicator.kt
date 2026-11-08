@@ -86,9 +86,12 @@ class MassIndexIndicator(config: IndicatorConfig) : BaseIndicator(config) {
             if (miValid[i] > bulgePeak) bulgePeak = miValid[i]
         }
 
-        // Reversal trigger: bulge occurred (peak >= threshold) AND the index has
-        // since retreated below the setback level on the current closed bar.
-        val triggered = bulgePeak >= bulgeThreshold && miLast < setbackThreshold
+        // Reversal trigger is an EVENT: MI crossed down through the setback level on
+        // the current closed bar (previous bar at/above, current below), and a bulge
+        // occurred in the lookback window (mirrors mass_index.py).
+        val miPrev = miValid[miValid.size - 2]
+        val setbackNow = miPrev >= setbackThreshold && miLast < setbackThreshold
+        val triggered = bulgePeak >= bulgeThreshold && setbackNow
         val strongBulge = bulgePeak >= strongBulgeThreshold
 
         // Direction filter: slope of a short EMA of close, looking strictly back.

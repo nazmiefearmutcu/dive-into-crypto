@@ -25,43 +25,88 @@ enum class ScanUniverseMode(val label: String, val limit: Int?) {
 
 class SettingsStore(private val kv: KeyValueStore) {
 
+    init {
+        migrateLegacyWeightDefaults()
+    }
+
     private val _settingsState = MutableStateFlow(loadSettings())
     val settingsState: StateFlow<SettingsData> = _settingsState
 
     fun getSettings(): SettingsData = _settingsState.value
 
+    /**
+     * Persists every field in ONE batch (one SharedPreferences edit on Android) so a settings
+     * change never lands half-written.
+     */
     fun updateSettings(data: SettingsData) {
-        kv.putInt("confidence_threshold", data.confidenceThreshold)
-        kv.putInt("min_confidence_trade", data.minConfidenceForTrade)
-        kv.putBoolean("enable_regime_matrix", data.enableRegimeMatrix)
-        kv.putInt("scan_survivors", data.scanSurvivors)
-        kv.putInt("scan_parallelism", data.scanParallelism)
+        kv.edit {
+            putInt("confidence_threshold", data.confidenceThreshold)
+            putInt("min_confidence_trade", data.minConfidenceForTrade)
+            putInt("scan_survivors", data.scanSurvivors)
+            putInt("scan_parallelism", data.scanParallelism)
 
-        // New settings fields
-        kv.putString("ws_data_source", data.wsDataSource)
-        kv.putInt("chart_candle_count", data.chartCandleCount)
-        kv.putFloat("weight_taker_ls", data.weightTakerLs.toFloat())
-        kv.putFloat("weight_oi_momentum", data.weightOiMomentum.toFloat())
-        kv.putFloat("weight_whale_ls", data.weightWhaleLs.toFloat())
-        kv.putFloat("weight_account_ls", data.weightAccountLs.toFloat())
+            // New settings fields
+            putString("ws_data_source", data.wsDataSource)
+            putInt("chart_candle_count", data.chartCandleCount)
+            putFloat("weight_taker_ls", data.weightTakerLs.toFloat())
+            putFloat("weight_oi_momentum", data.weightOiMomentum.toFloat())
+            putFloat("weight_whale_ls", data.weightWhaleLs.toFloat())
+            putFloat("weight_account_ls", data.weightAccountLs.toFloat())
 
-        // Scanner universe mode + phase-2 depth
-        kv.putString("scan_universe", data.scanUniverse)
-        kv.putInt("scan_depth_top", data.scanDepthTop)
+            // Scanner universe mode + phase-2 depth
+            putString("scan_universe", data.scanUniverse)
+            putInt("scan_depth_top", data.scanDepthTop)
 
-        // Background WorkManager scans (opt-in; the worker reads these on every run)
-        kv.putBoolean("background_scans_enabled", data.backgroundScansEnabled)
-        kv.putBoolean("background_scans_unmetered", data.backgroundScansUnmetered)
+            // Background WorkManager scans (opt-in; the worker reads these on every run)
+            putBoolean("background_scans_enabled", data.backgroundScansEnabled)
+            putBoolean("background_scans_unmetered", data.backgroundScansUnmetered)
 
-        // Save weights
-        data.weights.forEach { (key, value) ->
-            kv.putFloat("weight_$key", value.toFloat())
+            // Save weights
+            data.weights.forEach { (key, value) ->
+                putFloat("weight_$key", value.toFloat())
+            }
+
+            // Save favorites
+            putString("favorite_symbols", data.favorites.joinToString(","))
         }
 
-        // Save favorites
-        kv.putString("favorite_symbols", data.favorites.joinToString(","))
-
         _settingsState.value = data
+    }
+
+    /**
+     * One-time, versioned migration of the four indicator weights whose FULL defaults changed
+     * (sma_cross, ichimoku, psar, obv). Installs before the change persisted every weight on each
+     * save, so a stored value cannot be told apart from a user choice; a stored value that is
+     * EXACTLY the old default is therefore moved to the new default, and any other value is kept.
+     * Runs once: [WEIGHTS_MIGRATION_KEY] records that it has been applied.
+     */
+    private fun migrateLegacyWeightDefaults() {
+        if (kv.getInt(WEIGHTS_MIGRATION_KEY, 0) >= WEIGHTS_MIGRATION_VERSION) return
+        kv.edit {
+            for ((key, oldDefault) in LEGACY_WEIGHT_DEFAULTS) {
+                val storedKey = "weight_$key"
+                val stored = kv.getFloat(storedKey, Float.NaN)
+                if (stored == oldDefault.toFloat()) {
+                    val newDefault = DEFAULT_FULL_WEIGHTS.getValue(key)
+                    putFloat(storedKey, newDefault.toFloat())
+                }
+            }
+            putInt(WEIGHTS_MIGRATION_KEY, WEIGHTS_MIGRATION_VERSION)
+        }
+    }
+
+    companion object {
+        /** Versioned marker for [migrateLegacyWeightDefaults]; bump only with a new migration. */
+        internal const val WEIGHTS_MIGRATION_KEY = "weights_migration_version"
+        internal const val WEIGHTS_MIGRATION_VERSION = 1
+
+        /** The full defaults of the previous release, for the four weights that changed since. */
+        internal val LEGACY_WEIGHT_DEFAULTS: Map<String, Double> = mapOf(
+            "sma_cross" to 1.5,
+            "ichimoku" to 1.5,
+            "psar" to 1.2,
+            "obv" to 1.5,
+        )
     }
 
     /** Generic JSON-blob persistence (alert rules, fired history, evidence log). */
@@ -71,7 +116,6 @@ class SettingsStore(private val kv: KeyValueStore) {
     private fun loadSettings(): SettingsData {
         val confidenceThreshold = kv.getInt("confidence_threshold", 25)
         val minConfidenceTrade = kv.getInt("min_confidence_trade", 30)
-        val enableRegimeMatrix = kv.getBoolean("enable_regime_matrix", true)
         val scanSurvivors = kv.getInt("scan_survivors", 50)
         val scanParallelism = kv.getInt("scan_parallelism", 8)
 
@@ -107,7 +151,6 @@ class SettingsStore(private val kv: KeyValueStore) {
         return SettingsData(
             confidenceThreshold = confidenceThreshold,
             minConfidenceForTrade = minConfidenceTrade,
-            enableRegimeMatrix = enableRegimeMatrix,
             scanSurvivors = scanSurvivors,
             scanParallelism = scanParallelism,
             weights = weights,
@@ -129,7 +172,6 @@ class SettingsStore(private val kv: KeyValueStore) {
 data class SettingsData(
     val confidenceThreshold: Int,
     val minConfidenceForTrade: Int,
-    val enableRegimeMatrix: Boolean,
     val scanSurvivors: Int,
     val scanParallelism: Int,
     val weights: Map<String, Double>,

@@ -1,6 +1,5 @@
 """ROC (Rate of Change) indicator."""
 
-from typing import Any
 import pandas as pd
 
 from diveintocrypto_desktop.engine.indicators.base import BaseIndicator, IndicatorResult, Signal

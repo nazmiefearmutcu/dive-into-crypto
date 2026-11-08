@@ -18,14 +18,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.diveintocrypto.android.platform.format
 import com.diveintocrypto.android.platform.nowMillis
-import com.diveintocrypto.android.ui.panel.PanelUiState
+import com.diveintocrypto.android.ui.i18n.DiveStrings
+import com.diveintocrypto.android.ui.i18n.LocalDiveStrings
 import com.diveintocrypto.android.ui.panel.ALL_TIMEFRAMES
+import com.diveintocrypto.android.ui.performance.formatQuotePrice
+import com.diveintocrypto.android.ui.panel.PanelAction
+import com.diveintocrypto.android.ui.panel.PanelUiState
 import com.diveintocrypto.android.ui.panel.TfSignal
 import com.diveintocrypto.android.ui.theme.DiveColors
 import com.diveintocrypto.android.ui.theme.DiveDims
@@ -37,15 +39,16 @@ import com.diveintocrypto.android.ui.theme.DiveFonts
 // ═══════════════════════════════════════════════════════════════════════
 @Composable
 fun PageHeader(title: String, lastUpdateMs: Long?, stale: Boolean, onRefresh: (() -> Unit)? = null) {
+    val strings = LocalDiveStrings.current
     Row(
         modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
             Text(title, color = DiveColors.Text, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
-            val timeText = lastUpdateMs?.let { agoString(it) } ?: "—"
+            val timeText = lastUpdateMs?.let { agoString(it, strings) } ?: "—"
             Text(
-                text = "Last update: $timeText",
+                text = strings.panelLastUpdate(timeText),
                 color = if (stale) DiveColors.Orange else DiveColors.TextDim,
                 fontSize = 10.sp,
             )
@@ -60,19 +63,19 @@ fun PageHeader(title: String, lastUpdateMs: Long?, stale: Boolean, onRefresh: ((
                     .clickable { onRefresh() }
                     .padding(horizontal = 12.dp, vertical = 8.dp),
             ) {
-                Text("⟳ Refresh", color = DiveColors.Accent, fontSize = 12.sp, fontWeight = FontWeight.Bold, fontFamily = DiveFonts.body)
+                Text(strings.panelRefresh, color = DiveColors.Accent, fontSize = 12.sp, fontWeight = FontWeight.Bold, fontFamily = DiveFonts.body)
             }
         }
     }
 }
 
-private fun agoString(ms: Long): String {
+private fun agoString(ms: Long, strings: DiveStrings): String {
     val diff = nowMillis() - ms
     val sec = diff / 1000
     return when {
-        sec < 60 -> "${sec}s ago"
-        sec < 3600 -> "${sec / 60}m ago"
-        else -> "${sec / 3600}h ago"
+        sec < 60 -> strings.panelAgoSec(sec)
+        sec < 3600 -> strings.panelAgoMin(sec / 60)
+        else -> strings.panelAgoHour(sec / 3600)
     }
 }
 
@@ -84,6 +87,7 @@ private fun agoString(ms: Long): String {
 // ═══════════════════════════════════════════════════════════════════════
 @Composable
 fun StatusBar(state: PanelUiState, modifier: Modifier = Modifier) {
+    val strings = LocalDiveStrings.current
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -93,21 +97,22 @@ fun StatusBar(state: PanelUiState, modifier: Modifier = Modifier) {
             .padding(horizontal = 10.dp, vertical = 10.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        StatusItem("Symbol", state.activeSymbol, accent = true, modifier = Modifier.weight(1f))
+        StatusItem(strings.panelLabelSymbol, state.activeSymbol, accent = true, modifier = Modifier.weight(1f))
         val priceColor = when (state.priceChangeDirection) {
             "UP" -> DiveColors.Green
             "DOWN" -> DiveColors.Red
             else -> DiveColors.Text
         }
         StatusItem(
-            "Price",
-            state.currentPrice?.let { "${'$'}${it.format(2, grouped = true)}" } ?: "—",
+            strings.panelLabelPrice,
+            // Significant digits below 1, so sub-cent prices keep their digits (3e-7 is not "0.000000").
+            state.currentPrice?.let { "${'$'}${formatQuotePrice(it)}" } ?: "—",
             accentColor = priceColor,
             modifier = Modifier.weight(1f),
         )
-        StatusItem("TF", state.timeframe, modifier = Modifier.weight(1f))
+        StatusItem(strings.panelLabelTf, state.timeframe, modifier = Modifier.weight(1f))
         StatusItem(
-            "Signal",
+            strings.panelLabelSignal,
             state.latestSignal,
             accentColor = signalColor(state.latestSignal),
             modifier = Modifier.weight(1f),
@@ -152,6 +157,8 @@ private fun signalColor(name: String): Color = when {
 
 // ═══════════════════════════════════════════════════════════════════════
 // LiveTfGrid — 4×3 mini grid of 12 TF confidence cells.
+// A timeframe that has no computed result yet shows a dash, never a
+// NEUTRAL 0% verdict that was not computed.
 // ═══════════════════════════════════════════════════════════════════════
 @Composable
 fun LiveTfGrid(items: List<TfSignal>) {
@@ -160,8 +167,7 @@ fun LiveTfGrid(items: List<TfSignal>) {
         ALL_TIMEFRAMES.chunked(4).forEach { rowTfs ->
             Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                 rowTfs.forEach { tf ->
-                    val item = byTf[tf] ?: TfSignal(tf, "NEUTRAL", 0)
-                    LiveTfItem(item = item, modifier = Modifier.weight(1f))
+                    LiveTfItem(tf = tf, item = byTf[tf], modifier = Modifier.weight(1f))
                 }
                 repeat(4 - rowTfs.size) { Spacer(modifier = Modifier.weight(1f)) }
             }
@@ -170,8 +176,8 @@ fun LiveTfGrid(items: List<TfSignal>) {
 }
 
 @Composable
-private fun LiveTfItem(item: TfSignal, modifier: Modifier = Modifier) {
-    val color = signalColor(item.signal)
+private fun LiveTfItem(tf: String, item: TfSignal?, modifier: Modifier = Modifier) {
+    val color = if (item == null) DiveColors.TextMuted else signalColor(item.signal)
     val borderColor = color.copy(alpha = 0.4f)
     Column(
         modifier = modifier
@@ -182,7 +188,7 @@ private fun LiveTfItem(item: TfSignal, modifier: Modifier = Modifier) {
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(
-            item.tf.uppercase(),
+            tf.uppercase(),
             color = DiveColors.TextMuted,
             fontSize = 10.sp,
             fontWeight = FontWeight.SemiBold,
@@ -190,7 +196,7 @@ private fun LiveTfItem(item: TfSignal, modifier: Modifier = Modifier) {
         )
         Spacer(Modifier.height(2.dp))
         Text(
-            "${item.confidence}%",
+            if (item == null) "—" else "${item.confidence}%",
             color = color,
             fontSize = 14.sp,
             fontWeight = FontWeight.ExtraBold,
@@ -204,18 +210,20 @@ private fun LiveTfItem(item: TfSignal, modifier: Modifier = Modifier) {
                 .clip(RoundedCornerShape(2.dp))
                 .background(Color.White.copy(alpha = 0.08f)),
         ) {
-            val pct = item.confidence.coerceIn(0, 100).toFloat() / 100f
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth(pct)
-                    .height(3.dp)
-                    .clip(RoundedCornerShape(2.dp))
-                    .background(color),
-            )
+            val pct = (item?.confidence ?: 0).coerceIn(0, 100).toFloat() / 100f
+            if (pct > 0f) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(pct)
+                        .height(3.dp)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(color),
+                )
+            }
         }
         Spacer(Modifier.height(2.dp))
         Text(
-            item.signal,
+            item?.signal ?: "—",
             color = color,
             fontSize = 9.sp,
             fontWeight = FontWeight.SemiBold,
@@ -225,13 +233,16 @@ private fun LiveTfItem(item: TfSignal, modifier: Modifier = Modifier) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// FinalVerdictCard — paper-free: signal/confidence/action/reason only.
+// FinalVerdictCard — paper-free: signal / confidence / threshold status.
+// The consensus' internal English reason string is not shown (it carries
+// raw engine tokens); the distribution card below shows the vote counts.
 // ═══════════════════════════════════════════════════════════════════════
 @Composable
 fun FinalVerdictCard(state: PanelUiState, modifier: Modifier = Modifier) {
-    DiveCard(title = "Final Verdict", modifier = modifier) {
+    val strings = LocalDiveStrings.current
+    DiveCard(title = strings.panelVerdictTitle, modifier = modifier) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            SignalBadge(state.latestSignal)
+            VerdictBadge(state.latestSignal)
             Spacer(Modifier.height(0.dp))
         }
         Spacer(Modifier.height(8.dp))
@@ -239,18 +250,16 @@ fun FinalVerdictCard(state: PanelUiState, modifier: Modifier = Modifier) {
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            DecisionKv("Confidence", "${state.confidence}%", accent = signalColor(state.latestSignal))
-            DecisionKv("Action", state.action)
-        }
-        if (state.reason.isNotBlank()) {
-            Spacer(Modifier.height(8.dp))
-            Text(
-                text = state.reason,
-                color = DiveColors.TextMuted,
-                fontSize = 11.sp,
-            )
+            DecisionKv(strings.panelLabelConfidence, "${state.confidence}%", accent = signalColor(state.latestSignal))
+            DecisionKv(strings.panelLabelThreshold, thresholdText(state.action, strings))
         }
     }
+}
+
+private fun thresholdText(action: String, strings: DiveStrings): String = when (action) {
+    PanelAction.ABOVE_UP -> strings.panelActionAboveUp
+    PanelAction.ABOVE_DOWN -> strings.panelActionAboveDown
+    else -> strings.panelActionBelow
 }
 
 @Composable
@@ -279,8 +288,10 @@ private fun DecisionKv(label: String, value: String, accent: Color? = null) {
 // ═══════════════════════════════════════════════════════════════════════
 @Composable
 fun SignalDistributionCard(buy: Int, sell: Int, neutral: Int, modifier: Modifier = Modifier) {
-    val total = (buy + sell + neutral).coerceAtLeast(1)
-    DiveCard(title = "Signal Distribution", modifier = modifier) {
+    val strings = LocalDiveStrings.current
+    // The real vote count (0 at boot). Only the bar's zero-state below needs special handling.
+    val total = buy + sell + neutral
+    DiveCard(title = strings.panelDistTitle, modifier = modifier) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -300,7 +311,7 @@ fun SignalDistributionCard(buy: Int, sell: Int, neutral: Int, modifier: Modifier
             // Compose's Row.weight requires `weight > 0`. When all counts are 0
             // (boot / pre-fetch state) we collapse the bar to a single neutral
             // segment instead of trying to render three zero-weighted boxes.
-            if (buy == 0 && sell == 0 && neutral == 0) {
+            if (total == 0) {
                 Box(
                     modifier = Modifier
                         .weight(1f)
@@ -332,7 +343,7 @@ fun SignalDistributionCard(buy: Int, sell: Int, neutral: Int, modifier: Modifier
         }
         Spacer(Modifier.height(4.dp))
         Text(
-            text = "$total indicators",
+            text = strings.panelIndicatorCount(total),
             color = DiveColors.TextDim,
             fontSize = 10.sp,
         )
@@ -352,4 +363,3 @@ private fun DistCell(label: String, value: Int, color: Color, modifier: Modifier
         Text(label, color = color, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.5.sp)
     }
 }
-

@@ -35,7 +35,8 @@ class ConnorsRsiIndicator(config: IndicatorConfig) : BaseIndicator(config) {
 
         // Need enough bars for the binding percentrank window plus RSI warm-ups.
         val minRows = maxOf(rsiPeriod + 1, streakPeriod + 2, minRankPeriod + 2)
-        if (candles.size < minRows) {
+        // A zero RSI/streak period has no window (rollingRsi would write out[-1]).
+        if (rsiPeriod < 1 || streakPeriod < 1 || candles.size < minRows) {
             return result(
                 Signal.NEUTRAL,
                 "Connors RSI insufficient data (need >= $minRows bars)",

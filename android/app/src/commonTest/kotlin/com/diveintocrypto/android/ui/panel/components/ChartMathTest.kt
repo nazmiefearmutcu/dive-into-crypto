@@ -63,6 +63,20 @@ class ChartMathTest {
     }
 
     @Test
+    fun `price range includes ema overlays that lag beyond the candles`() {
+        // A lagging EMA can sit below the lowest low of the window; it must stay in the viewport.
+        val ema = listOf<Double?>(null, 80.0, 82.0)
+        val range = ChartMath.chartPriceRange(
+            candles = listOf(
+                candle(open = 100.0, high = 110.0, low = 95.0, close = 105.0),
+                candle(open = 105.0, high = 120.0, low = 90.0, close = 92.0),
+            ),
+            overlays = listOf(ema),
+        )
+        assertTrue(range.min < 80.0, "min must cover the EMA ($range)")
+    }
+
+    @Test
     fun `empty candles degrade to the honest 0 to 1 fallback`() {
         val range = ChartMath.chartPriceRange(emptyList())
         assertEquals(0.0, range.min)

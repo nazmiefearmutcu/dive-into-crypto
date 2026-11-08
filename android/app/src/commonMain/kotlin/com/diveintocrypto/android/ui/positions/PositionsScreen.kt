@@ -54,8 +54,12 @@ import com.diveintocrypto.android.data.binance.LongShortRatioPoint
 import com.diveintocrypto.android.data.binance.OpenInterestPoint
 import com.diveintocrypto.android.domain.model.Candle
 import com.diveintocrypto.android.platform.format
-import com.diveintocrypto.android.platform.formatTime
 import com.diveintocrypto.android.platform.nowMillis
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
+import com.diveintocrypto.android.ui.performance.MarketDataFailure
+import com.diveintocrypto.android.ui.performance.sigDecimalsBelowOne
 import com.diveintocrypto.android.ui.panel.components.PageHeader
 import com.diveintocrypto.android.ui.panel.components.StaleChip
 import com.diveintocrypto.android.ui.panel.components.DiveCard
@@ -77,6 +81,7 @@ import com.diveintocrypto.android.ui.theme.DiveFonts
 fun PositionsScreen(container: AppContainer) {
     val vm: PositionsViewModel = viewModel { PositionsViewModel(container) }
     val state by vm.ui.collectAsStateWithLifecycle()
+    val strings = com.diveintocrypto.android.ui.i18n.LocalDiveStrings.current
 
     PullToRefreshBox(
         isRefreshing = state.isLoading,
@@ -92,7 +97,7 @@ fun PositionsScreen(container: AppContainer) {
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
         PageHeader(
-            title = "Market Position Data",
+            title = strings.i18nPosMarketTitle,
             lastUpdateMs = state.lastUpdateMs,
             stale = state.lastUpdateMs?.let { (nowMillis() - it) > 5 * 60_000 } ?: false,
             onRefresh = { vm.refresh() },
@@ -108,7 +113,7 @@ fun PositionsScreen(container: AppContainer) {
         if (state.isLoading) {
             LoadingCard()
         }
-        state.error?.let { ErrorCard(it) }
+        state.error?.let { ErrorCard(failure = it, onRetry = { vm.refresh() }) }
 
         if (!state.isLoading && state.error == null) {
             UnifiedPositionsCard(state = state)
@@ -155,6 +160,7 @@ private fun SymbolPeriodBar(state: PositionsUiState, onPeriod: (String) -> Unit)
 
 @Composable
 private fun UnifiedPositionsCard(state: PositionsUiState) {
+    val strings = com.diveintocrypto.android.ui.i18n.LocalDiveStrings.current
     var selectedIndex by remember { mutableStateOf<Int?>(null) }
     var touchOffset by remember { mutableStateOf(Offset.Zero) }
     var isPressed by remember { mutableStateOf(false) }
@@ -170,7 +176,7 @@ private fun UnifiedPositionsCard(state: PositionsUiState) {
     val quantBias = state.quantBias
 
     if (prices.isEmpty() || oi.isEmpty() || globalRatio.isEmpty() || accountRatio.isEmpty() || positionRatio.isEmpty() || takerRatio.isEmpty() || netTakerVolume.isEmpty() || fundingRate.isEmpty() || quantBias.isEmpty()) {
-        EmptyStateCard()
+        EmptyStateCard(loading = state.isLoading)
         return
     }
 
@@ -210,11 +216,11 @@ private fun UnifiedPositionsCard(state: PositionsUiState) {
     val netTakerRange = "▼${formatBig(netTakerVolume.min())} ▲${formatBig(netTakerVolume.max())}"
     val fundingRange = "▼${(fundingRate.min() * 100.0).format(4)}% ▲${(fundingRate.max() * 100.0).format(4)}%"
 
-    DiveCard(title = "${state.activeSymbol} UNIFIED QUANTITATIVE ANALYSIS") {
+    DiveCard(title = strings.i18nPosUnifiedTitle(state.activeSymbol)) {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             if (isPressed && selectedIndex != null) {
                 Text(
-                    text = "Inspect Mode (Point: ${displayIndex + 1}/${prices.size})",
+                    text = strings.i18nPosInspect(displayIndex + 1, prices.size),
                     color = DiveColors.Accent,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
@@ -222,7 +228,7 @@ private fun UnifiedPositionsCard(state: PositionsUiState) {
                 )
             } else {
                 Text(
-                    text = "Quantitative Indicators & Sentiment",
+                    text = strings.i18nPosIndicatorsTitle,
                     color = DiveColors.TextDim,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
@@ -246,7 +252,7 @@ private fun UnifiedPositionsCard(state: PositionsUiState) {
                         else -> DiveColors.Text
                     }
                     MiniValueCol(
-                        label = "PRICE",
+                        label = strings.i18nPosTilePrice,
                         value = formatPrice(curPrice),
                         deltaPct = priceDelta,
                         color = if (priceDelta >= 0) DiveColors.Green else DiveColors.Red,
@@ -255,7 +261,7 @@ private fun UnifiedPositionsCard(state: PositionsUiState) {
                         modifier = Modifier.weight(1f)
                     )
                     MiniValueCol(
-                        label = "OPEN INTEREST",
+                        label = strings.i18nPosTileOi,
                         value = formatBig(curOi),
                         deltaPct = oiDelta,
                         color = DiveColors.Cyan,
@@ -263,7 +269,7 @@ private fun UnifiedPositionsCard(state: PositionsUiState) {
                         modifier = Modifier.weight(1f)
                     )
                     MiniValueCol(
-                        label = "QUANT BIAS",
+                        label = strings.i18nPosTileQuantBias,
                         value = "${curQuantBias.format(1, plus = true)}%",
                         deltaPct = biasDelta,
                         color = biasColor,
@@ -278,7 +284,7 @@ private fun UnifiedPositionsCard(state: PositionsUiState) {
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     MiniValueCol(
-                        label = "WHALE L/S",
+                        label = strings.i18nPosTileWhale,
                         value = "${curPosRatio.format(2)}",
                         deltaPct = posDelta,
                         color = DiveColors.Purple,
@@ -286,7 +292,7 @@ private fun UnifiedPositionsCard(state: PositionsUiState) {
                         modifier = Modifier.weight(1f)
                     )
                     MiniValueCol(
-                        label = "ACCOUNT L/S",
+                        label = strings.i18nPosTileAccount,
                         value = "${curAccRatio.format(2)}",
                         deltaPct = accDelta,
                         color = DiveColors.Orange,
@@ -294,7 +300,7 @@ private fun UnifiedPositionsCard(state: PositionsUiState) {
                         modifier = Modifier.weight(1f)
                     )
                     MiniValueCol(
-                        label = "GLOBAL L/S",
+                        label = strings.i18nPosTileGlobal,
                         value = "${curGlobalRatio.format(2)}",
                         deltaPct = globalDelta,
                         color = DiveColors.Blue,
@@ -308,7 +314,7 @@ private fun UnifiedPositionsCard(state: PositionsUiState) {
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     MiniValueCol(
-                        label = "TAKER L/S",
+                        label = strings.i18nPosTileTaker,
                         value = "${curTakerRatio.format(2)}",
                         deltaPct = takerDelta,
                         color = Color(0xFF84CC16),
@@ -316,7 +322,7 @@ private fun UnifiedPositionsCard(state: PositionsUiState) {
                         modifier = Modifier.weight(1f)
                     )
                     MiniValueCol(
-                        label = "NET TAKER VOLUME",
+                        label = strings.i18nPosTileNetTaker,
                         value = formatBig(curNetTakerVol),
                         deltaPct = netTakerDelta,
                         color = Color(0xFFEC4899),
@@ -324,7 +330,7 @@ private fun UnifiedPositionsCard(state: PositionsUiState) {
                         modifier = Modifier.weight(1f)
                     )
                     MiniValueCol(
-                        label = "FUNDING RATE",
+                        label = strings.i18nPosTileFunding,
                         value = "${(curFundingRate * 100.0).format(4)}%",
                         deltaPct = fundingDelta,
                         color = Color(0xFFFFD600),
@@ -482,7 +488,7 @@ private fun UnifiedPositionsCard(state: PositionsUiState) {
 
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(
-                text = "L/S Ratio Details (${if (isPressed) "Selected Point" else "Current"})",
+                text = strings.i18nPosRatioDetails(isPressed),
                 color = DiveColors.TextDim,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
@@ -494,7 +500,7 @@ private fun UnifiedPositionsCard(state: PositionsUiState) {
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text("Whale L/S Distribution (Position-Weighted)", color = DiveColors.TextMuted, fontSize = 11.sp)
+                    Text(strings.i18nPosWhaleDist, color = DiveColors.TextMuted, fontSize = 11.sp)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("L: ${posLong.format(1)}%", color = DiveColors.Green, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         Text("S: ${posShort.format(1)}%", color = DiveColors.Red, fontSize = 11.sp, fontWeight = FontWeight.Bold)
@@ -508,7 +514,7 @@ private fun UnifiedPositionsCard(state: PositionsUiState) {
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text("Account L/S Distribution (User Count)", color = DiveColors.TextMuted, fontSize = 11.sp)
+                    Text(strings.i18nPosAccountDist, color = DiveColors.TextMuted, fontSize = 11.sp)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("L: ${accLong.format(1)}%", color = DiveColors.Green, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         Text("S: ${accShort.format(1)}%", color = DiveColors.Red, fontSize = 11.sp, fontWeight = FontWeight.Bold)
@@ -525,12 +531,12 @@ private fun UnifiedPositionsCard(state: PositionsUiState) {
 
 @Composable
 private fun QuantSentimentGauge(score: Double) {
+    val strings = com.diveintocrypto.android.ui.i18n.LocalDiveStrings.current
+    // Neutral bias wording (Play policy): describes the score, never an order instruction.
     val text = when {
-        score >= 60.0 -> "STRONG BULL / STRONG BUY"
-        score >= 20.0 -> "BULLISH BIAS / BUY"
-        score > -20.0 -> "BALANCED / NEUTRAL"
-        score > -60.0 -> "BEARISH BIAS / SELL"
-        else -> "STRONG BEAR / STRONG SELL"
+        score >= 20.0 -> strings.biasLong
+        score <= -20.0 -> strings.biasShort
+        else -> strings.biasNone
     }
 
     val color = when {
@@ -554,7 +560,7 @@ private fun QuantSentimentGauge(score: Double) {
         ) {
             Column {
                 Text(
-                    text = "QUANTITATIVE MARKET DIRECTION SCORE (QUANT BIAS)",
+                    text = strings.i18nPosQuantBiasTitle,
                     color = DiveColors.TextMuted,
                     fontSize = 9.sp,
                     fontWeight = FontWeight.Bold,
@@ -734,15 +740,21 @@ private fun MiniValueCol(
 }
 
 @Composable
-private fun EmptyStateCard() {
-    DiveCard(title = "LOADING ANALYSIS") {
+private fun EmptyStateCard(loading: Boolean) {
+    val strings = com.diveintocrypto.android.ui.i18n.LocalDiveStrings.current
+    // Loading shows progress; a finished load with no series says so instead of spinning forever.
+    DiveCard(title = if (loading) strings.i18nPosLoadingAnalysis else strings.noData) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(100.dp),
             contentAlignment = Alignment.Center
         ) {
-            Text("Preparing data...", color = DiveColors.TextDim, fontSize = 12.sp)
+            Text(
+                text = if (loading) strings.posPreparing else strings.posNoDataYet,
+                color = DiveColors.TextDim,
+                fontSize = 12.sp,
+            )
         }
     }
 }
@@ -964,29 +976,49 @@ private fun getDeltaPct(values: List<Double>, index: Int): Double {
 private fun formatPrice(price: Double): String {
     return if (price >= 1000) {
         "$" + price.format(2, grouped = true)
-    } else {
+    } else if (price >= 1.0) {
         "$" + price.format(4)
+    } else {
+        // Sub-1 quotes keep 4 significant digits (0.00004 used to show as 0.0000).
+        "$" + price.format(sigDecimalsBelowOne(price, 4))
     }
 }
 
 @Composable
 private fun LoadingCard() {
-    DiveCard(title = "LOADING") {
-        Text("Fetching 3 series from the Binance public API...", color = DiveColors.TextMuted, fontSize = 12.sp)
+    val strings = com.diveintocrypto.android.ui.i18n.LocalDiveStrings.current
+    DiveCard(title = strings.cardLoading) {
+        Text(strings.i18nPosFetching3, color = DiveColors.TextMuted, fontSize = 12.sp)
     }
 }
 
 @Composable
-private fun ErrorCard(msg: String) {
-    Box(
+private fun ErrorCard(failure: MarketDataFailure, onRetry: () -> Unit) {
+    val strings = com.diveintocrypto.android.ui.i18n.LocalDiveStrings.current
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(DiveDims.Radius))
             .background(DiveColors.RedTint15)
             .border(1.dp, DiveColors.RedTint25, RoundedCornerShape(DiveDims.Radius))
             .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text("Error: $msg", color = DiveColors.Red, fontSize = 13.sp)
+        Text(failure.text(strings), color = DiveColors.Red, fontSize = 13.sp)
+        // A regional block cannot be fixed by retrying, so no retry control is offered for it.
+        if (failure !is MarketDataFailure.RegionBlocked) {
+            Text(
+                text = strings.btnRetry,
+                color = DiveColors.Accent,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = DiveFonts.body,
+                modifier = Modifier
+                    .semantics { role = Role.Button }
+                    .clickable(onClick = onRetry)
+                    .padding(vertical = 4.dp),
+            )
+        }
     }
 }
 
@@ -1003,6 +1035,7 @@ private fun HistoryTableCard(
     selectedIndex: Int?,
     onSelectIndex: (Int?) -> Unit
 ) {
+    val strings = com.diveintocrypto.android.ui.i18n.LocalDiveStrings.current
     val prices = state.closePrices
     val oi = state.openInterest
     val global = state.globalRatio
@@ -1014,10 +1047,10 @@ private fun HistoryTableCard(
 
     if (prices.isEmpty()) return
 
-    DiveCard(title = "HISTORICAL OI · L/S DATA TABLE") {
+    DiveCard(title = strings.i18nPosHistoricalTitle) {
         Column(modifier = Modifier.fillMaxWidth()) {
             Text(
-                text = "Historical Candle Data (${prices.size} Candles)",
+                text = strings.i18nPosCandleData(prices.size),
                 color = DiveColors.TextDim,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
@@ -1039,16 +1072,16 @@ private fun HistoryTableCard(
                             .padding(vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        TableHeaderCell("Time", 80.dp)
-                        TableHeaderCell("Price", 90.dp)
-                        TableHeaderCell("Open Int.", 85.dp)
-                        TableHeaderCell("Global L/S%", 80.dp)
-                        TableHeaderCell("Account L/S%", 80.dp)
-                        TableHeaderCell("Whale L/S%", 80.dp)
-                        TableHeaderCell("Taker L/S%", 80.dp)
-                        TableHeaderCell("Net Taker V.", 95.dp)
-                        TableHeaderCell("Funding", 85.dp)
-                        TableHeaderCell("Quant Bias", 85.dp)
+                        TableHeaderCell(strings.i18nPosColTime, 80.dp)
+                        TableHeaderCell(strings.i18nPosColPrice, 90.dp)
+                        TableHeaderCell(strings.i18nPosColOi, 85.dp)
+                        TableHeaderCell(strings.i18nPosColGlobal, 80.dp)
+                        TableHeaderCell(strings.i18nPosColAccount, 80.dp)
+                        TableHeaderCell(strings.i18nPosColWhale, 80.dp)
+                        TableHeaderCell(strings.i18nPosColTaker, 80.dp)
+                        TableHeaderCell(strings.i18nPosColNetTaker, 95.dp)
+                        TableHeaderCell(strings.i18nPosColFunding, 85.dp)
+                        TableHeaderCell(strings.i18nPosColBias, 85.dp)
                     }
 
                     // Table rows (Newest to oldest)
@@ -1067,7 +1100,7 @@ private fun HistoryTableCard(
                                 Color.Transparent
                             }
                             
-                            val timeStr = oi.getOrNull(i)?.timestamp?.let { formatTime(it, state.period) } ?: ""
+                            val timeStr = oi.getOrNull(i)?.timestamp?.let { candleTimeLabel(it, state.period) } ?: ""
                             val priceStr = prices.getOrNull(i)?.let { formatPrice(it) } ?: ""
                             val oiVal = oi.getOrNull(i)?.sumOpenInterestValue ?: 0.0
                             val oiStr = formatBig(oiVal)
@@ -1190,7 +1223,9 @@ private fun LongShortPctCell(longPct: Double, width: Dp) {
     }
 }
 
-private fun formatTime(timestamp: Long, period: String): String {
+// Named differently from the platform formatTime(ms, pattern): an explicit import would
+// otherwise win over this same-package helper and receive the period string as a pattern.
+private fun candleTimeLabel(timestamp: Long, period: String): String {
     val pattern = if (period.endsWith("d")) "dd/MM" else "dd/MM HH:mm"
     return com.diveintocrypto.android.platform.formatTime(timestamp, pattern)
 }

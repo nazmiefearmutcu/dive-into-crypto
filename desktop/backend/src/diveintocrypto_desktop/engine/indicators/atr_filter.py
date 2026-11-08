@@ -1,8 +1,6 @@
 """ATR (Average True Range) risk filter indicator."""
 
-from typing import Any
 import pandas as pd
-import numpy as np
 
 from diveintocrypto_desktop.engine.indicators.base import BaseIndicator, IndicatorResult, Signal
 
@@ -11,7 +9,7 @@ class ATRFilterIndicator(BaseIndicator):
     """ATR as a volatility/risk filter - does not generate directional signals.
 
     Instead, it provides risk context:
-    - High ATR = high volatility = reduce position size or avoid trading
+    - High ATR = high volatility = wide ranges (risk elevated)
     - Normal ATR = standard conditions
     - Low ATR = low volatility = potential breakout ahead
     """
@@ -42,31 +40,54 @@ class ATRFilterIndicator(BaseIndicator):
 
         atr_pct = (current_atr / current_price) * 100.0
         atr_mean = atr.rolling(window=period * 3).mean().iloc[-1]
-        atr_ratio = current_atr / atr_mean if not pd.isna(atr_mean) and atr_mean != 0 else 1.0
+
+        # Without a full 3x-period baseline there is no volatility regime. Do not default
+        # the ratio to 1.0 (that reads as "normal" and fabricates a result).
+        if pd.isna(atr_mean) or atr_mean == 0:
+            return self._make_result(
+                Signal.NEUTRAL,
+                f"ATR={current_atr:.2f} ({atr_pct:.2f}%) baseline warming up",
+                {
+                    "atr": round(current_atr, 4),
+                    "atr_pct": round(atr_pct, 4),
+                    "atr_ratio": None,
+                    "volatility": "UNKNOWN",
+                },
+            )
+
+        atr_ratio = current_atr / atr_mean
+
+        # One set of cutoffs drives the label, the reason text and the risk factor.
+        if atr_ratio > high_vol_multiplier:
+            volatility = "HIGH"
+        elif atr_ratio < 0.5:
+            volatility = "LOW"
+        else:
+            volatility = "NORMAL"
 
         raw = {
             "atr": round(current_atr, 4),
             "atr_pct": round(atr_pct, 4),
             "atr_ratio": round(atr_ratio, 4),
-            "volatility": "HIGH" if atr_ratio > high_vol_multiplier else "NORMAL" if atr_ratio > 0.8 else "LOW",
+            "volatility": volatility,
         }
 
-        # ATR is always NEUTRAL for direction - it's a risk filter
-        if atr_ratio > high_vol_multiplier:
+        # ATR is always NEUTRAL for direction - it's a risk filter. The reason text
+        # describes the volatility only: no sizing or trading advice.
+        if volatility == "HIGH":
             return self._make_result(
                 Signal.NEUTRAL,
-                f"ATR={current_atr:.2f} ({atr_pct:.2f}%) HIGH volatility - risk elevated, reduce position",
+                f"High ATR volatility ({atr_ratio:.1f}x average) — wide ranges",
                 raw,
             )
-        elif atr_ratio < 0.5:
+        if volatility == "LOW":
             return self._make_result(
                 Signal.NEUTRAL,
-                f"ATR={current_atr:.2f} ({atr_pct:.2f}%) LOW volatility - potential breakout watch",
+                f"Low ATR volatility ({atr_ratio:.1f}x average) — narrow ranges",
                 raw,
             )
-        else:
-            return self._make_result(
-                Signal.NEUTRAL,
-                f"ATR={current_atr:.2f} ({atr_pct:.2f}%) normal volatility",
-                raw,
-            )
+        return self._make_result(
+            Signal.NEUTRAL,
+            f"ATR={current_atr:.2f} ({atr_pct:.2f}%) normal volatility",
+            raw,
+        )

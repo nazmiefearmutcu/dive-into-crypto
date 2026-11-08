@@ -30,6 +30,22 @@ def test_net_nss_sell_dominant():
     assert dom == -1  # 90²·95/100 = 7695 > 40²·58/100 = 928
 
 
+def test_net_nss_all_neutral_is_not_a_long_bet():
+    """No winning side → dominantDir 0 (was +1, so NEUTRAL rows were graded as LONG)."""
+    multi = [{"tf": "1d", "signal": "NEUTRAL", "confidence": 0},
+             {"tf": "1h", "signal": "NEUTRAL", "confidence": 0}]
+    assert scanner.net_nss(multi) == (0, 0.0)
+
+
+def test_net_nss_exact_tie_is_neutral():
+    multi = [{"tf": "1h", "signal": "BUY", "confidence": 50},
+             {"tf": "1h", "signal": "SELL", "confidence": 50}]
+    dom, nss = scanner.net_nss(multi)
+    assert dom == 0
+    # a tie carries no weight: a positive netNss would rank a no-call row as a bet
+    assert nss == 0.0
+
+
 def test_rank_score_blends_divergence():
     row = {"netNss": 50.0, "dominantDir": 1, "divergence": {"score": 20.0}}
     # norm = 50/100*100 = 50 ; aligned div = 20*1 ; +0.35*20 = 7 → 57

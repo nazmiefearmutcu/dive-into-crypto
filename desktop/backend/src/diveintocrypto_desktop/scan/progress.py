@@ -20,6 +20,9 @@ _RATE_WINDOW = 15.0
 _MAX_SAMPLES = 32
 # Registry cap: enough to watch several scans, small enough to never grow.
 _MAX_RECORDS = 32
+# A "running" record older than this was abandoned (e.g. its request was cancelled
+# before the failure path ran) and may be evicted like a finished one.
+_STALE_RUNNING_S = 3600.0
 
 
 def _iso(ts: float) -> str:
@@ -114,20 +117,28 @@ class ScanProgress:
 
 
 _registry: dict[str, ScanProgress] = {}
-_order: deque[str] = deque(maxlen=_MAX_RECORDS)
+# No maxlen: a silent deque drop would leave the id in _registry forever. Eviction
+# is explicit below, keeping _order and _registry in step.
+_order: deque[str] = deque()
+
+
+def _evictable(rec: ScanProgress | None) -> bool:
+    if rec is None or rec.status != "running":
+        return True
+    return time.time() - rec.started_at > _STALE_RUNNING_S
 
 
 def start(meta: dict | None = None, scan_id: str | None = None) -> ScanProgress:
     rec = ScanProgress(scan_id=scan_id, meta=meta)
     _registry[rec.scan_id] = rec
     _order.appendleft(rec.scan_id)
-    # prune finished records beyond the cap (drop oldest first)
-    while len(_order) >= _MAX_RECORDS:
-        oldest = _order[-1]
-        if _registry[oldest].status == "running":
-            break  # never evict a running scan
-        _registry.pop(oldest, None)
-        _order.pop()
+    # prune the oldest evictable records beyond the cap; a live scan is never evicted
+    while len(_order) > _MAX_RECORDS:
+        victim = next((sid for sid in reversed(_order) if _evictable(_registry.get(sid))), None)
+        if victim is None:
+            break
+        _order.remove(victim)
+        _registry.pop(victim, None)
     return rec
 
 

@@ -3,9 +3,12 @@
 Classic two-bar reversal pattern. The current bar's REAL BODY (|close - open|)
 fully engulfs the prior bar's body, and the two bars have opposite colours:
 
-    bullish: current close > open, prior close < open,
-             open_cur <= open_prior AND close_cur >= close_prior
-    bearish: mirrored (current red engulfs prior green body)
+    bullish: prior red (close_prev < open_prev) and current green
+             (close_cur > open_cur), with the current body containing the
+             prior body: open_cur <= close_prev AND close_cur >= open_prev
+    bearish: prior green (close_prev > open_prev) and current red
+             (close_cur < open_cur), with the current body containing the
+             prior body: open_cur >= close_prev AND close_cur <= open_prev
 
 Strength grading: the pattern is STRONG when the engulfing candle's body
 carves out most of its total range (body / (high - low) >= `body_ratio`,
@@ -54,8 +57,9 @@ class EngulfingIndicator(BaseIndicator):
             "strong_ratio": body_ratio_min,
         }
 
-        bullish = c_cur > o_cur and c_prev < o_prev and o_cur <= o_prev and c_cur >= c_prev
-        bearish = c_cur < o_cur and c_prev > o_prev and o_cur >= o_prev and c_cur <= c_prev
+        # Body containment: the current real body must cover the prior real body.
+        bullish = c_cur > o_cur and c_prev < o_prev and o_cur <= c_prev and c_cur >= o_prev
+        bearish = c_cur < o_cur and c_prev > o_prev and o_cur >= c_prev and c_cur <= o_prev
         strong = body_cur > body_prev and ratio >= body_ratio_min
 
         if bullish:

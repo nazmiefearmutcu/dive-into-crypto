@@ -29,6 +29,7 @@ object ChartMath {
         bbUpper: List<Double?> = emptyList(),
         bbLower: List<Double?> = emptyList(),
         padFraction: Double = 0.06,
+        overlays: List<List<Double?>> = emptyList(),
     ): ChartRange {
         var min = Double.MAX_VALUE
         var max = -Double.MAX_VALUE
@@ -36,7 +37,9 @@ object ChartMath {
             if (c.low.isFinite()) min = minOf(min, c.low)
             if (c.high.isFinite()) max = maxOf(max, c.high)
         }
-        for (series in listOf(bbUpper, bbLower)) {
+        // Every drawn line (Bollinger, EMA overlays…) must lie inside the viewport:
+        // EMAs lag a trend, so they can sit beyond the candles' own low/high.
+        for (series in listOf(bbUpper, bbLower) + overlays) {
             for (v in series) {
                 if (v != null && v.isFinite()) {
                     min = minOf(min, v)

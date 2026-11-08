@@ -35,7 +35,9 @@ class LinRegSlopeIndicator(BaseIndicator):
         ss_tot = float(((y - y.mean()) ** 2).sum())
         r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
         mean = y.mean() or 1.0
-        slope_pct = float(slope) * period / mean  # total % move implied over the window
+        # x runs 0..period-1, so the fitted line moves slope*(period-1) from the first to the
+        # last window point: the first-to-last % move over the window.
+        slope_pct = float(slope) * (period - 1) / mean
         raw = {"slope_pct": round(slope_pct, 5), "r2": round(r2, 4)}
 
         if r2 < r2_min:

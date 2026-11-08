@@ -6,7 +6,8 @@ package com.diveintocrypto.android.domain.divergence
  * Both series are in epoch-ms at the same period resolution; Binance stamps both the kline
  * `openTime` and the futures-data `timestamp` at the START of the period →
  * `t / periodMs` drops the same period into the same bucket. Missing L/S buckets are
- * forward-filled; candles before the L/S data starts are skipped.
+ * forward-filled for at most [MAX_FORWARD_FILL_PERIODS] periods; candles before the
+ * L/S data starts, and candles further past the last real L/S bucket, are skipped.
  *
  * Pure + independent of data-layer types (takes parallel arrays) → directly testable in
  * commonTest with synthetic timestamps. (This logic used to be inline inside
@@ -14,6 +15,14 @@ package com.diveintocrypto.android.domain.divergence
  * the highest-risk fix was untested.)
  */
 object DivergenceAlignment {
+
+    /**
+     * Longest run of periods a whale L/S value may be carried forward. Candles
+     * further than this past the last real L/S bucket are dropped instead of
+     * being scored with a stale value (a feed that stopped must not keep
+     * contributing its last reading).
+     */
+    const val MAX_FORWARD_FILL_PERIODS: Long = 3L
 
     data class Result(
         val price: List<Double>,
@@ -32,6 +41,8 @@ object DivergenceAlignment {
      * @param lsTimes    whale-L/S timestamps (ms)
      * @param lsVals     whale-L/S ratios (same length as lsTimes)
      * @param periodMs   TF period duration (ms); ≤0 → empty result
+     * @param maxForwardFillPeriods longest gap (in periods) bridged by forward-fill;
+     *        candles past it, after the last real L/S bucket, are dropped
      */
     fun align(
         priceTimes: List<Long>,
@@ -39,6 +50,7 @@ object DivergenceAlignment {
         lsTimes: List<Long>,
         lsVals: List<Double>,
         periodMs: Long,
+        maxForwardFillPeriods: Long = MAX_FORWARD_FILL_PERIODS,
     ): Result {
         if (periodMs <= 0L) return Result.EMPTY
         val n = minOf(priceTimes.size, priceVals.size)
@@ -51,14 +63,16 @@ object DivergenceAlignment {
         val price = ArrayList<Double>(n)
         val whale = ArrayList<Double>(n)
         var lastWhale = Double.NaN
+        var lastBucket = 0L
         var matched = 0
         for (i in 0 until n) {
-            val w = lsByBucket[priceTimes[i] / periodMs]
-            if (w != null) { lastWhale = w; matched++ }
-            if (!lastWhale.isNaN()) { // skip candles before the L/S data starts
-                price.add(priceVals[i])
-                whale.add(lastWhale)
-            }
+            val bucket = priceTimes[i] / periodMs
+            val w = lsByBucket[bucket]
+            if (w != null) { lastWhale = w; lastBucket = bucket; matched++ }
+            if (lastWhale.isNaN()) continue                           // before the L/S data starts
+            if (bucket - lastBucket > maxForwardFillPeriods) continue // L/S feed stale: no value to carry
+            price.add(priceVals[i])
+            whale.add(lastWhale)
         }
         return Result(price, whale, matched)
     }

@@ -50,11 +50,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.diveintocrypto.android.AppContainer
+import com.diveintocrypto.android.domain.portfolio.PortfolioStore
 import com.diveintocrypto.android.domain.portfolio.PositionPnl
 import com.diveintocrypto.android.platform.format
 import com.diveintocrypto.android.ui.common.UiLabels
 import com.diveintocrypto.android.ui.panel.components.DiveCard
 import com.diveintocrypto.android.ui.panel.components.PageHeader
+import com.diveintocrypto.android.ui.performance.sigDecimalsBelowOne
 import com.diveintocrypto.android.ui.theme.DiveColors
 import com.diveintocrypto.android.ui.theme.DiveDims
 import com.diveintocrypto.android.ui.theme.DiveFonts
@@ -90,6 +92,8 @@ fun PortfolioScreen(container: AppContainer) {
     val complete = pnl.filter { it.unrealizedPnl != null }
     val incompleteCount = pnl.size - complete.size
     val totalPnl = complete.sumOf { it.unrealizedPnl ?: 0.0 }
+    // The store refuses adds beyond MAX_ENTRIES (addPortfolioEntry returns null there).
+    val atCap = pnl.size >= PortfolioStore.MAX_ENTRIES
 
     Column(
         modifier = Modifier
@@ -141,25 +145,36 @@ fun PortfolioScreen(container: AppContainer) {
                 AccentCta(label = strings.btnAddPosition, onClick = { showAddSheet = true })
             }
         } else {
+            // At the store cap the Add control is disabled and says why (the store refuses the add).
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(10.dp))
-                    .background(DiveColors.Accent)
+                    .background(if (atCap) DiveColors.BgCardHover else DiveColors.Accent)
                     .semantics {
                         role = Role.Button
                         contentDescription = strings.a11yAddPosition
+                        stateDescription = if (atCap) strings.stateDisabled else strings.stateAddable
                     }
-                    .clickable { showAddSheet = true }
+                    .clickable(enabled = !atCap) { showAddSheet = true }
                     .padding(vertical = 13.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
                     text = "+ ${strings.btnAddPosition}",
-                    color = MaterialTheme.colorScheme.onPrimary,
+                    color = if (atCap) DiveColors.TextDim else MaterialTheme.colorScheme.onPrimary,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 1.sp,
+                    fontFamily = DiveFonts.body,
+                )
+            }
+            if (atCap) {
+                Text(
+                    text = strings.b2PortfolioCapReached(PortfolioStore.MAX_ENTRIES),
+                    color = DiveColors.Warn,
+                    fontSize = 11.sp,
+                    lineHeight = 15.sp,
                     fontFamily = DiveFonts.body,
                 )
             }
@@ -438,7 +453,8 @@ private object ChartDecimals {
     fun forPrice(price: Double): Int = when {
         price >= 1000.0 -> 2
         price >= 1.0 -> 3
-        else -> 5
+        // Significant digits below 1, so 0.0000123 is not shown as 0.00001.
+        else -> sigDecimalsBelowOne(price, 5)
     }
 }
 
@@ -467,13 +483,22 @@ private fun PortfolioEntrySheet(
     var direction by remember {
         mutableStateOf(existing?.entry?.direction ?: com.diveintocrypto.android.domain.portfolio.PortfolioEntry.DIRECTION_LONG)
     }
-    var entryPriceText by remember { mutableStateOf(existing?.entry?.entryPrice?.format(ChartDecimals.forPrice(existing.entry.entryPrice)) ?: "") }
-    var sizeText by remember { mutableStateOf(existing?.entry?.size?.format(SizeDecimals.forSize(existing.entry.size)) ?: "") }
+    // Prefill keeps full precision; the initial texts tell an untouched field from an edited one.
+    val initialEntryText = remember { existing?.entry?.entryPrice?.let { PortfolioNumbers.editableText(it) } ?: "" }
+    val initialSizeText = remember { existing?.entry?.size?.let { PortfolioNumbers.editableText(it) } ?: "" }
+    var entryPriceText by remember { mutableStateOf(initialEntryText) }
+    var sizeText by remember { mutableStateOf(initialSizeText) }
 
     val livePrice = tickers[symbol.uppercase()]?.price
-    val parsedEntry = AlertNum.parsePrice(entryPriceText)
-    val parsedSize = AlertNum.parsePrice(sizeText)
-    val symbolOk = symbol.isNotBlank()
+    val parsedEntry = PortfolioNumbers.parseUserNumber(entryPriceText)
+    val parsedSize = PortfolioNumbers.parseUserNumber(sizeText)
+    // Add: USDT-M symbols only, and only ones the live ticker universe lists once it has loaded.
+    // Edit: the symbol is immutable, so a stored position stays editable even if it is not listed.
+    val symbolOk = isEdit || (
+        symbol.length > 4 &&
+            symbol.endsWith("USDT") &&
+            (tickers.isEmpty() || tickers.containsKey(symbol.uppercase()))
+        )
     val entryOk = parsedEntry != null && parsedEntry > 0.0
     val sizeOk = parsedSize != null && parsedSize > 0.0
     val canSave = symbolOk && entryOk && sizeOk
@@ -552,6 +577,14 @@ private fun PortfolioEntrySheet(
                         fontFamily = DiveFonts.body,
                     )
                 }
+                if (!isEdit && symbol.isNotBlank() && !symbolOk) {
+                    Text(
+                        text = strings.portSymbolInvalid,
+                        color = DiveColors.Red,
+                        fontSize = 10.sp,
+                        fontFamily = DiveFonts.body,
+                    )
+                }
             }
 
             // ── Direction chips ───────────────────────────────────────
@@ -604,7 +637,9 @@ private fun PortfolioEntrySheet(
                 value = entryPriceText,
                 onValueChange = { entryPriceText = it },
                 valid = entryOk,
-                hint = if (entryOk) null else strings.hintPositiveNumber,
+                hint = if (entryOk) null
+                    else if (AmbiguousNumber.matches(entryPriceText)) strings.portAmbiguousNumber
+                    else strings.hintPositiveNumber,
                 trailing = livePrice?.let {
                     {
                         Text(
@@ -615,7 +650,7 @@ private fun PortfolioEntrySheet(
                             fontFamily = DiveFonts.body,
                             modifier = Modifier
                                 .clip(RoundedCornerShape(6.dp))
-                                .clickable { entryPriceText = it.format(ChartDecimals.forPrice(it)) }
+                                .clickable { entryPriceText = PortfolioNumbers.editableText(it) }
                                 .padding(horizontal = 6.dp, vertical = 2.dp),
                         )
                     }
@@ -628,7 +663,9 @@ private fun PortfolioEntrySheet(
                 value = sizeText,
                 onValueChange = { sizeText = it },
                 valid = sizeOk,
-                hint = if (sizeOk) null else strings.hintPositiveSize,
+                hint = if (sizeOk) null
+                    else if (AmbiguousNumber.matches(sizeText)) strings.portAmbiguousNumber
+                    else strings.hintPositiveSize,
                 trailing = null,
             )
 
@@ -652,8 +689,9 @@ private fun PortfolioEntrySheet(
                         if (isEdit) {
                             container.updatePortfolioEntry(
                                 id = existing!!.entry.id,
-                                entryPrice = parsedEntry,
-                                size = parsedSize,
+                                // Only fields the user changed are written; untouched values keep their stored precision.
+                                entryPrice = if (entryPriceText == initialEntryText) null else parsedEntry,
+                                size = if (sizeText == initialSizeText) null else parsedSize,
                                 direction = direction.uppercase(),
                             )
                         } else {
@@ -736,13 +774,3 @@ private fun NumberFieldRow(
     }
 }
 
-/** Shared number parsing for the sheet (same rules as the alert thresholds). */
-private object AlertNum {
-    fun parsePrice(raw: String): Double? {
-        val cleaned = raw.trim().replace(',', '.')
-        if (cleaned.isEmpty()) return null
-        val v = cleaned.toDoubleOrNull() ?: return null
-        if (v.isNaN() || v.isInfinite()) return null
-        return v
-    }
-}

@@ -10,3 +10,10 @@ import androidx.compose.runtime.Composable
  */
 @Composable
 expect fun rememberBackgroundScanSync(): () -> Unit
+
+/**
+ * true while the most recent background-scan sync (see [rememberBackgroundScanSync]) failed,
+ * so Settings can say the scan may not run instead of showing a silent "ON". Recomposes on change.
+ */
+@Composable
+expect fun rememberBackgroundScanSyncFailed(): Boolean

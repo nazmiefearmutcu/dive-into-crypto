@@ -24,8 +24,9 @@ Formula
 
 Trigger (per Dorsey):
     a "reversal bulge" fired when MI climbed to >= bulge_threshold somewhere in
-    the recent lookback window and has since fallen back below setback_threshold
-    on the current (closed) bar.
+    the recent lookback window and crossed back down through setback_threshold on
+    the current (closed) bar (previous bar at/above, current bar below). The event
+    fires once; it does not persist while MI stays below the setback level.
 
 Direction filter:
     trend = sign( EMA(close, dir_ema_period)[-1] - EMA(close, dir_ema_period)[-1-dir_lookback] )
@@ -103,9 +104,12 @@ class MassIndexIndicator(BaseIndicator):
         recent = mi_valid.iloc[-lookback:]
         bulge_peak = float(recent.max())
 
-        # Reversal trigger: bulge occurred (peak >= threshold) AND the index has
-        # since retreated below the setback level on the current closed bar.
-        triggered = (bulge_peak >= bulge_threshold) and (mi_last < setback_threshold)
+        # Reversal trigger is an EVENT: the index crossed down through the setback level
+        # on the current closed bar (previous bar at/above, current below), and a bulge
+        # occurred in the lookback window. A level test would keep voting for ~25 bars.
+        mi_prev = float(mi_valid.iloc[-2])
+        setback_now = mi_prev >= setback_threshold and mi_last < setback_threshold
+        triggered = (bulge_peak >= bulge_threshold) and setback_now
         strong_bulge = bulge_peak >= strong_bulge_threshold
 
         # Direction filter: slope of a short EMA of close, looking strictly back.

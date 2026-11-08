@@ -170,6 +170,54 @@ test("data-source-unavailable state names the failure instead of inventing data"
   );
   assert.ok(html.includes('data-testid="source-unavailable"'));
   assert.ok(html.includes("DATA SOURCE UNAVAILABLE"), "must say the source is unavailable");
-  assert.ok(html.includes("451"), "must surface the underlying error");
+  assert.ok(/bölgesel kısıtlama|regional restriction/.test(html), "a 451 is explained in words");
+  assert.ok(!/→|451/.test(html), "the raw path → status text must not reach the screen");
   assert.ok(!/68240|STRONG_BUY/.test(html), "must not contain any fabricated market value");
+});
+
+/* ── 6. a live poll cannot overwrite the manual DIVE_MOCK fixture ───────────── */
+test("live polls cannot overwrite the DIVE_MOCK fixture under the DEMO banner", async () => {
+  const app = await loadApp();
+  window.DIVE_MOCK();
+  const demoSurvivors = window.SGS_SCAN.survivors.length;
+  assert.ok(demoSurvivors > 0, "fixture must provide survivors");
+
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: true, status: 200,
+    json: async () => ({
+      survivors: [{ s: "LIVEUSDT", netNss: 1, divergence: { score: 0 }, whaleRegime: "neutral" }],
+      eliminated: [], scanned: 12, scannedCount: 1, universeCount: 1,
+    }),
+  });
+  try {
+    await window.DIVE.scan(15, 24);
+    await window.DIVE.logs();
+    await window.DIVE.universe(60);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+
+  // the banner says every value is fabricated, so every value on screen must still be the fixture
+  assert.equal(app.isDemo(), true, "demo flag stays on");
+  assert.equal(document.documentElement.getAttribute("data-demo"), "1");
+  assert.equal(window.SGS_SCAN._demo, true, "scan stays the fixture");
+  assert.equal(window.SGS_SCAN.survivors.length, demoSurvivors);
+  assert.ok(window.SGS_SCAN.survivors.every((r) => r.d && r.d._demo === true), "every survivor is marked");
+  assert.equal(window.SGS_DATA_MAP.LIVEUSDT, undefined, "no live row may enter the map");
+  assert.ok(Object.values(window.SGS_DATA_MAP).every((r) => r._demo === true), "every map row is marked");
+  assert.ok(window.SGS_LOGS.every((l) => String(l.msg).startsWith("[DEMO]")), "logs stay the fixture");
+});
+
+/* ── 7. fixture survivors use the same divergence contract as live rows ──────── */
+test("DIVE_MOCK survivors carry the same div contract as live rows", async () => {
+  await loadApp();
+  window.DIVE_MOCK();
+  for (const row of window.SGS_SCAN.survivors) {
+    assert.ok(row.div, `${row.d.s} must carry div`);
+    assert.equal(typeof row.div.verdict, "string");
+    assert.equal(typeof row.div.wf, "number");
+    assert.equal(typeof row.div.reason, "string");
+    assert.equal(typeof row.rank, "number");
+  }
 });

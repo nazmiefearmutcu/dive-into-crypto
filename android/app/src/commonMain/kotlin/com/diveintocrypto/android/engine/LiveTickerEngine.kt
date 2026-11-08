@@ -5,17 +5,25 @@ import com.diveintocrypto.android.data.binance.BinanceFuturesClient
 import com.diveintocrypto.android.data.binance.BinanceSpotClient
 import com.diveintocrypto.android.data.binance.BinanceWsClient
 import com.diveintocrypto.android.data.binance.Ticker24h
+import com.diveintocrypto.android.data.binance.isRegionBlocked
 import com.diveintocrypto.android.platform.logError
 import com.diveintocrypto.android.platform.nowMillis
 import com.diveintocrypto.android.platform.synchronized
 import kotlinx.atomicfu.locks.SynchronizedObject
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -28,6 +36,7 @@ import kotlinx.coroutines.launch
  *   - REST: `/ticker/24hr` (all) every 60s supplies the 24h change% (the mini
  *     ticker wire payload carries no change% — we never derive/fake it).
  *   - Source setting respected: FUTURES → fstream + fapi, SPOT → stream.binance + api.
+ *     Changing the setting restarts both feeds and drops the previous venue's rows.
  *
  * HONESTY: nothing is synthesized. While the socket is down the last REAL values
  * stay in the map and [isStale] / [dataAgeMs] say so.
@@ -63,42 +72,79 @@ class LiveTickerEngine(
     @Volatile private var started = false
     @Volatile private var lastStreamTickMs = 0L
 
+    // The two feeds are restartable: a data-source change must re-point BOTH at the new venue.
+    private var streamJob: Job? = null
+    private var restJob: Job? = null
+
     /** Idempotent — the engine is app-scoped; first caller wins. */
     fun ensureStarted() {
         synchronized(startLock) {
             if (started) return
             started = true
         }
-        startStream()
-        startRestRefresh()
+        startFeeds()
+        startSourceWatch()
         startStalenessWatchdog()
     }
 
     private fun wsBaseUrl(): String =
         if (settingsStore.getSettings().wsDataSource == "SPOT") SPOT_WS_URL else FUTURES_WS_URL
 
-    private fun startStream() {
-        scope.launch {
-            ws.reconnectingMiniTickerStream(customBaseUrl = wsBaseUrl()).collect { batch ->
-                lastStreamTickMs = nowMillis()
-                _tickers.update { mergeStream(it, batch, nowMillis()) }
-            }
+    /** Starts the price stream and the 60s REST refresh, both for the venue the setting names now. */
+    private fun startFeeds() {
+        streamJob = scope.launch {
+            ws.reconnectingMiniTickerStream(customBaseUrl = wsBaseUrl())
+                .catch { e ->
+                    if (e is CancellationException) throw e
+                    // Only a regional block (HTTP 451) reaches here: transient failures are retried inside
+                    // the flow. The stream stops for good; the staleness watchdog marks the prices stale.
+                    logError("LiveTickerEngine", "price stream stopped: ${e.message}", e)
+                }
+                .collect { batch ->
+                    lastStreamTickMs = nowMillis()
+                    _tickers.update { mergeStream(it, batch, nowMillis()) }
+                }
         }
-    }
-
-    private fun startRestRefresh() {
-        scope.launch {
+        restJob = scope.launch {
             while (true) {
                 try {
                     val useSpot = settingsStore.getSettings().wsDataSource == "SPOT"
                     val rest = if (useSpot) spot.ticker24hAll() else futures.ticker24hAll()
                     _tickers.update { mergeRest(it, rest, nowMillis()) }
+                } catch (e: CancellationException) {
+                    throw e // a venue switch cancels this loop; that is not a refresh failure
                 } catch (t: Throwable) {
+                    if (t.isRegionBlocked()) {
+                        // A regional block (HTTP 451) will not clear by retrying: stop polling.
+                        logError("LiveTickerEngine", "24h ticker refresh stopped: region blocked", t)
+                        return@launch
+                    }
                     // Honest: keep the last real values; retry on the next cycle.
                     logError("LiveTickerEngine", "24h ticker refresh failed: ${t.message}", t)
                 }
                 delay(REST_REFRESH_INTERVAL_MS)
             }
+        }
+    }
+
+    /**
+     * Re-points the feeds when the venue setting changes. The old rows came from the other
+     * venue (a fstream price next to a spot 24h change%, say), so they are dropped and the
+     * feeds restart from scratch.
+     */
+    private fun startSourceWatch() {
+        scope.launch {
+            settingsStore.settingsState
+                .map { it.wsDataSource }
+                .distinctUntilChanged()
+                .drop(1) // the value the feeds were started with is not a change
+                .collect {
+                    streamJob?.cancelAndJoin()
+                    restJob?.cancelAndJoin()
+                    lastStreamTickMs = 0L
+                    _tickers.value = emptyMap()
+                    startFeeds()
+                }
         }
     }
 
@@ -149,8 +195,10 @@ class LiveTickerEngine(
 
         /**
          * PURE: fold the 60s REST all-ticker snapshot over the current map.
-         * REST never clobbers a fresher WS price — it only supplies the 24h
-         * change% (and the initial price for symbols the stream hasn't ticked yet).
+         * A FRESH WS price wins: REST only supplies the 24h change% (and the initial
+         * price for symbols the stream hasn't ticked yet). A WS price older than
+         * [STALE_AFTER_MS] is no longer the current price (the socket is down), so the
+         * REST price replaces it and is labelled as REST.
          */
         fun mergeRest(
             existing: Map<String, LiveTicker>,
@@ -163,7 +211,8 @@ class LiveTickerEngine(
                 val cur = out[r.symbol]
                 out[r.symbol] = when {
                     cur == null -> LiveTicker(r.symbol, r.lastPrice, r.priceChangePercent, nowMs, "REST")
-                    cur.source == "WS" -> cur.copy(changePercent = r.priceChangePercent)
+                    cur.source == "WS" && nowMs - cur.ts <= STALE_AFTER_MS ->
+                        cur.copy(changePercent = r.priceChangePercent)
                     else -> cur.copy(price = r.lastPrice, changePercent = r.priceChangePercent, ts = nowMs, source = "REST")
                 }
             }

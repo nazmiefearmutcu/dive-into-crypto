@@ -42,6 +42,9 @@ class Params:
     w_funding_accel: float = 0.6
 
 
+DEFAULT_PARAMS = Params()  # frozen: one shared default instead of a per-call Params()
+
+
 # ── small numeric helpers (stdlib only) ──────────────────────────────────────
 def _clean(x: list[float] | None) -> list[float]:
     if not x:
@@ -217,7 +220,7 @@ _SIGNALS = (
 )
 
 
-def evaluate(series_data: dict, enabled: bool = True, params: Params = Params()) -> dict:
+def evaluate(series_data: dict, enabled: bool = True, params: Params = DEFAULT_PARAMS) -> dict:
     """Run the microstructure signal bundle over ``series_data``.
 
     Returns ``{score, direction, label, active, signals:[{name,score,reason,weight}]}``.

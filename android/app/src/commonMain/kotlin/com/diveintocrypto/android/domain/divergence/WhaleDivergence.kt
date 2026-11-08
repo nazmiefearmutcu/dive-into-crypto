@@ -23,7 +23,7 @@ import kotlin.math.sign
  * (cross-sectional IC < 0 over 3197 Binance observations; and when the sign was flipped
  * to +1, live regression accuracy DROPPED). So:
  *   • price ↑ + whale L/S ↓ (whales SELLING into a rally) ⇒ patternDirection=−1,
- *     but price has historically CONTINUED upward ⇒ direction = −1×−1 = **+1**
+ *     the contrarian reading ranks it UP (a research hypothesis, not a forecast) ⇒ direction = −1×−1 = **+1**
  *     (ranks UP; NOT eliminated when the indicator is BUY).
  *   • price ↓ + whale L/S ↑ (accumulation) ⇒ patternDirection=+1 ⇒ direction = **−1**.
  *   • same direction (whale follows price) → NO divergence (0).
@@ -72,8 +72,8 @@ object WhaleDivergence {
          * **PREDICTIVE SIGN MULTIPLIER** — `direction = patternDirection × whalePredictiveSign`.
          *   • `-1` (default) = **EMPIRICAL CONTRARIAN**: top-trader L/S came out contrarian
          *     (cross-sectional IC < 0 over 3197 Binance observations; live regression accuracy
-         *     dropped when flipped to +1). If the whale sells into a rally, price has historically
-         *     continued upward → that coin ranks UP, not eliminated.
+         *     dropped when flipped to +1). If the whale sells into a rally, the contrarian reading
+         *     ranks that coin UP rather than eliminating it.
          *   • `+1` = "follow the whales" (smart-money) interpretation — NOT supported by the data;
          *     kept only for research/comparison. Do NOT use in production.
          * Magnitude (weighted sum) is NOT affected by this multiplier — only the sign changes.
@@ -153,7 +153,7 @@ object WhaleDivergence {
         val patternDirection = if (whaleD < 0.0) -1 else 1
         // SINGLE SIGN FLIP (AT THE SOURCE): predictive/ranking sign = raw pattern × contrarian
         // multiplier. whalePredictiveSign = -1 (default) ⇒ EMPIRICAL CONTRARIAN: if the whale sells
-        // into a rally (patternDirection=-1), price has historically continued upward ⇒ direction=+1.
+        // into a rally (patternDirection=-1), the contrarian reading gives direction=+1 (research hypothesis, not a forecast).
         val direction = patternDirection * params.whalePredictiveSign
 
         // Magnitude: both axes are saturated to [0,1]. COMBINATION = WEIGHTED SUM (NOT a product).

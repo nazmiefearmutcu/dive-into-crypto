@@ -2,13 +2,16 @@
 logged with the reason — never silently folded into universeCount.
 """
 
-import asyncio
 import logging
 from unittest.mock import patch
 
 import pytest
 
 from diveintocrypto_desktop.scan import scanner
+
+# scan() must stay offline: every test here runs with real HTTP blocked and the
+# market-extras / BTC candle lookups stubbed (see conftest.offline_scan_market).
+pytestmark = pytest.mark.usefixtures("offline_scan_market")
 
 
 def _tiny_candles(n: int = 5) -> list[dict]:

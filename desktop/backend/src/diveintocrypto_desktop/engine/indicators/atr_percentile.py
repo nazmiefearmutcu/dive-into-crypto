@@ -48,6 +48,10 @@ class ATRPercentileIndicator(BaseIndicator):
         cur = float(window[-1])
         pctile = float((window <= cur).mean())
         move = (close[-1] - close[-1 - period]) / close[-1 - period] if close[-1 - period] else 0.0
+        # A non-finite current bar must not fall through to the directional branches
+        # (NaN comparisons are False, so it would read as a SELL) nor reuse a stale ATR.
+        if not (np.isfinite(close[-1]) and np.isfinite(atr[-1]) and np.isfinite(move)):
+            return self._make_result(Signal.NEUTRAL, "ATR%ile data invalid")
         raw = {"atr_pct_percentile": round(pctile, 4), "move": round(float(move), 5)}
 
         if pctile <= low_p:

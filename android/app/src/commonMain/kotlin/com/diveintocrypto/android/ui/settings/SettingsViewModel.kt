@@ -3,11 +3,12 @@ package com.diveintocrypto.android.ui.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.diveintocrypto.android.AppContainer
-import com.diveintocrypto.android.data.SettingsData
+import com.diveintocrypto.android.data.binance.isRegionBlocked
+import com.diveintocrypto.android.domain.consensus.DEFAULT_FULL_WEIGHTS
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -24,8 +25,7 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
                     it.copy(
                         confidenceThreshold = settings.confidenceThreshold,
                         minConfidenceForTrade = settings.minConfidenceForTrade,
-                        enableRegimeMatrix = settings.enableRegimeMatrix,
-                        scanSurvivors = settings.scanSurvivors,
+                        scanDepthTop = settings.scanDepthTop,
                         scanParallelism = settings.scanParallelism,
                         weights = settings.weights,
                         favorites = settings.favorites,
@@ -42,24 +42,39 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
             }
         }
 
-        // Fetch universe list for adding favorites
+        loadUniverse()
+    }
+
+    /** Fetches the futures symbol list used by the favorites search. Retry via [retryUniverse]. */
+    private fun loadUniverse() {
         viewModelScope.launch {
+            _ui.update { it.copy(universeLoading = true, universeError = null, universeRegionBlocked = false) }
             try {
                 val symbols = container.repository.futuresUniverse()
-                _ui.update {
-                    it.copy(allSymbols = symbols, universeError = null)
+                _ui.update { state ->
+                    state.copy(
+                        allSymbols = symbols,
+                        universeLoading = false,
+                        filteredSymbols = filterSymbols(state.favoriteSearchQuery, symbols, state.favorites),
+                    )
                 }
             } catch (ce: CancellationException) {
                 // Never swallow structured-concurrency cancellation.
                 throw ce
             } catch (e: Exception) {
-                // Surface a retryable error to the UI instead of failing silently.
+                // Surface a retryable, localized error to the UI instead of failing silently.
                 _ui.update {
-                    it.copy(universeError = e.message ?: "Failed to fetch symbol list")
+                    it.copy(
+                        universeLoading = false,
+                        universeError = e.message ?: "unknown",
+                        universeRegionBlocked = e.isRegionBlocked(),
+                    )
                 }
             }
         }
     }
+
+    fun retryUniverse() = loadUniverse()
 
     fun updateConfidenceThreshold(value: Int) {
         val current = container.settingsStore.getSettings()
@@ -71,14 +86,13 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
         container.settingsStore.updateSettings(current.copy(minConfidenceForTrade = value))
     }
 
-    fun toggleRegimeMatrix(value: Boolean) {
+    /**
+     * Phase-2 candidate count (survivor pool N). Writes `scanDepthTop`, the field the
+     * scanner actually sizes phase 2 from (ScannerViewModel reads settings.scanDepthTop).
+     */
+    fun updateScanDepthTop(value: Int) {
         val current = container.settingsStore.getSettings()
-        container.settingsStore.updateSettings(current.copy(enableRegimeMatrix = value))
-    }
-
-    fun updateScanSurvivors(value: Int) {
-        val current = container.settingsStore.getSettings()
-        container.settingsStore.updateSettings(current.copy(scanSurvivors = value))
+        container.settingsStore.updateSettings(current.copy(scanDepthTop = value))
     }
 
     fun updateScanParallelism(value: Int) {
@@ -116,6 +130,12 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
         container.settingsStore.updateSettings(current.copy(weights = updatedWeights))
     }
 
+    /** SIFIRLA: restores every default indicator weight in ONE settings write. */
+    fun resetWeights() {
+        val current = container.settingsStore.getSettings()
+        container.settingsStore.updateSettings(current.copy(weights = current.weights + DEFAULT_FULL_WEIGHTS))
+    }
+
     /**
      * Persists the background-scan toggles (WorkManager card). The CALLER is
      * responsible for invoking the platform sync hook afterwards
@@ -133,16 +153,10 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
     }
 
     fun setFavoriteSearchQuery(query: String) {
-        val sanitized = query.uppercase().trim()
         _ui.update { state ->
-            val filtered = if (sanitized.isEmpty()) {
-                emptyList()
-            } else {
-                state.allSymbols.filter { it.contains(sanitized) && it !in state.favorites }
-            }
             state.copy(
                 favoriteSearchQuery = query,
-                filteredSymbols = filtered
+                filteredSymbols = filterSymbols(query, state.allSymbols, state.favorites),
             )
         }
     }
@@ -161,13 +175,19 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
         val updatedFavorites = current.favorites - symbol
         container.settingsStore.updateSettings(current.copy(favorites = updatedFavorites))
     }
+
+    private fun filterSymbols(query: String, all: List<String>, favorites: List<String>): List<String> {
+        val sanitized = query.uppercase().trim()
+        if (sanitized.isEmpty()) return emptyList()
+        return all.filter { it.contains(sanitized) && it !in favorites }
+    }
 }
 
 data class SettingsUiState(
     val confidenceThreshold: Int = 25,
     val minConfidenceForTrade: Int = 30,
-    val enableRegimeMatrix: Boolean = true,
-    val scanSurvivors: Int = 50,
+    /** Phase-2 candidate count (survivor pool N) — the scanner's scanDepthTop. */
+    val scanDepthTop: Int = 50,
     val scanParallelism: Int = 8,
     val weights: Map<String, Double> = emptyMap(),
     val favorites: List<String> = emptyList(),
@@ -186,7 +206,10 @@ data class SettingsUiState(
     val favoriteSearchQuery: String = "",
     val allSymbols: List<String> = emptyList(),
     val filteredSymbols: List<String> = emptyList(),
+    val universeLoading: Boolean = false,
 
     // Non-null when the futures-universe fetch failed (retryable error surfaced to UI).
     val universeError: String? = null,
+    /** True when the failure is an upstream region block (HTTP 451): retrying cannot help. */
+    val universeRegionBlocked: Boolean = false,
 )

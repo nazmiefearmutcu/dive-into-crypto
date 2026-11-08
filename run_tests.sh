@@ -5,6 +5,11 @@
 # suites after it. Each suite's exit code is accumulated in $FAILED and the
 # script exits non-zero if any suite failed. Run it from anywhere — the repo
 # root is resolved from this script's own location.
+#
+# Every multi-step suite is chained with && inside its subshell, so the
+# subshell's exit status reflects the FIRST failing step, not the last one.
+# (Without the chain, a failing `npm test` followed by a successful
+# `node build.mjs` would report the suite as passed.)
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -15,9 +20,7 @@ FAILED=()
 # ── 1/4 · Backend engine suite (indicators, consensus, parity, parsers) ─────
 echo "=== SUITE 1/4 · backend pytest (desktop/backend) ==="
 (
-    cd desktop/backend
-    uv sync
-    uv run pytest -q
+    cd desktop/backend && uv sync && uv run pytest -q
 ) || FAILED+=("backend (desktop/backend): uv sync && uv run pytest -q")
 
 # ── 2/4 · Root E2E suite (offline; conftest mocks the data layer) ───────────
@@ -28,10 +31,7 @@ uv run --project desktop/backend pytest tests/ -q \
 # ── 3/4 · UI suite (no-fabricated-data guarantees) + fresh build ────────────
 echo "=== SUITE 3/4 · UI (desktop/ui) npm ci + npm test + node build.mjs ==="
 (
-    cd desktop/ui
-    npm ci
-    npm test
-    node build.mjs
+    cd desktop/ui && npm ci && npm test && node build.mjs
 ) || FAILED+=("ui (desktop/ui): npm ci && npm test && node build.mjs")
 
 # ── 4/4 · Android unit tests ────────────────────────────────────────────────
@@ -41,9 +41,7 @@ echo "=== SUITE 3/4 · UI (desktop/ui) npm ci + npm test + node build.mjs ==="
 # (linux/macos: export JAVA_HOME=/usr/lib/jvm/temurin-17-jdk-amd64 first)
 echo "=== SUITE 4/4 · android (./gradlew :app:test) ==="
 (
-    cd android
-    chmod +x gradlew
-    ./gradlew :app:test --console=plain
+    cd android && chmod +x gradlew && ./gradlew :app:test --console=plain
 ) || FAILED+=("android (android/): ./gradlew :app:test")
 
 # ── Summary ─────────────────────────────────────────────────────────────────

@@ -8,7 +8,10 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Typeface
 import androidx.core.content.FileProvider
+import androidx.core.graphics.createBitmap
 import com.diveintocrypto.android.platform.formatTime
+import com.diveintocrypto.android.ui.i18n.DiveStrings
+import com.diveintocrypto.android.widget.verdictBiasLabel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -59,12 +62,20 @@ object VerdictCardRenderer {
 
     /**
      * PURE draw (no I/O): renders [row] into a fresh ARGB bitmap.
-     * Height = base block + one heat row when TF cells exist.
+     * Height = base block + one heat row when TF cells exist + a footer band when
+     * a [disclaimer] line is supplied (every shared card carries the
+     * not-investment-advice notice).
      */
-    fun render(row: ShareVerdictRow, width: Int = DEFAULT_WIDTH): Bitmap {
+    fun render(
+        row: ShareVerdictRow,
+        width: Int = DEFAULT_WIDTH,
+        disclaimer: String = "",
+        verdictLabel: String = row.verdict,
+    ): Bitmap {
         val heatRows = if (row.perTf.isEmpty()) 0 else 1
-        val height = 470 + heatRows * 170
-        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val footerBand = if (disclaimer.isEmpty()) 0 else 70
+        val height = 470 + heatRows * 170 + footerBand
+        val bitmap = createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
         val s = width / 1080f // scale factor so any width renders proportionally
 
@@ -87,7 +98,7 @@ object VerdictCardRenderer {
             color = verdictColor(row.verdict); textSize = 54 * s; typeface = Typeface.MONOSPACE
             isFakeBoldText = true
         }
-        canvas.drawText(row.verdict, 72 * s, 240 * s, verdictPaint)
+        canvas.drawText(verdictLabel, 72 * s, 240 * s, verdictPaint)
         canvas.drawText(
             "%${row.confidence}", width - 72 * s, 240 * s,
             Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -139,6 +150,17 @@ object VerdictCardRenderer {
             Paint(Paint.ANTI_ALIAS_FLAG).apply { color = TEXT_DIM; textSize = 28 * s; typeface = Typeface.MONOSPACE },
         )
 
+        // Disclaimer footer (left, above the watermark line).
+        if (disclaimer.isNotEmpty()) {
+            canvas.drawText(
+                disclaimer, 72 * s, height - 100 * s,
+                Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = TEXT_DIM; textSize = 24 * s
+                    typeface = Typeface.MONOSPACE
+                },
+            )
+        }
+
         // Watermark (bottom-right, dimmed).
         canvas.drawText(
             "DVCRY", width - 72 * s, height - 52 * s,
@@ -160,15 +182,22 @@ object VerdictCardRenderer {
  * `share_cards/` older than [SHARE_CARD_MAX_AGE_MS] are pruned before a new
  * card is written so the cache cannot grow unbounded.
  *
+ * [strings] supplies the chooser title and the not-investment-advice footer in
+ * the app's language.
+ *
  * @return the shared content URI (null when rendering/persisting failed — the
  *         caller can surface the failure honestly; nothing is faked).
  */
-suspend fun shareVerdict(context: Context, row: ShareVerdictRow): android.net.Uri? {
+suspend fun shareVerdict(context: Context, row: ShareVerdictRow, strings: DiveStrings): android.net.Uri? {
     return try {
         val file = withContext(Dispatchers.IO) {
             val dir = File(context.cacheDir, "share_cards").apply { mkdirs() }
             pruneOldShareCards(dir)
-            val bitmap = VerdictCardRenderer.render(row)
+            val bitmap = VerdictCardRenderer.render(
+                row,
+                disclaimer = strings.disclaimerShort,
+                verdictLabel = verdictBiasLabel(row.verdict, strings),
+            )
             val f = File(dir, "verdict_${row.symbol}_${System.currentTimeMillis()}.png")
             FileOutputStream(f).use { out -> bitmap.compress(Bitmap.CompressFormat.PNG, 100, out) }
             f
@@ -179,7 +208,7 @@ suspend fun shareVerdict(context: Context, row: ShareVerdictRow): android.net.Ur
             putExtra(Intent.EXTRA_STREAM, uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        val chooser = Intent.createChooser(send, "Karar kartını paylaş").apply {
+        val chooser = Intent.createChooser(send, strings.platShareChooser).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         context.startActivity(chooser)

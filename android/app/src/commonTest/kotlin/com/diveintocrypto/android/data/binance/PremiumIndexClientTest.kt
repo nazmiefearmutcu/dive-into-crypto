@@ -9,6 +9,8 @@ import io.ktor.http.headersOf
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 
 /**
  * `/fapi/v1/premiumIndex` wire parsing (0.3.0 parity addition), fed through a
@@ -57,6 +59,46 @@ class PremiumIndexClientTest {
                 thrown = e.message.orEmpty().contains("premiumIndex HTTP 400")
             }
             assertEquals(true, thrown, "expected the honest HTTP-400 error")
+        }
+    }
+
+    @Test
+    fun `premiumIndex with a missing funding rate fails instead of reporting a 0 percent rate`() = runTest {
+        val body = """{"symbol":"BTCUSDT","markPrice":"101.5","indexPrice":"100.0","nextFundingTime":1699999999999}"""
+        val http = HttpClient(
+            MockEngine { _ ->
+                respond(
+                    content = body,
+                    status = HttpStatusCode.OK,
+                    headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                )
+            },
+        )
+        http.use {
+            var thrown = false
+            try {
+                BinanceFuturesClient(client = it).premiumIndex("BTCUSDT")
+            } catch (e: IllegalStateException) {
+                thrown = e.message.orEmpty().contains("lastFundingRate")
+            }
+            assertEquals(true, thrown, "a degraded payload must not be zero-filled")
+        }
+    }
+
+    @Test
+    fun `premiumIndex region block surfaces as UpstreamHttpException 451 and is not retryable`() = runTest {
+        val http = HttpClient(
+            MockEngine { _ ->
+                respond(content = "{}", status = HttpStatusCode(451, "Unavailable For Legal Reasons"))
+            },
+        )
+        http.use {
+            val e = assertFailsWith<UpstreamHttpException> {
+                BinanceFuturesClient(client = it).premiumIndex("BTCUSDT")
+            }
+            assertEquals(451, e.status)
+            assertTrue(e.regionBlocked)
+            assertTrue(e.isRegionBlocked())
         }
     }
 }

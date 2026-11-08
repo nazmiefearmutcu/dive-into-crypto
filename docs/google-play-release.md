@@ -2,6 +2,13 @@
 
 Checked against Google's documentation on **7 November 2026**. This is a preparation guide; DVCRY has not been submitted to Google Play by this change.
 
+## Related documents
+
+- [`docs/play-store/release-checklist.md`](play-store/release-checklist.md): owner checklist (keystore and CI secrets, Play App Signing, store assets, declarations, region exclusions).
+- [`docs/play-store/data-safety.md`](play-store/data-safety.md): prepared Data safety answers.
+- [`docs/play-store/listing-en.md`](play-store/listing-en.md) and [`docs/play-store/listing-tr.md`](play-store/listing-tr.md): full listing texts (EN/TR) that mirror the `fastlane` title and short description.
+- [`docs/privacy-policy.md`](privacy-policy.md) / [`docs/privacy-policy.html`](privacy-policy.html): privacy policy draft (TR/EN).
+
 ## Naming
 
 | Surface | Name |
@@ -17,10 +24,10 @@ The requested full marketing name has 40 characters. Google Play allows 30 for t
 
 ## 1. Prepare before paying
 
-- Complete the Android build migration: the current Gradle file still uses `compileSdk = 35` and `targetSdk = 35`. New phone/tablet submissions now require **API 36 or higher**. Upgrade the SDK/toolchain as needed and test Android 16 behavior before submission. The branding change does not perform that migration. [Target API requirements](https://support.google.com/googleplay/android-developer/answer/11926878?hl=en).
-- Configure a private release/upload keystore and back it up securely. Use the existing signing inputs documented in [packaging](packaging.md), build a signed release AAB, and verify its signature. A successful Gradle build alone does not prove that the bundle is signed: the project permits unsigned release output when signing inputs are missing. Never commit private keys or passwords.
+- The Android build targets `compileSdk = 36` / `targetSdk = 36` (AGP 8.11.1, Gradle 8.13), which meets the **API 36 or higher** requirement for new phone/tablet submissions. Test Android 16 behavior on a real device before submission. [Target API requirements](https://support.google.com/googleplay/android-developer/answer/11926878?hl=en).
+- Configure a private release/upload keystore and back it up securely. Use the existing signing inputs documented in [packaging](packaging.md), build a signed release AAB, and verify its signature. A release build now refuses to run without a complete signing config (an unsigned release needs the explicit `-PallowUnsignedRelease=true` opt-in, meant for local smoke builds only), and the release workflow verifies both signatures (`jarsigner` for the AAB, `apksigner` for the APK). Never commit private keys or passwords.
 - Retain `com.diveintocrypto.android` as the application ID; a display-name change does not require a new package identity. Increase `versionCode` for later uploaded updates. Configure Play App Signing when setting up the first release. [App bundles, signing and package identity](https://support.google.com/googleplay/android-developer/answer/9859152?hl=en).
-- Publish an accurate privacy policy at a public HTML URL and make it accessible inside the app. Audit network requests, third-party libraries, local portfolio records, Android backup and deletion behavior before completing Data safety. Public market-data access alone does not establish that no user/device data is transmitted. [Privacy policy requirements](https://support.google.com/googleplay/android-developer/answer/10144311?hl=en).
+- Publish an accurate privacy policy at a public HTML URL and make it accessible inside the app. A bilingual draft lives at `docs/privacy-policy.html` (Markdown source: `docs/privacy-policy.md`); the in-app Privacy screen opens `PRIVACY_POLICY_URL` from `android/app/src/commonMain/kotlin/com/diveintocrypto/android/ui/settings/AppLinks.kt`, which stays empty until you set the hosted URL. Audit network requests, third-party libraries, local portfolio records, Android backup and deletion behavior before completing Data safety. Public market-data access alone does not establish that no user/device data is transmitted. [Privacy policy requirements](https://support.google.com/googleplay/android-developer/answer/10144311?hl=en).
 - Prepare a 512 x 512 store icon, 1024 x 500 feature graphic and real Android screenshots. Check the current [preview asset requirements](https://support.google.com/googleplay/android-developer/answer/9866151?hl=en) before exporting. Confirm the draft description matches the tested Android build.
 - Recruit people who can test scanning, unavailable data, notifications, settings, portfolio records and installation/update behavior on real devices.
 

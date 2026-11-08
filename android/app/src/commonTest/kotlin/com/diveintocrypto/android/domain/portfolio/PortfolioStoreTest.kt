@@ -81,11 +81,52 @@ class PortfolioStoreTest {
     }
 
     @Test
+    fun `add beyond the cap is refused and never evicts the oldest position`() {
+        val store = SettingsStore(InMemoryKeyValueStore())
+        val p1 = PortfolioStore(store)
+        val first = p1.add("BTCUSDT", 100.0, 1.0, "LONG")!!
+        repeat(PortfolioStore.MAX_ENTRIES - 1) { p1.add("ETHUSDT", 200.0, 1.0, "LONG") }
+        assertEquals(PortfolioStore.MAX_ENTRIES, p1.entries.value.size)
+
+        assertNull(p1.add("SOLUSDT", 10.0, 1.0, "SHORT"), "101st add is refused")
+        assertEquals(PortfolioStore.MAX_ENTRIES, p1.entries.value.size)
+        assertTrue(p1.entries.value.any { it.id == first.id }, "oldest position survives")
+        assertEquals(PortfolioStore.MAX_ENTRIES, PortfolioStore(store).entries.value.size, "refusal persisted nothing")
+    }
+
+    @Test
+    fun `an undecodable stored blob is backed up before the next persist overwrites it`() {
+        val kv = InMemoryKeyValueStore()
+        val store = SettingsStore(kv)
+        val corrupt = "{not valid json for positions"
+        store.putRaw(PortfolioStore.KEY, corrupt)
+
+        val p1 = PortfolioStore(store)
+        assertTrue(p1.entries.value.isEmpty(), "unreadable blob loads as empty")
+        assertEquals(corrupt, store.getRaw(PortfolioStore.KEY_UNREADABLE_BACKUP), "copy kept")
+
+        p1.add("BTCUSDT", 100.0, 1.0, "LONG")
+        assertEquals(corrupt, store.getRaw(PortfolioStore.KEY_UNREADABLE_BACKUP), "backup survives the overwrite")
+    }
+
+    @Test
+    fun `a second corrupt blob replaces the backup with the newest unreadable one`() {
+        val store = SettingsStore(InMemoryKeyValueStore())
+        store.putRaw(PortfolioStore.KEY, "{first bad")
+        assertTrue(PortfolioStore(store).entries.value.isEmpty())
+        assertEquals("{first bad", store.getRaw(PortfolioStore.KEY_UNREADABLE_BACKUP))
+
+        store.putRaw(PortfolioStore.KEY, "{second bad")
+        assertTrue(PortfolioStore(store).entries.value.isEmpty())
+        assertEquals("{second bad", store.getRaw(PortfolioStore.KEY_UNREADABLE_BACKUP), "newest bad blob is kept")
+    }
+
+    @Test
     fun `remove and update persist`() {
         val store = SettingsStore(InMemoryKeyValueStore())
         val p1 = PortfolioStore(store)
-        val a = p1.add("BTCUSDT", 100.0, 1.0, "LONG")
-        val b = p1.add("ETHUSDT", 200.0, 1.0, "LONG")
+        val a = p1.add("BTCUSDT", 100.0, 1.0, "LONG")!!
+        val b = p1.add("ETHUSDT", 200.0, 1.0, "LONG")!!
         p1.remove(a.id)
         p1.update(b.id, entryPrice = 210.0, direction = "short")
 

@@ -13,7 +13,6 @@ Strictly causal / look-ahead-free:
   * Appending a new bar never mutates earlier values -> no repainting.
 """
 
-from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -68,7 +67,6 @@ class SchaffTrendCycleIndicator(BaseIndicator):
 
         stc_now = stc[-1]
         stc_prev = stc[-2] if n >= 2 else np.nan
-        stc_prev2 = stc[-3] if n >= 3 else np.nan
 
         if np.isnan(stc_now) or np.isnan(stc_prev):
             return self._make_result(Signal.NEUTRAL, "STC not yet warmed up")

@@ -7,11 +7,13 @@ import pytest
 from diveintocrypto_desktop.data import basis as bs
 from diveintocrypto_desktop.data import deribit as drb
 from diveintocrypto_desktop.data import funding as fnd
+from diveintocrypto_desktop.data import http as http_mod
 from diveintocrypto_desktop.data import index_info as ii
 from diveintocrypto_desktop.data import orderbook as ob
 from diveintocrypto_desktop.data import ratios as rat
 from diveintocrypto_desktop.data import sentiment as senti
 from diveintocrypto_desktop.data import spot as spot_mod
+from diveintocrypto_desktop.data.http import BinanceApiError
 
 
 # ── basis ─────────────────────────────────────────────────────────────────────
@@ -186,7 +188,6 @@ def test_defillama_parse():
 
 # ── spot lead/lag ─────────────────────────────────────────────────────────────
 def test_spot_lead_classification():
-    import math
     import random
 
     rng = random.Random(42)
@@ -218,9 +219,53 @@ async def test_spot_snapshot_no_spot_market_is_normal(monkeypatch):
     spot_mod.reset_cache()
 
     async def boom(path, params):
-        raise RuntimeError('400, message=\'...\', url=... code=-1121, msg="Invalid symbol."')
+        raise BinanceApiError(400, -1121, "Invalid symbol.")
 
     monkeypatch.setattr(spot_mod, "_spot_json", boom)
+    out = await spot_mod.snapshot("ODDUSDT", 1.0, [1.0, 1.1])
+    assert out == {"unavailable": "no_spot_market"}
+    # a definitive answer is cached: the next call does not re-hit the spot API
+    calls = []
+
+    async def counting(path, params):
+        calls.append(path)
+        raise BinanceApiError(400, -1121, "Invalid symbol.")
+
+    monkeypatch.setattr(spot_mod, "_spot_json", counting)
+    assert await spot_mod.snapshot("ODDUSDT", 1.0, [1.0, 1.1]) == {"unavailable": "no_spot_market"}
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_spot_invalid_symbol_detected_from_real_http_error_body(monkeypatch):
+    """A real Binance 400 body (code -1121) must reach the spot path as a typed error."""
+    spot_mod.reset_cache()
+
+    class _Resp:
+        status = 400
+        headers: dict = {}
+
+        async def json(self, content_type=None):
+            return {"code": -1121, "msg": "Invalid symbol."}
+
+        def raise_for_status(self):  # pragma: no cover - the body path must win
+            raise AssertionError("raise_for_status must not hide the Binance code")
+
+    class _Ctx:
+        async def __aenter__(self):
+            return _Resp()
+
+        async def __aexit__(self, *exc):
+            return None
+
+    class _Session:
+        def get(self, url, params=None):
+            return _Ctx()
+
+    async def fake_session():
+        return _Session()
+
+    monkeypatch.setattr(http_mod, "get_session", fake_session)  # the real _read_json path below it
     out = await spot_mod.snapshot("ODDUSDT", 1.0, [1.0, 1.1])
     assert out == {"unavailable": "no_spot_market"}
 
@@ -293,8 +338,13 @@ def test_deribit_parse_book_summary_empty():
 
 
 def test_deribit_parse_index_price_and_instruments():
-    assert drb.parse_index_price({"index_name": "btc_dvol", "price": "43.21"}) == pytest.approx(43.21)
+    # public/get_index_price answers {index_price, estimated_delivery_price}
+    assert drb.parse_index_price({"index_price": "43.21", "estimated_delivery_price": 43.0}) == pytest.approx(43.21)
+    assert drb.parse_index_price({"price": "43.21"}) is None  # no such field upstream
     assert drb.parse_index_price({}) is None
+    # the documented DVOL index names (btc_dvol is rejected upstream with invalid params)
+    assert drb.dvol_index_name("BTC") == "btcdvol_usdc"
+    assert drb.dvol_index_name("ETH") == "ethdvol_usdc"
     assert drb._parse_instrument("BTC-12OCT26-60000-P") is not None
     assert drb._parse_instrument("BTC-PERPETUAL") is None
 
@@ -456,7 +506,8 @@ async def test_deribit_partial_dvol_survives_summary_failure(monkeypatch):
 
     async def summary_leg_down(path, params):
         if "index_price" in path:
-            return {"index_name": "btc_dvol", "price": "43.2"}
+            assert params == {"index_name": "btcdvol_usdc"}
+            return {"index_price": 43.2, "estimated_delivery_price": 43.2}
         raise RuntimeError("book summary 500")
 
     monkeypatch.setattr(drb, "_get", summary_leg_down)
@@ -494,7 +545,7 @@ async def test_deribit_success_cached_for_ttl(monkeypatch):
     async def fake_get(path, params):
         calls.append(path)
         if "index_price" in path:
-            return {"index_name": "btc_dvol", "price": "43.2"}
+            return {"index_price": 43.2, "estimated_delivery_price": 43.2}
         return _FIXTURE_ROWS
 
     monkeypatch.setattr(drb, "_get", fake_get)
@@ -502,3 +553,25 @@ async def test_deribit_success_cached_for_ttl(monkeypatch):
     out2 = await drb.options_snapshot("BTC")
     assert "unavailable" not in out1 and "partial" not in out1
     assert out1 == out2 and len(calls) == 2  # one dvol + one summary fetch total
+
+
+@pytest.mark.asyncio
+async def test_deribit_refusal_is_a_forbidden_state_and_survives_the_breaker(monkeypatch):
+    """HTTP 403 is its own non-transient state (retryable from the UI), not an
+    unreachable venue; the open breaker keeps reporting the same honest reason."""
+    drb.reset_state()
+
+    class _Refused(Exception):
+        status = 403
+
+    async def refused(path, params):
+        raise _Refused("403 Forbidden")
+
+    monkeypatch.setattr(drb, "_get", refused)
+    first = await drb.options_snapshot("BTC")
+    assert first == {"unavailable": "deribit_forbidden"}
+    for _ in range(drb.BREAKER_THRESHOLD):
+        await drb.options_snapshot("ETH")
+    assert drb.breaker_open()
+    assert await drb.options_snapshot("BTC") == {"unavailable": "deribit_forbidden"}
+    drb.reset_state()

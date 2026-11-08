@@ -3,7 +3,7 @@ package com.diveintocrypto.android.engine.analytics
 import com.diveintocrypto.android.engine.schema.DerivativeTicker
 import com.diveintocrypto.android.engine.schema.Trade
 
-/** Spot-future & perpetual basis — Kotlin port of `crypcodile/analytics/basis.py` (in-memory). */
+/** Spot-future & perpetual basis — Kotlin port of `crocodile/crypto/analytics/basis.py` (in-memory). */
 object BasisAnalytics {
 
     data class SpotFutureBasisRow(
@@ -61,25 +61,33 @@ object BasisAnalytics {
      * The additive basis block shown on the panel:
      *
      * @param basisBps (mark − index)/index × 10 000 (basis points; positive = perp trades rich)
-     * @param annFundingPct the venue's predicted 8h funding rate annualised
-     *        (simple, non-compounded: rate·3·365), in PERCENT per year
+     * @param annFundingPct the venue's predicted funding rate annualised
+     *        (simple, non-compounded: rate·(24/intervalHours)·365), in PERCENT per year
      */
     data class BasisBlock(
         val basisBps: Double,
         val annFundingPct: Double,
     )
 
-    /** Funding settlements per day on Binance USDT-M (8h cadence). */
+    /** Funding settlements per day on a Binance USDT-M perp with the default 8h cadence. */
     const val FUNDING_PER_DAY: Double = 3.0
 
     /**
      * PURE basis block from a `/fapi/v1/premiumIndex` row.
      * null when mark or index is non-positive (honest unavailability).
+     * [intervalHours] is the symbol's funding interval (8h unless the venue says otherwise).
      */
-    fun basisBlock(markPrice: Double, indexPrice: Double, lastFundingRate: Double): BasisBlock? {
+    fun basisBlock(
+        markPrice: Double,
+        indexPrice: Double,
+        lastFundingRate: Double,
+        intervalHours: Int = 8,
+    ): BasisBlock? {
         if (markPrice <= 0.0 || indexPrice <= 0.0) return null
+        require(intervalHours > 0) { "intervalHours must be positive, got $intervalHours" }
         val basisBps = (markPrice - indexPrice) / indexPrice * 10_000.0
-        val annFundingPct = lastFundingRate * FUNDING_PER_DAY * 365.0 * 100.0
+        val fundingPerDay = 24.0 / intervalHours
+        val annFundingPct = lastFundingRate * fundingPerDay * 365.0 * 100.0
         return BasisBlock(basisBps, annFundingPct)
     }
 }

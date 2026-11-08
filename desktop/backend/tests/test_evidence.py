@@ -3,7 +3,6 @@ resumable backfill cap, aggregations, failure tolerance. Fully offline.
 """
 
 import asyncio
-import json
 
 import pytest
 from fastapi.testclient import TestClient
@@ -20,7 +19,9 @@ HOUR = 3_600_000
 def _tmp_evidence(monkeypatch, tmp_path):
     monkeypatch.setenv("DIVE_EVIDENCE_PATH", str(tmp_path / "evidence.jsonl"))
     monkeypatch.setenv("DIVE_EVIDENCE_GRADES_PATH", str(tmp_path / "grades.jsonl"))
+    evidence._RECENT_FAILURES.clear()
     yield
+    evidence._RECENT_FAILURES.clear()
 
 
 def _candles(start_ms: int, rows: list[tuple[float, float, float]]) -> list[dict]:
@@ -485,3 +486,215 @@ def test_stability_measures_directional_rows_only():
     evidence.append_lines(evidence.archive_path(), neutral_rows)
     flat = next(r for r in evidence.stability(limit_per_symbol=8) if r["s"] == "FLAT")
     assert flat["k"] == 0 and flat["agree_frac"] is None
+
+
+# ── regression: horizon anchored at the verdict, not the next candle ──────────
+def test_grade_horizon_anchored_at_verdict_ts():
+    # verdict 30 min into the 00:00 candle: the path is the candles CLOSING inside
+    # (ts, ts+4h] = (00:30, 04:30]; the 04:00 candle (closes 05:00) must not exit.
+    ts = TS + HOUR // 2
+    rec = _rec("AUSDT", ts, verdict="BUY", dir=1, price=100.0)
+    candles = _candles(TS, [
+        (100.4, 99.5, 100.2),   # 00:00 candle — contains the verdict, closes 01:00
+        (103.0, 100.0, 102.0),  # 01:00 — the +1% breach
+        (102.5, 101.0, 101.5),  # 02:00
+        (101.0, 100.5, 100.8),  # 03:00 — closes 04:00 (last close inside the horizon)
+        (200.0, 0.0, 150.0),    # 04:00 — closes 05:00, beyond ts+4h → must be ignored
+    ])
+    g = evidence._grade_one(rec, candles, "4h", NOW)
+    assert g["exit"] == 100.8
+    assert g["forward"] == pytest.approx(0.008)
+    assert g["hit"] is True and g["mfe"] == pytest.approx(0.03)
+
+
+def test_momentum_uses_only_candles_closed_at_verdict_time():
+    # the candle OPENING at the verdict's hour closes after the verdict: its close
+    # (200) must not become the "now" price used for the trailing-24h sign
+    T = TS
+    rows = [(100.0, 100.0, 100.0)] * 26 + [(200.0, 100.0, 200.0)]  # opens T-26h .. T
+    candles = _candles(T - 26 * HOUR, rows)
+    rec = _rec("MUSDT", T + HOUR // 2, verdict="BUY", dir=1, price=100.0)
+    assert evidence._momentum_hit(rec, candles) is False  # flat up to the verdict, not +100%
+
+
+# ── directional-only baselines, stability sign, terminal skips, I/O safety ────
+def test_baselines_exclude_neutral_forwards():
+    d = _rec("D1", TS, verdict="BUY", dir=1, price=100.0)
+    n = _rec("N1", TS, verdict="NEUTRAL", dir=0, price=100.0)
+    gd = {"ts": TS, "symbol": "D1", "horizon": "4h", "hit": True, "forward": 0.02}
+    gn = {"ts": TS, "symbol": "N1", "horizon": "4h", "hit": False, "forward": 0.5}  # raw, unsigned
+    base = evidence.baselines([(d, gd), (n, gn)])
+    assert base["n_directional"] == 1
+    assert base["coin_sd"] == pytest.approx(0.02)  # sqrt(0.02²)/1; the 0.5 must not pool in
+
+
+def test_stability_strong_verdicts_agree_with_buy_side():
+    rows = [_rec("STRG", NOW - (4 - i) * HOUR, verdict=v, price=100.0)
+            for i, v in enumerate(["STRONG_BUY", "STRONG_BUY", "STRONG_BUY", "BUY"])]
+    evidence.append_lines(evidence.archive_path(), rows)
+    row = next(r for r in evidence.stability(limit_per_symbol=8) if r["s"] == "STRG")
+    assert row["k"] == 4 and row["agree_frac"] == pytest.approx(1.0)
+
+
+def test_decisions_returns_newest_rows_ascending():
+    recs = [_rec("DEC", TS - i * HOUR, verdict="BUY", price=100.0) for i in range(5)]
+    evidence.append_lines(evidence.archive_path(), recs)
+    rows = evidence.decisions(symbol="DEC", limit=2)
+    assert [int(r["ts"]) for r in rows] == sorted(int(r["ts"]) for r in recs)[-2:]
+
+
+def test_decisions_limit_applies_after_the_window_newest_first():
+    recs = [_rec("DWIN", TS - i * HOUR, verdict="BUY", price=100.0) for i in range(5)]
+    evidence.append_lines(evidence.archive_path(), recs)
+    # window holds i = 1..3; limit=2 keeps the NEWEST two of them (i=1, i=2), oldest first
+    rows = evidence.decisions(symbol="DWIN", from_ms=TS - 3 * HOUR, to_ms=TS - HOUR, limit=2)
+    assert [int(r["ts"]) for r in rows] == [TS - 2 * HOUR, TS - HOUR]
+
+
+def test_load_grades_collapses_duplicates_and_hides_skips():
+    g = {"ts": TS, "symbol": "DUP", "horizon": "4h", "hit": True, "forward": 0.01}
+    skip = {"ts": TS + HOUR, "symbol": "DUP", "horizon": "4h", "skipped": "x"}
+    evidence.append_lines(evidence.grades_path(), [g, g, skip])
+    assert len(evidence.load_grades()) == 1
+    assert len(evidence.load_grades(include_skipped=True)) == 2
+
+
+@pytest.mark.asyncio
+async def test_ungradable_verdict_is_terminal_not_refetched():
+    evidence.append_lines(evidence.archive_path(), [_rec("ZEROUSDT", TS, price=0.0)])
+    calls: list[str] = []
+
+    async def fetcher(symbol, start_ms, end_ms):
+        calls.append(symbol)
+        return _candles(TS, [(101.0, 99.0, 100.5)])
+
+    out1 = await evidence.grade("4h", cap=10, fetcher=fetcher, now_ms=NOW)
+    assert out1["skipped"] == 1 and out1["remaining"] == 0
+    out2 = await evidence.grade("4h", cap=10, fetcher=fetcher, now_ms=NOW)
+    assert out2["skipped"] == 0 and calls == ["ZEROUSDT"]  # never re-fetched
+    s = evidence.summary("4h", now_ms=NOW)
+    assert s["stale"] is False and s["ungradable_count"] == 1 and s["gradable_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_overlapping_grade_calls_do_not_double_count():
+    evidence.append_lines(evidence.archive_path(), [_rec("RACEUSDT", TS, price=100.0)])
+    fetched: list[str] = []
+
+    async def slow_fetcher(symbol, start_ms, end_ms):
+        fetched.append(symbol)
+        await asyncio.sleep(0.01)
+        return _candles(TS, [(103.0, 100.0, 102.0), (102.5, 101.0, 101.5)])
+
+    a, b = await asyncio.gather(
+        evidence.grade("4h", cap=10, fetcher=slow_fetcher, now_ms=NOW),
+        evidence.grade("4h", cap=10, fetcher=slow_fetcher, now_ms=NOW),
+    )
+    assert a["graded"] + b["graded"] == 1  # the second call sees the first call's grade
+    assert len(evidence.load_grades(include_skipped=True)) == 1
+    assert evidence.summary("4h", now_ms=NOW)["graded_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_default_fetcher_pages_past_one_binance_request(monkeypatch):
+    from diveintocrypto_desktop.data import binance_klines as kl
+
+    calls: list[tuple[int, int]] = []
+
+    async def fake_range(symbol, interval, start_ms, end_ms, limit=1000):
+        calls.append((start_ms, end_ms))
+        t = -(-start_ms // HOUR) * HOUR  # first hour boundary at/after start
+        out = []
+        while t <= end_ms and len(out) < limit:
+            out.append({"t": t * 1_000_000, "o": 1.0, "h": 1.0, "l": 1.0, "c": 1.0, "v": 1.0})
+            t += HOUR
+        return out
+
+    monkeypatch.setattr(kl, "fetch_klines_range", fake_range)
+    got = await evidence._default_fetcher("PAGEUSDT", 0, 2500 * HOUR)
+    assert len(calls) == 3  # 999h pages, not one truncated request
+    ts = [c["t"] for c in got]
+    assert ts == sorted(set(ts)) and len(got) == 2501  # every hour 0..2500 exactly once
+
+
+# ── regression: the verdict's own (pre-verdict) candle never grades the verdict ──
+def test_candle_containing_the_verdict_is_never_used():
+    # verdict 10:30; the 10:00 candle spikes to 101.2 BEFORE the verdict instant
+    ts = TS + HOUR // 2
+    rec = _rec("PREUSDT", ts, verdict="BUY", dir=1, price=100.0)
+    candles = _candles(TS, [
+        (101.2, 99.9, 100.5),   # 10:00 — contains the verdict; its high is pre-verdict
+        (100.4, 99.6, 100.0),   # 11:00
+        (100.5, 99.5, 100.2),   # 12:00
+        (100.3, 99.7, 100.1),   # 13:00 — closes 14:00, inside the 14:30 horizon end
+        (100.6, 99.4, 100.4),   # 14:00 — closes 15:00, beyond the horizon: ignored
+    ])
+    g = evidence._grade_one(rec, candles, "4h", NOW)
+    assert g["hit"] is False                     # the pre-verdict spike is not a hit
+    assert g["mfe"] == pytest.approx(0.005, abs=1e-6)  # max post-verdict high 100.5
+    assert g["exit"] == 100.1
+
+
+def test_path_is_empty_for_a_one_hour_horizon_with_a_non_aligned_verdict():
+    # with 1h candles, no full hour opens at/after 10:30 and closes by 11:30
+    ts = TS + HOUR // 2
+    assert evidence._horizon_path(_candles(TS, [(101.0, 99.0, 100.5)] * 3), ts, HOUR) == []
+
+
+def test_one_hour_horizon_grades_an_hour_aligned_verdict():
+    rec = _rec("ALIGNUSDT", TS, verdict="BUY", dir=1, price=100.0)
+    candles = _candles(TS, [(101.5, 99.5, 101.2), (103.0, 100.0, 102.0)])
+    g = evidence._grade_one(rec, candles, "1h", NOW)
+    assert g is not None and g["hit"] is True and g["exit"] == 101.2
+
+
+@pytest.mark.asyncio
+async def test_grade_fetch_window_reaches_the_momentum_baseline_of_the_oldest_verdict():
+    evidence.append_lines(evidence.archive_path(), [_rec("MOMUSDT", TS, price=100.0)])
+    starts: list[int] = []
+
+    async def fetcher(symbol, start_ms, end_ms):
+        starts.append(start_ms)
+        return _candles(TS, [(103.0, 100.0, 102.0), (102.5, 101.0, 101.5)])
+
+    await evidence.grade("4h", cap=10, fetcher=fetcher, now_ms=NOW)
+    # the last candle closed by ts - 24h opens at ts - 25h: it must be inside the fetch
+    assert starts and starts[0] <= TS - 25 * HOUR
+
+
+@pytest.mark.asyncio
+async def test_a_symbol_that_keeps_failing_does_not_starve_the_backlog():
+    evidence.append_lines(evidence.archive_path(), [
+        _rec("DEADUSDT", TS, price=100.0),            # oldest: always fails
+        _rec("GOODUSDT", TS + HOUR, price=100.0),
+    ])
+    fetched: list[str] = []
+
+    async def fetcher(symbol, start_ms, end_ms):
+        fetched.append(symbol)
+        if symbol == "DEADUSDT":
+            raise RuntimeError("delisted")
+        return _candles(TS, [(103.0, 100.0, 102.0), (102.5, 101.0, 101.5)])
+
+    out1 = await evidence.grade("4h", cap=1, fetcher=fetcher, now_ms=NOW)
+    assert out1["graded"] == 0 and fetched == ["DEADUSDT"]
+    out2 = await evidence.grade("4h", cap=1, fetcher=fetcher, now_ms=NOW)
+    assert out2["graded"] == 1 and fetched == ["DEADUSDT", "GOODUSDT"]  # the healthy symbol moved on
+
+
+def test_load_grades_and_archive_skip_a_valid_json_line_with_a_bad_ts():
+    grades = evidence.grades_path()
+    grades.parent.mkdir(parents=True, exist_ok=True)
+    good = {"ts": TS, "symbol": "OKUSDT", "horizon": "4h", "hit": True, "forward": 0.01}
+    with open(grades, "a", encoding="utf-8") as f:
+        f.write('{"symbol": "BADUSDT", "ts": null, "horizon": "4h"}\n')
+        f.write('{"symbol": "BADUSDT", "ts": "soon", "horizon": "4h"}\n')
+        f.write(__import__("json").dumps(good) + "\n")
+    assert [g["symbol"] for g in evidence.load_grades()] == ["OKUSDT"]
+
+    archive = evidence.archive_path()
+    with open(archive, "a", encoding="utf-8") as f:
+        f.write('{"symbol": "BADUSDT", "ts": null}\n')
+    evidence.append_lines(archive, [_rec("OKUSDT", TS, price=100.0)])
+    assert [r["symbol"] for r in evidence.iter_archive()] == ["OKUSDT"]
+    assert evidence.summary("4h", now_ms=NOW)["archived_count"] == 1  # never fatal

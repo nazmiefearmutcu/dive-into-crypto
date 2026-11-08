@@ -70,33 +70,52 @@ class AtrFilterIndicator(config: IndicatorConfig) : BaseIndicator(config) {
             }
         }
 
-        val atrRatio: Double = if (atrMean != null && atrMean != 0.0) currentAtr / atrMean else 1.0
+        val reasonAtr = currentAtr.format(2)
+        val reasonPct = atrPct.format(2)
 
+        // Without a full 3x-period baseline there is no volatility regime. Do not
+        // default the ratio to 1.0, which reads as "normal volatility".
+        if (atrMean == null || atrMean == 0.0) {
+            return result(
+                Signal.NEUTRAL,
+                "ATR=$reasonAtr ($reasonPct%) baseline warming up",
+                mapOf<String, Double?>("atr" to round4(currentAtr), "atr_pct" to round4(atrPct)),
+            )
+        }
+
+        val atrRatio: Double = currentAtr / atrMean
+
+        // One set of cutoffs drives the label, the numeric encoding and the reason text.
         val volatility = when {
             atrRatio > highVolMultiplier -> "HIGH"
-            atrRatio > 0.8 -> "NORMAL"
-            else -> "LOW"
+            atrRatio < 0.5 -> "LOW"
+            else -> "NORMAL"
         }
 
         val raw = mapOf<String, Double?>(
             "atr" to round4(currentAtr),
             "atr_pct" to round4(atrPct),
             "atr_ratio" to round4(atrRatio),
-            // volatility is a string in Python; tests only check numeric raws.
+            // Numeric encoding read by RiskAssessor (risk.py reads the string label):
+            // 2.0 HIGH, 1.0 NORMAL, 0.0 LOW, with the same cutoffs as the label below.
+            "volatility" to when {
+                atrRatio > highVolMultiplier -> 2.0
+                atrRatio < 0.5 -> 0.0
+                else -> 1.0
+            },
         )
 
-        val reasonAtr = currentAtr.format(2)
-        val reasonPct = atrPct.format(2)
-
+        // One set of cutoffs for the label and the reason text (HIGH above the
+        // multiplier, LOW below 0.5, otherwise NORMAL), matching atr_filter.py.
         return when {
             atrRatio > highVolMultiplier -> result(
                 Signal.NEUTRAL,
-                "ATR=$reasonAtr ($reasonPct%) HIGH volatility - risk elevated, reduce position",
+                "High ATR volatility (${atrRatio.format(1)}x average) — wide ranges",
                 raw,
             )
             atrRatio < 0.5 -> result(
                 Signal.NEUTRAL,
-                "ATR=$reasonAtr ($reasonPct%) LOW volatility - potential breakout watch",
+                "Low ATR volatility (${atrRatio.format(1)}x average) — narrow ranges",
                 raw,
             )
             else -> result(

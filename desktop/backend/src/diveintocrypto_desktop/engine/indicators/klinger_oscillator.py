@@ -37,7 +37,6 @@ is upgraded to STRONG only when the zero-line regime agrees:
   otherwise                                            -> NEUTRAL
 """
 
-from typing import Any
 
 import numpy as np
 import pandas as pd

@@ -38,8 +38,15 @@ class HurstIndicator(config: IndicatorConfig) : BaseIndicator(config) {
 
         val n = closes.size
         val w = DoubleArray(period) { closes[n - period + it] }
+        // NaN fails `<= 0.0` checks, so reject non-finite window bars explicitly.
+        if (w.any { !it.isFinite() }) {
+            return result(Signal.NEUTRAL, "Hurst insufficient data")
+        }
         val logp = DoubleArray(period) { ln(w[it]) }
         val h = hurst(logp)
+        if (!h.isFinite()) {
+            return result(Signal.NEUTRAL, "Hurst insufficient data")
+        }
         val move = if (w[0] != 0.0) (w[period - 1] - w[0]) / w[0] else 0.0
 
         val raw = mapOf<String, Double?>(

@@ -35,11 +35,10 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.diveintocrypto.android.AppContainer
@@ -47,25 +46,44 @@ import com.diveintocrypto.android.domain.consensus.DEFAULT_F2_WEIGHTS
 import com.diveintocrypto.android.domain.consensus.DEFAULT_FULL_WEIGHTS
 import com.diveintocrypto.android.platform.AppInfo
 import com.diveintocrypto.android.platform.format
+import com.diveintocrypto.android.platform.rememberBackgroundScanSync
+import com.diveintocrypto.android.platform.rememberBackgroundScanSyncFailed
+import com.diveintocrypto.android.platform.rememberClearLocalAppData
+import com.diveintocrypto.android.platform.rememberOpenEmail
+import com.diveintocrypto.android.platform.rememberOpenNotificationSettings
+import com.diveintocrypto.android.platform.rememberOpenUrl
+import com.diveintocrypto.android.ui.i18n.LocalDiveStrings
+import com.diveintocrypto.android.ui.notifications.rememberNotificationPermission
 import com.diveintocrypto.android.ui.theme.DiveColors
 import com.diveintocrypto.android.ui.theme.DiveDims
 import com.diveintocrypto.android.ui.theme.DiveFonts
-import com.diveintocrypto.android.ui.notifications.rememberNotificationPermission
-import com.diveintocrypto.android.platform.rememberBackgroundScanSync
 
 /**
- * Enriched Settings screen (2026-05-24).
- *   1. Analysis settings: consensus confidence thresholds and the ADX regime matrix.
- *   2. Indicator weights: coefficients for RSI, MACD, Bollinger, etc. (+/- stepper).
- *   3. Scanner settings: phase-2 candidate count and concurrent-request limit.
- *   4. Favorite coins: manage the coins listed on the Panel screen (search + add/remove).
- *   5. Theme & About: static version info.
+ * Settings screen.
+ *   1. Favourite coins (search + add/remove, retry when the symbol list failed).
+ *   2. Analysis settings: consensus thresholds and the ADX regime matrix.
+ *   3. Indicator weights (+/- stepper; SIFIRLA restores defaults in one write).
+ *   4. Scanner: phase-2 candidate count and concurrent-request limit.
+ *   5. Chart, notifications, background scans, theme, language.
+ *   6. About: version, data source (with the non-affiliation statement), privacy
+ *      policy, contact, open-source licenses, the disclaimer and local-data deletion.
+ *
+ * The Quant Bias weight card is intentionally NOT rendered: its four weights are not
+ * read by the Market Direction Score yet, so showing them would be a dead control.
  */
 @Composable
 fun SettingsScreen(container: AppContainer) {
     val vm: SettingsViewModel = viewModel { SettingsViewModel(container) }
     val state by vm.ui.collectAsStateWithLifecycle()
-    val strings = com.diveintocrypto.android.ui.i18n.LocalDiveStrings.current
+    val strings = LocalDiveStrings.current
+    val openUrl = rememberOpenUrl()
+    val openEmail = rememberOpenEmail()
+    val clearLocalData = rememberClearLocalAppData()
+
+    var showPrivacy by remember { mutableStateOf(false) }
+    var showLicenses by remember { mutableStateOf(false) }
+    var showClearConfirm by remember { mutableStateOf(false) }
+    var clearDoneNotice by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -81,6 +99,10 @@ fun SettingsScreen(container: AppContainer) {
             favorites = state.favorites,
             searchQuery = state.favoriteSearchQuery,
             filteredSymbols = state.filteredSymbols,
+            universeLoading = state.universeLoading,
+            universeError = state.universeError,
+            universeRegionBlocked = state.universeRegionBlocked,
+            onRetryUniverse = vm::retryUniverse,
             onSearchChange = vm::setFavoriteSearchQuery,
             onAddFavorite = vm::addFavorite,
             onRemoveFavorite = vm::removeFavorite
@@ -91,10 +113,8 @@ fun SettingsScreen(container: AppContainer) {
             title = strings.setTitleConsensus,
             confidenceThreshold = state.confidenceThreshold,
             minConfidenceForTrade = state.minConfidenceForTrade,
-            enableRegimeMatrix = state.enableRegimeMatrix,
             onConfThresholdChange = vm::updateConfidenceThreshold,
             onTradeThresholdChange = vm::updateMinConfidenceForTrade,
-            onToggleRegime = vm::toggleRegimeMatrix
         )
 
         // 3. Indicator weight coefficients
@@ -102,21 +122,15 @@ fun SettingsScreen(container: AppContainer) {
             title = strings.setTitleWeights,
             weights = state.weights,
             onUpdateWeight = vm::updateIndicatorWeight,
-            onResetWeights = {
-                // SIFIRLA: restore EVERY indicator (core + extended) to its canonical
-                // default from DEFAULT_FULL_WEIGHTS via the existing public VM method.
-                DEFAULT_FULL_WEIGHTS.forEach { (key, default) ->
-                    vm.updateIndicatorWeight(key, default)
-                }
-            }
+            onResetWeights = vm::resetWeights
         )
 
         // 4. Scanner engine settings
         ScanningCard(
             title = strings.setTitleScanner,
-            survivors = state.scanSurvivors,
+            survivors = state.scanDepthTop,
             parallelism = state.scanParallelism,
-            onSurvivorsChange = vm::updateScanSurvivors,
+            onSurvivorsChange = vm::updateScanDepthTop,
             onParallelismChange = vm::updateScanParallelism
         )
 
@@ -129,18 +143,8 @@ fun SettingsScreen(container: AppContainer) {
             onLimitChange = vm::updateChartCandleCount
         )
 
-        // 4.2 Quant Bias weight settings
-        QuantBiasSettingsCard(
-            title = strings.setTitleQuantBias,
-            taker = state.weightTakerLs,
-            oi = state.weightOiMomentum,
-            whale = state.weightWhaleLs,
-            account = state.weightAccountLs,
-            onWeightsChange = vm::updateQuantBiasWeights
-        )
-
-        // 4.3 Notification permission (API 33+ runtime grant) — Task 2d
-        NotificationsCard(title = strings.setTitleNotifications)
+        // 4.3 Notification permission (API 33+ runtime grant)
+        NotificationsCard(title = strings.setTitleNotifications, onOpenAppSettings = null)
 
         // 4.4 Background scans (WorkManager, opt-in) — honest scheduling card
         val syncBackgroundScans = rememberBackgroundScanSync()
@@ -148,6 +152,7 @@ fun SettingsScreen(container: AppContainer) {
             title = strings.setTitleBackgroundScans,
             enabled = state.backgroundScansEnabled,
             unmeteredOnly = state.backgroundScansUnmetered,
+            syncFailed = rememberBackgroundScanSyncFailed(),
             onToggleEnabled = { enabled ->
                 vm.updateBackgroundScans(enabled = enabled)
                 syncBackgroundScans()
@@ -161,9 +166,37 @@ fun SettingsScreen(container: AppContainer) {
         // 5. Theme, Language & About
         ThemeCard(title = strings.setTitleTheme)
         LanguageCard(container = container)
-        AboutCard(title = strings.setTitleAbout)
+        AboutCard(
+            title = strings.setTitleAbout,
+            onOpenPrivacy = { showPrivacy = true },
+            onOpenLicenses = { showLicenses = true },
+            onContact = { if (SUPPORT_EMAIL.isNotBlank()) openEmail(SUPPORT_EMAIL, "DVCRY") },
+            onClearData = { showClearConfirm = true },
+            clearDoneNotice = clearDoneNotice,
+        )
 
         Spacer(modifier = Modifier.height(30.dp))
+    }
+
+    if (showPrivacy) {
+        val onOpenOnline: (() -> Unit)? =
+            if (PRIVACY_POLICY_URL.isNotBlank()) ({ openUrl(PRIVACY_POLICY_URL) }) else null
+        PrivacyPolicyDialog(
+            onDismiss = { showPrivacy = false },
+            onOpenOnline = onOpenOnline,
+        )
+    }
+    if (showLicenses) {
+        OssLicensesDialog(onDismiss = { showLicenses = false })
+    }
+    if (showClearConfirm) {
+        ClearLocalDataDialog(
+            onDismiss = { showClearConfirm = false },
+            onConfirm = {
+                showClearConfirm = false
+                clearDoneNotice = clearLocalData()
+            },
+        )
     }
 }
 
@@ -179,22 +212,32 @@ private fun BackgroundScansCard(
     title: String,
     enabled: Boolean,
     unmeteredOnly: Boolean,
+    syncFailed: Boolean,
     onToggleEnabled: (Boolean) -> Unit,
     onToggleUnmetered: (Boolean) -> Unit,
 ) {
-    val strings = com.diveintocrypto.android.ui.i18n.LocalDiveStrings.current
-    SettingsCard(title = title) {        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    val strings = LocalDiveStrings.current
+    SettingsCard(title = title) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             ToggleRow(
                 label = strings.tglBackgroundScan,
                 value = enabled,
                 onToggle = onToggleEnabled
             )
             Text(
-                text = "uygulama kapalıyken ~15 dk'da bir kaba tarama · Doze gecikebilir",
+                text = strings.setBgNote,
                 color = DiveColors.TextDim,
                 fontSize = 11.sp,
                 lineHeight = 15.sp,
             )
+            if (enabled && syncFailed) {
+                Text(
+                    text = strings.platBgSyncFailed,
+                    color = DiveColors.Warn,
+                    fontSize = 11.sp,
+                    lineHeight = 15.sp,
+                )
+            }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -210,8 +253,7 @@ private fun BackgroundScansCard(
                         fontSize = 13.sp,
                     )
                     Text(
-                        text = if (enabled) "Mobil veri kullanımı olmadan çalışır"
-                        else "Ana anahtar kapalıyken etkisiz",
+                        text = if (enabled) strings.setUnmeteredOn else strings.setUnmeteredOff,
                         color = DiveColors.TextDim,
                         fontSize = 10.sp,
                     )
@@ -241,7 +283,7 @@ private fun BackgroundScansCard(
                 }
             }
             Text(
-                text = "Sonuçlar Alarm geçmişine ve tarayıcı önbelleğine düşer; uygulama açıldığında oradan okunur.",
+                text = strings.setBgResultsNote,
                 color = DiveColors.TextDim,
                 fontSize = 11.sp,
                 lineHeight = 15.sp,
@@ -255,31 +297,19 @@ private fun ConsensusSettingsCard(
     title: String,
     confidenceThreshold: Int,
     minConfidenceForTrade: Int,
-    enableRegimeMatrix: Boolean,
     onConfThresholdChange: (Int) -> Unit,
     onTradeThresholdChange: (Int) -> Unit,
-    onToggleRegime: (Boolean) -> Unit
 ) {
-    val strings = com.diveintocrypto.android.ui.i18n.LocalDiveStrings.current
+    val strings = LocalDiveStrings.current
     SettingsCard(title = title) {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            // Regime Matrix Toggle
-            ToggleRow(
-                label = strings.tglRegimeMatrix,
-                value = enableRegimeMatrix,
-                onToggle = onToggleRegime
-            )
-            Text(
-                text = "When enabled, the weights of oscillators or trend-following indicators are automatically optimized based on the trend strength (ADX).",
-                color = DiveColors.TextMuted,
-                fontSize = 11.sp
-            )
-
+            // The Dynamic Regime Matrix toggle was removed: the regime overlay is
+            // observational and never changes the verdict, so no control is shown for it.
             Spacer(Modifier.height(4.dp))
 
             // Consensus Confidence Threshold
             StepperRow(
-                label = "Min Consensus Threshold (Confidence)",
+                label = strings.setConfThresholdLabel,
                 value = "$confidenceThreshold%",
                 onDecrease = { onConfThresholdChange((confidenceThreshold - 5).coerceAtLeast(10)) },
                 onIncrease = { onConfThresholdChange((confidenceThreshold + 5).coerceAtMost(90)) }
@@ -287,7 +317,7 @@ private fun ConsensusSettingsCard(
 
             // Min Confidence for Trade
             StepperRow(
-                label = "Min Trade Threshold (Trade Signal)",
+                label = strings.setTradeThresholdLabel,
                 value = "$minConfidenceForTrade%",
                 onDecrease = { onTradeThresholdChange((minConfidenceForTrade - 5).coerceAtLeast(15)) },
                 onIncrease = { onTradeThresholdChange((minConfidenceForTrade + 5).coerceAtMost(95)) }
@@ -314,14 +344,14 @@ private fun WeightsCard(
     onUpdateWeight: (String, Double) -> Unit,
     onResetWeights: () -> Unit,
 ) {
-    val strings = com.diveintocrypto.android.ui.i18n.LocalDiveStrings.current
+    val strings = LocalDiveStrings.current
     SettingsCard(title = title) {
         // Collapsed by default so first paint composes the 15 core steppers only;
         // expanding adds the 42 extended rows to the (already scrollable) column.
         var extendedOpen by remember { mutableStateOf(false) }
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(
-                text = "Contribution coefficients of each indicator to the final consensus vote (adjustable in 0.1 steps with the +/- buttons):",
+                text = strings.setWeightsDesc,
                 color = DiveColors.TextMuted,
                 fontSize = 11.sp
             )
@@ -344,12 +374,14 @@ private fun WeightsCard(
                 // SIFIRLA — resets ALL indicators (core + extended) to defaults.
                 Box(
                     modifier = Modifier
+                        .height(48.dp)
                         .clip(RoundedCornerShape(DiveDims.RadiusSm))
                         .background(DiveColors.RedTint15)
                         .border(1.dp, DiveColors.RedTint25, RoundedCornerShape(DiveDims.RadiusSm))
                         .semantics { role = Role.Button }
                         .clickable(onClick = onResetWeights)
-                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                        .padding(horizontal = 12.dp),
+                    contentAlignment = Alignment.Center,
                 ) {
                     Text(
                         text = strings.btnResetWeights,
@@ -370,6 +402,7 @@ private fun WeightsCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 4.dp)
+                    .height(48.dp)
                     .clip(RoundedCornerShape(DiveDims.RadiusSm))
                     .background(DiveColors.BgCardHover)
                     .border(1.dp, DiveColors.Border, RoundedCornerShape(DiveDims.RadiusSm))
@@ -378,7 +411,8 @@ private fun WeightsCard(
                         stateDescription = if (extendedOpen) strings.switchOn else strings.switchOff
                     }
                     .clickable { extendedOpen = !extendedOpen }
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                    .padding(horizontal = 12.dp),
+                contentAlignment = Alignment.CenterStart,
             ) {
                 Text(
                     text = if (extendedOpen) "▾ ${strings.lblExtended} (${EXTENDED_WEIGHT_KEYS.size})" else "▸ ${strings.lblExtended} (${EXTENDED_WEIGHT_KEYS.size})",
@@ -391,7 +425,7 @@ private fun WeightsCard(
             }
             if (extendedOpen) {
                 Text(
-                    text = "Desktop-reference parity indicators. Lower the weight (or 0.0) to effectively silence one in the consensus.",
+                    text = strings.setExtendedDesc,
                     color = DiveColors.TextDim,
                     fontSize = 10.sp,
                 )
@@ -434,56 +468,58 @@ private fun ScanningCard(
     onSurvivorsChange: (Int) -> Unit,
     onParallelismChange: (Int) -> Unit
 ) {
+    val strings = LocalDiveStrings.current
     SettingsCard(title = title) {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("Phase 2 Candidate Count (Survivors)", color = DiveColors.TextMuted, fontSize = 11.sp)
+                Text(strings.setSurvivorsLabel, color = DiveColors.TextMuted, fontSize = 11.sp)
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     listOf(30, 50, 75).forEach { count ->
-                        val active = count == survivors
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(20.dp))
-                                .background(if (active) DiveColors.Accent else DiveColors.BgCardHover)
-                                .border(1.dp, if (active) DiveColors.Accent else DiveColors.Border, RoundedCornerShape(20.dp))
-                                .clickable { onSurvivorsChange(count) }
-                                .padding(horizontal = 14.dp, vertical = 6.dp),
-                        ) {
-                            Text(
-                                text = count.toString(),
-                                color = if (active) Color.White else DiveColors.TextMuted,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold
-                            )
+                        ChoiceChip(label = count.toString(), active = count == survivors) {
+                            onSurvivorsChange(count)
                         }
                     }
                 }
             }
 
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("Concurrent Request Limit (Parallelism)", color = DiveColors.TextMuted, fontSize = 11.sp)
+                Text(strings.setParallelismLabel, color = DiveColors.TextMuted, fontSize = 11.sp)
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     listOf(4, 8, 12).forEach { limit ->
-                        val active = limit == parallelism
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(20.dp))
-                                .background(if (active) DiveColors.Accent else DiveColors.BgCardHover)
-                                .border(1.dp, if (active) DiveColors.Accent else DiveColors.Border, RoundedCornerShape(20.dp))
-                                .clickable { onParallelismChange(limit) }
-                                .padding(horizontal = 14.dp, vertical = 6.dp),
-                        ) {
-                            Text(
-                                text = limit.toString(),
-                                color = if (active) Color.White else DiveColors.TextMuted,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold
-                            )
+                        ChoiceChip(label = limit.toString(), active = limit == parallelism) {
+                            onParallelismChange(limit)
                         }
                     }
                 }
             }
         }
+    }
+}
+
+/** Pill chip with a 48dp touch target (PS-30). */
+@Composable
+private fun ChoiceChip(label: String, active: Boolean, onClick: () -> Unit) {
+    val strings = LocalDiveStrings.current
+    Box(
+        modifier = Modifier
+            .height(48.dp)
+            .clip(RoundedCornerShape(20.dp))
+            .background(if (active) DiveColors.Accent else DiveColors.BgCardHover)
+            .border(1.dp, if (active) DiveColors.Accent else DiveColors.Border, RoundedCornerShape(20.dp))
+            .semantics {
+                role = Role.Button
+                stateDescription = if (active) strings.selected else strings.notSelected
+            }
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            color = if (active) Color.White else DiveColors.TextMuted,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold
+        )
     }
 }
 
@@ -493,20 +529,25 @@ private fun FavoritesCard(
     favorites: List<String>,
     searchQuery: String,
     filteredSymbols: List<String>,
+    universeLoading: Boolean,
+    universeError: String?,
+    universeRegionBlocked: Boolean,
+    onRetryUniverse: () -> Unit,
     onSearchChange: (String) -> Unit,
     onAddFavorite: (String) -> Unit,
     onRemoveFavorite: (String) -> Unit
 ) {
+    val strings = LocalDiveStrings.current
     SettingsCard(title = title) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(
-                text = "Manage your quick-access list on the Panel tab.",
+                text = strings.setFavoritesHint,
                 color = DiveColors.TextMuted,
                 fontSize = 11.sp
             )
 
             if (favorites.isEmpty()) {
-                Text("No favorite coins added yet.", color = DiveColors.TextDim, fontSize = 12.sp)
+                Text(strings.setNoFavorites, color = DiveColors.TextDim, fontSize = 12.sp)
             } else {
                 Row(
                     modifier = Modifier
@@ -533,9 +574,11 @@ private fun FavoritesCard(
                             Spacer(Modifier.width(4.dp))
                             Box(
                                 modifier = Modifier
+                                    .height(48.dp)
+                                    .width(48.dp)
                                     .clip(RoundedCornerShape(50))
-                                    .clickable { onRemoveFavorite(symbol) }
-                                    .padding(4.dp)
+                                    .clickable { onRemoveFavorite(symbol) },
+                                contentAlignment = Alignment.Center,
                             ) {
                                 Text("×", color = DiveColors.Red, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                             }
@@ -555,7 +598,7 @@ private fun FavoritesCard(
                     .padding(horizontal = 12.dp, vertical = 8.dp),
             ) {
                 if (searchQuery.isEmpty()) {
-                    Text("Search for a coin to add to favorites...", color = DiveColors.TextDim, fontSize = 12.sp)
+                    Text(strings.setSearchPlaceholder, color = DiveColors.TextDim, fontSize = 12.sp)
                 }
                 BasicTextField(
                     value = searchQuery,
@@ -567,18 +610,57 @@ private fun FavoritesCard(
                 )
             }
 
+            if (universeError != null) {
+                Text(
+                    text = if (universeRegionBlocked) {
+                        strings.errRegionBlockedTitle + " — " + strings.errRegionBlockedBody
+                    } else {
+                        strings.errNetwork
+                    },
+                    color = DiveColors.Warn,
+                    fontSize = 11.sp,
+                    lineHeight = 15.sp,
+                )
+                if (!universeRegionBlocked) {
+                    Box(
+                        modifier = Modifier
+                            .height(48.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(DiveColors.BgCardHover)
+                            .border(1.dp, DiveColors.Border, RoundedCornerShape(8.dp))
+                            .semantics { role = Role.Button }
+                            .clickable(onClick = onRetryUniverse)
+                            .padding(horizontal = 14.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = strings.btnRetry,
+                            color = DiveColors.Accent,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = DiveFonts.body,
+                        )
+                    }
+                }
+            }
+
             if (searchQuery.isNotEmpty()) {
                 if (filteredSymbols.isEmpty()) {
-                    Text("No matching coin found.", color = DiveColors.TextMuted, fontSize = 11.sp)
+                    Text(
+                        text = if (universeLoading) strings.alertSymbolChecking else strings.setNoMatch,
+                        color = DiveColors.TextMuted,
+                        fontSize = 11.sp,
+                    )
                 } else {
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         filteredSymbols.take(4).forEach { symbol ->
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
+                                    .height(48.dp)
                                     .clip(RoundedCornerShape(6.dp))
                                     .clickable { onAddFavorite(symbol) }
-                                    .padding(vertical = 6.dp, horizontal = 6.dp),
+                                    .padding(horizontal = 6.dp),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
@@ -588,7 +670,7 @@ private fun FavoritesCard(
                                     fontSize = 12.sp,
                                     fontFamily = DiveFonts.body
                                 )
-                                Text("+ Add", color = DiveColors.Accent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                Text(strings.setAddFavorite, color = DiveColors.Accent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             }
                         }
                     }
@@ -603,8 +685,8 @@ private fun ToggleRow(label: String, value: Boolean, onToggle: (Boolean) -> Unit
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onToggle(!value) }
-            .padding(vertical = 8.dp),
+            .height(48.dp)
+            .clickable { onToggle(!value) },
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
@@ -644,18 +726,19 @@ private fun StepperRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        Text(text = label, color = DiveColors.Text, fontSize = 13.sp)
+        Text(text = label, color = DiveColors.Text, fontSize = 13.sp, modifier = Modifier.weight(1f))
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            // "−" / "+" steppers: 48dp touch targets (PS-30).
             Box(
                 modifier = Modifier
+                    .size48()
                     .clip(RoundedCornerShape(6.dp))
                     .background(DiveColors.BgCardHover)
                     .border(1.dp, DiveColors.Border, RoundedCornerShape(6.dp))
-                    .clickable { onDecrease() }
-                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                    .clickable { onDecrease() },
                 contentAlignment = Alignment.Center
             ) {
                 Text("-", color = DiveColors.Text, fontSize = 14.sp, fontWeight = FontWeight.Bold)
@@ -668,16 +751,16 @@ private fun StepperRow(
                 fontWeight = FontWeight.Bold,
                 fontFamily = DiveFonts.body,
                 modifier = Modifier.width(44.dp),
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                textAlign = TextAlign.Center
             )
 
             Box(
                 modifier = Modifier
+                    .size48()
                     .clip(RoundedCornerShape(6.dp))
                     .background(DiveColors.BgCardHover)
                     .border(1.dp, DiveColors.Border, RoundedCornerShape(6.dp))
-                    .clickable { onIncrease() }
-                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                    .clickable { onIncrease() },
                 contentAlignment = Alignment.Center
             ) {
                 Text("+", color = DiveColors.Text, fontSize = 14.sp, fontWeight = FontWeight.Bold)
@@ -686,8 +769,11 @@ private fun StepperRow(
     }
 }
 
+private fun Modifier.size48(): Modifier = this.then(Modifier.width(48.dp).height(48.dp))
+
 @Composable
 private fun ThemeCard(title: String) {
+    val strings = LocalDiveStrings.current
     SettingsCard(title = title) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -710,14 +796,14 @@ private fun ThemeCard(title: String) {
             Spacer(modifier = Modifier.width(14.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "Dark",
+                    text = strings.setDarkTheme,
                     color = DiveColors.Text,
                     fontSize = 15.sp,
                     fontWeight = FontWeight.SemiBold,
                 )
                 Spacer(Modifier.height(2.dp))
                 Text(
-                    text = "DVCRY brand — fixed",
+                    text = strings.setThemeFixed,
                     color = DiveColors.TextMuted,
                     fontSize = 12.sp,
                 )
@@ -738,21 +824,69 @@ private fun Swatch(color: Color) {
 }
 
 @Composable
-private fun AboutCard(title: String) {
+private fun AboutCard(
+    title: String,
+    onOpenPrivacy: () -> Unit,
+    onOpenLicenses: () -> Unit,
+    onContact: () -> Unit,
+    onClearData: () -> Unit,
+    clearDoneNotice: Boolean,
+) {
+    val strings = LocalDiveStrings.current
     SettingsCard(title = title) {
-        AboutRow("App", "DVCRY")
+        AboutRow(strings.setAboutApp, "DVCRY")
         Spacer(Modifier.height(8.dp))
-        AboutRow("Version", AppInfo.versionName)
+        AboutRow(strings.setAboutVersion, AppInfo.versionName)
         Spacer(Modifier.height(8.dp))
-        AboutRow("Build", AppInfo.versionCode.toString())
+        AboutRow(strings.setAboutBuild, AppInfo.versionCode.toString())
         Spacer(Modifier.height(8.dp))
-        AboutRow("Mode", if (AppInfo.isDebug) "Debug" else "Release")
+        AboutRow(strings.setAboutMode, if (AppInfo.isDebug) strings.setModeDebug else strings.setModeRelease)
         Spacer(Modifier.height(8.dp))
-        AboutRow("Data source", "Binance USDT-M Futures")
+        AboutRow(strings.setAboutDataSource, "Binance USDT-M Futures")
         Spacer(Modifier.height(8.dp))
-        AboutRow("Indicators", "60 (DVCRY consensus engine)")
+        AboutRow(strings.setAboutIndicators, strings.setAboutIndicatorsValue)
         Spacer(Modifier.height(8.dp))
-        AboutRow("Timeframe count", "12")
+        AboutRow(strings.setAboutTimeframes, "12")
+
+        // Non-affiliation statement, next to the data-source name (trademark policy).
+        Spacer(Modifier.height(10.dp))
+        Text(strings.notAffiliated, color = DiveColors.TextDim, fontSize = 11.sp, lineHeight = 15.sp)
+
+        Spacer(Modifier.height(12.dp))
+        Text(strings.disclaimerTitle, color = DiveColors.TextMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(4.dp))
+        Text(strings.disclaimerBody, color = DiveColors.TextDim, fontSize = 11.sp, lineHeight = 15.sp)
+
+        Spacer(Modifier.height(12.dp))
+        LinkRow(label = strings.setPrivacyRow, onClick = onOpenPrivacy)
+        if (SUPPORT_EMAIL.isNotBlank()) {
+            LinkRow(label = strings.setContactRow, onClick = onContact)
+        }
+        LinkRow(label = strings.setLicensesRow, onClick = onOpenLicenses)
+        LinkRow(label = strings.setClearDataRow, onClick = onClearData, destructive = true)
+        if (clearDoneNotice) {
+            Text(strings.setClearDone, color = DiveColors.Warn, fontSize = 11.sp, lineHeight = 15.sp)
+        }
+    }
+}
+
+@Composable
+private fun LinkRow(label: String, onClick: () -> Unit, destructive: Boolean = false) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(48.dp)
+            .semantics { role = Role.Button }
+            .clickable(onClick = onClick),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            color = if (destructive) DiveColors.Red else DiveColors.Accent,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+            fontFamily = DiveFonts.body,
+        )
     }
 }
 
@@ -785,7 +919,7 @@ private fun AboutRow(label: String, value: String) {
  */
 @Composable
 private fun LanguageCard(container: AppContainer) {
-    val strings = com.diveintocrypto.android.ui.i18n.LocalDiveStrings.current
+    val strings = LocalDiveStrings.current
     val current by container.language.collectAsStateWithLifecycle()
     SettingsCard(title = strings.setTitleLanguage) {
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -793,6 +927,7 @@ private fun LanguageCard(container: AppContainer) {
                 val active = current.code == code
                 Box(
                     modifier = Modifier
+                        .height(48.dp)
                         .clip(RoundedCornerShape(20.dp))
                         .background(if (active) DiveColors.Accent else DiveColors.BgCardHover)
                         .border(
@@ -805,7 +940,8 @@ private fun LanguageCard(container: AppContainer) {
                             stateDescription = if (active) strings.selected else strings.notSelected
                         }
                         .clickable { container.setLanguage(code) }
-                        .padding(horizontal = 18.dp, vertical = 8.dp),
+                        .padding(horizontal = 18.dp),
+                    contentAlignment = Alignment.Center,
                 ) {
                     Text(
                         text = label,
@@ -850,54 +986,29 @@ private fun QuantitativeChartSettingsCard(
     onSourceChange: (String) -> Unit,
     onLimitChange: (Int) -> Unit
 ) {
+    val strings = LocalDiveStrings.current
     SettingsCard(title = title) {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("Live Price Data Source (WS)", color = DiveColors.TextMuted, fontSize = 11.sp)
+                Text(strings.setWsSourceLabel, color = DiveColors.TextMuted, fontSize = 11.sp)
                 Spacer(Modifier.height(4.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     listOf("FUTURES", "SPOT").forEach { source ->
-                        val active = source == wsDataSource
-                        val displayName = if (source == "FUTURES") "Futures WS (Default)" else "Spot WS (Fallback - Fast)"
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(20.dp))
-                                .background(if (active) DiveColors.Accent else DiveColors.BgCardHover)
-                                .border(1.dp, if (active) DiveColors.Accent else DiveColors.Border, RoundedCornerShape(20.dp))
-                                .clickable { onSourceChange(source) }
-                                .padding(horizontal = 14.dp, vertical = 6.dp),
-                        ) {
-                            Text(
-                                text = displayName,
-                                color = if (active) Color.White else DiveColors.TextMuted,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold
-                            )
+                        val displayName = if (source == "FUTURES") strings.setWsFutures else strings.setWsSpot
+                        ChoiceChip(label = displayName, active = source == wsDataSource) {
+                            onSourceChange(source)
                         }
                     }
                 }
             }
 
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("Chart Candle Limit (Width)", color = DiveColors.TextMuted, fontSize = 11.sp)
+                Text(strings.setCandleLimitLabel, color = DiveColors.TextMuted, fontSize = 11.sp)
                 Spacer(Modifier.height(4.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     listOf(30, 50, 75, 100).forEach { limit ->
-                        val active = limit == chartCandleCount
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(20.dp))
-                                .background(if (active) DiveColors.Accent else DiveColors.BgCardHover)
-                                .border(1.dp, if (active) DiveColors.Accent else DiveColors.Border, RoundedCornerShape(20.dp))
-                                .clickable { onLimitChange(limit) }
-                                .padding(horizontal = 14.dp, vertical = 6.dp),
-                        ) {
-                            Text(
-                                text = "$limit Candles",
-                                color = if (active) Color.White else DiveColors.TextMuted,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold
-                            )
+                        ChoiceChip(label = strings.setCandles(limit), active = limit == chartCandleCount) {
+                            onLimitChange(limit)
                         }
                     }
                 }
@@ -906,109 +1017,23 @@ private fun QuantitativeChartSettingsCard(
     }
 }
 
-@Composable
-private fun QuantBiasSettingsCard(
-    title: String,
-    taker: Double,
-    oi: Double,
-    whale: Double,
-    account: Double,
-    onWeightsChange: (Double, Double, Double, Double) -> Unit
-) {
-    SettingsCard(title = title) {
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            val total = taker + oi + whale + account
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "Weighted components of the Market Direction Score:",
-                    color = DiveColors.TextMuted,
-                    fontSize = 11.sp,
-                    modifier = Modifier.weight(1f)
-                )
-                Text(
-                    text = "Total: " + total.format(2),
-                    color = if (kotlin.math.abs(total - 1.0) < 0.001) DiveColors.Green else DiveColors.Orange,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = DiveFonts.body
-                )
-            }
-            Spacer(Modifier.height(6.dp))
-
-            StepperRow(
-                label = "TAKER L/S MOMENTUM (Buyer/Seller Ratio)",
-                value = taker.format(2),
-                onDecrease = {
-                    val newVal = (taker - 0.05).coerceAtLeast(0.0)
-                    onWeightsChange(newVal, oi, whale, account)
-                },
-                onIncrease = {
-                    val newVal = (taker + 0.05).coerceAtMost(1.0)
-                    onWeightsChange(newVal, oi, whale, account)
-                }
-            )
-
-            StepperRow(
-                label = "OI MOMENTUM (Open Interest & Price Alignment)",
-                value = oi.format(2),
-                onDecrease = {
-                    val newVal = (oi - 0.05).coerceAtLeast(0.0)
-                    onWeightsChange(taker, newVal, whale, account)
-                },
-                onIncrease = {
-                    val newVal = (oi + 0.05).coerceAtMost(1.0)
-                    onWeightsChange(taker, newVal, whale, account)
-                }
-            )
-
-            StepperRow(
-                label = "WHALE BIAS (Whale Position L/S)",
-                value = whale.format(2),
-                onDecrease = {
-                    val newVal = (whale - 0.05).coerceAtLeast(0.0)
-                    onWeightsChange(taker, oi, newVal, account)
-                },
-                onIncrease = {
-                    val newVal = (whale + 0.05).coerceAtMost(1.0)
-                    onWeightsChange(taker, oi, newVal, account)
-                }
-            )
-
-            StepperRow(
-                label = "ACCOUNT BIAS (Account L/S)",
-                value = account.format(2),
-                onDecrease = {
-                    val newVal = (account - 0.05).coerceAtLeast(0.0)
-                    onWeightsChange(taker, oi, whale, newVal)
-                },
-                onIncrease = {
-                    val newVal = (account + 0.05).coerceAtMost(1.0)
-                    onWeightsChange(taker, oi, whale, newVal)
-                }
-            )
-        }
-    }
-}
-
 // ═══════════════════════════════════════════════════════════════════════
-// BİLDİRİMLER (Task 2d) — honest POST_NOTIFICATIONS runtime-permission card.
-// The actual request is wired platform-side (rememberNotificationPermission:
-// ActivityResultContracts.RequestPermission on Android, API 33+). In-app
+// BİLDİRİMLER — honest POST_NOTIFICATIONS runtime-permission card.
+// The request is wired platform-side (rememberNotificationPermission). In-app
 // banners + alarm history work regardless of the OS grant — said explicitly.
+// After a request that did not grant the permission, a second action opens the
+// system notification settings (a permanently denied permission cannot re-prompt).
 // ═══════════════════════════════════════════════════════════════════════
 @Composable
-private fun NotificationsCard(title: String) {
+private fun NotificationsCard(title: String, onOpenAppSettings: (() -> Unit)?) {
     val perm = rememberNotificationPermission()
-    val strings = com.diveintocrypto.android.ui.i18n.LocalDiveStrings.current
+    val strings = LocalDiveStrings.current
+    val openNotificationSettings = rememberOpenNotificationSettings()
+    var requestedOnce by remember { mutableStateOf(false) }
     SettingsCard(title = title) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(
-                text = "Alarm kuralları tetiklendiğinde sistem bildirimi gönderilir " +
-                    "(FİYAT kuralları canlı akışta, KARAR/GÜVEN/OI kuralları tarama döngüsünde).",
+                text = strings.setNotifDesc,
                 color = DiveColors.TextMuted,
                 fontSize = 11.sp,
                 lineHeight = 15.sp,
@@ -1017,21 +1042,20 @@ private fun NotificationsCard(title: String) {
             when {
                 // Platform doesn't require a runtime grant (API < 33): nothing to ask.
                 !perm.needed -> Text(
-                    text = "✓ Bu cihazda bildirim izni zorunlu değil — bildirimler çalışır.",
+                    text = strings.setNotifNotNeeded,
                     color = DiveColors.Green,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold,
                 )
                 perm.granted -> Text(
-                    text = "✓ İZİN VERİLDİ — sistem bildirimleri açık.",
+                    text = strings.setNotifGranted,
                     color = DiveColors.Green,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold,
                 )
                 else -> {
                     Text(
-                        text = "⚠ İZİN YOK — sistem bildirimleri sessiz. Uygulama içi alarm " +
-                            "bandı ve tetiklenme geçmişi yine de çalışır.",
+                        text = strings.setNotifDenied,
                         color = DiveColors.Warn,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold,
@@ -1040,11 +1064,16 @@ private fun NotificationsCard(title: String) {
                     // Request button — the OS dialog fires from the platform launcher.
                     Box(
                         modifier = Modifier
+                            .height(48.dp)
                             .clip(RoundedCornerShape(8.dp))
                             .background(DiveColors.Accent)
                             .semantics { role = Role.Button }
-                            .clickable { perm.request() }
-                            .padding(horizontal = 16.dp, vertical = 9.dp),
+                            .clickable {
+                                requestedOnce = true
+                                perm.request()
+                            }
+                            .padding(horizontal = 16.dp),
+                        contentAlignment = Alignment.Center,
                     ) {
                         Text(
                             text = strings.btnRequestNotifPermission,
@@ -1054,6 +1083,29 @@ private fun NotificationsCard(title: String) {
                             letterSpacing = 0.8.sp,
                             fontFamily = DiveFonts.body,
                         )
+                    }
+                    // Still denied after asking: the OS will not show the dialog again.
+                    if (requestedOnce) {
+                        Box(
+                            modifier = Modifier
+                                .height(48.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(DiveColors.BgCardHover)
+                                .border(1.dp, DiveColors.Border, RoundedCornerShape(8.dp))
+                                .semantics { role = Role.Button }
+                                .clickable { (onOpenAppSettings ?: openNotificationSettings)() }
+                                .padding(horizontal = 16.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = strings.setNotifOpenSettings,
+                                color = DiveColors.Accent,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 0.8.sp,
+                                fontFamily = DiveFonts.body,
+                            )
+                        }
                     }
                 }
             }

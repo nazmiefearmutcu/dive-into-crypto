@@ -4,7 +4,9 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
- * Canonical market-data record — Kotlin port of Crypcodile `schema/records.py`.
+ * Canonical market-data record — Kotlin port of Crocodile `crocodile/core/schema/records.py`
+ * (originally Crypcodile `schema/records.py`; Crocodile's `source`/`source_ts` are
+ * [venue]/[exchangeTs] here).
  * Polymorphic (tagged) so the engine can stream heterogeneous records. Each
  * concrete type exposes its [channel]. Timestamps are nanoseconds UTC.
  */
@@ -180,8 +182,12 @@ data class OHLCV(
     val low: Double,
     val close: Double,
     val volume: Double,
-    val buyVolume: Double = 0.0,
-    val sellVolume: Double = 0.0,
-    val numTrades: Int = 0,
+    // Optional as in Crocodile's OHLCV: `null` = nobody split/counted this bar.
+    // `0.0` would be a *measurement* ("no buying happened"), so it must never stand
+    // in for "unknown". Only trade-resampled bars fill these in.
+    val buyVolume: Double? = null,
+    val sellVolume: Double? = null,
+    val numTrades: Int? = null,
+    val vwap: Double? = null,
     val interval: String,
 ) : Record { override val channel get() = Channel.OHLCV }

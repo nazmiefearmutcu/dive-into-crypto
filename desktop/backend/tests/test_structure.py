@@ -2,7 +2,6 @@
 clustering on a synthetic correlation matrix, alignment. Fully offline.
 """
 
-import math
 
 import pytest
 
@@ -154,12 +153,11 @@ def test_cluster_agreement_needs_min_members():
 
 def test_cluster_rel_strength_zscore():
     conf = st.cluster_confirmation(_cluster_rows(), {r["s"]: r["cluster_id"] for r in _cluster_rows()})
-    vals = [100.0, 110.0, 90.0]
-    import statistics
-    mean = statistics.fmean(vals)
-    sd = statistics.stdev(vals)
-    assert conf["A"]["cluster_rel_strength"] == pytest.approx(round((100.0 - mean) / sd, 3))
-    assert conf["B"]["cluster_rel_strength"] > 0
+    # cluster 1 netNss = [100, 110, 90]: mean 100, SAMPLE sd (n-1) = 10, so z = 0, +1, -1.
+    # A population sd (n) would give z(B) = 1.2247 and fail here.
+    assert conf["A"]["cluster_rel_strength"] == pytest.approx(0.0)
+    assert conf["B"]["cluster_rel_strength"] == pytest.approx(1.0)
+    assert conf["C"]["cluster_rel_strength"] == pytest.approx(-1.0)
     # lone cluster / unclustered → null (null-guarded)
     assert conf["E"]["cluster_rel_strength"] is None
     assert conf["D"]["cluster_rel_strength"] is None
@@ -169,3 +167,29 @@ def test_cluster_confirmation_no_cluster_ids():
     conf = st.cluster_confirmation(_cluster_rows(), {})
     assert all(c["cluster_agreement"] is None and c["cluster_rel_strength"] is None
                for c in conf.values())
+
+
+def test_pair_correlation_ts_joins_on_timestamp_not_position():
+    """Two symbols that missed different bars must be paired by time: positional
+    pairing compared bars 40 hours apart and produced a near-zero correlation."""
+    import math
+
+    vals = [math.sin(i * 0.37) + 0.3 * math.sin(i * 1.9) for i in range(100)]
+    a_ts = [(i * 3_600_000, vals[i]) for i in range(100)]
+    b_ts = [(i * 3_600_000, vals[i]) for i in range(100) if i not in (10, 11)]  # 2 missing bars
+    assert st.pair_correlation_ts(a_ts, b_ts) == pytest.approx(1.0, abs=1e-6)
+    # the same series paired by position (the old behaviour) is misaligned
+    assert st.pair_correlation([v for _, v in a_ts], [v for _, v in b_ts]) < 0.9
+
+
+def test_cluster_agreement_is_absent_for_a_no_call_row():
+    # a row with no call (dominantDir 0) must not read its neutral peers as confirmation
+    rows = [
+        {"s": "A", "cluster_id": 1, "dominantDir": 0, "netNss": 100.0},
+        {"s": "B", "cluster_id": 1, "dominantDir": 0, "netNss": 110.0},
+        {"s": "C", "cluster_id": 1, "dominantDir": 0, "netNss": 90.0},
+        {"s": "D", "cluster_id": 1, "dominantDir": 1, "netNss": 95.0},
+    ]
+    conf = st.cluster_confirmation(rows, {r["s"]: r["cluster_id"] for r in rows})
+    assert conf["A"]["cluster_agreement"] is None
+    assert conf["D"]["cluster_agreement"] == pytest.approx(0.25)  # only D itself is on its side

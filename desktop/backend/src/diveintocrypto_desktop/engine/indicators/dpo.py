@@ -21,9 +21,7 @@ sell), with STRONG levels gated on the oscillator beginning to revert toward
 zero (a formed cycle extreme rather than an accelerating one).
 """
 
-from typing import Any
 
-import numpy as np
 import pandas as pd
 
 from diveintocrypto_desktop.engine.indicators.base import BaseIndicator, IndicatorResult, Signal

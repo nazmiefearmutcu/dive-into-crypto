@@ -1,7 +1,7 @@
 """FastAPI service for the Dive Into Crypto desktop UI.
 
 Localhost-only. Serves the built UI (if present) and a small JSON API backed by the
-Crypcodile-fed scanner. A request-log ring buffer feeds the Network Log screen with
+Crocodile-fed scanner. A request-log ring buffer feeds the Network Log screen with
 real activity; scan results are cached briefly to respect Binance rate limits.
 Logging is configured once at startup so engine/scan log records reach stdout.
 
@@ -22,8 +22,12 @@ watch ticker (``/api/pulse``).
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from functools import lru_cache
+from urllib.parse import urlsplit
 import asyncio
 import logging
+import re
+import socket
 import sys
 import time
 from collections import deque
@@ -31,8 +35,9 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from diveintocrypto_desktop.data import binance_klines as kl
 from diveintocrypto_desktop.data import deribit as drb
@@ -40,7 +45,7 @@ from diveintocrypto_desktop.data import funding as fnd
 from diveintocrypto_desktop.data import open_interest as oi_mod
 from diveintocrypto_desktop.data import sentiment as senti
 from diveintocrypto_desktop.data import universe as uni
-from diveintocrypto_desktop.data.http import close_session
+from diveintocrypto_desktop.data.http import close_session, describe_failure, prune_oldest
 from diveintocrypto_desktop.scan import claims as claims_mod
 from diveintocrypto_desktop.scan import evidence
 from diveintocrypto_desktop.scan import progress as progress_mod
@@ -62,6 +67,7 @@ _LOG: deque[dict] = deque(maxlen=200)
 # Brief scan cache to avoid hammering Binance on rapid refreshes.
 _scan_cache: dict[str, tuple[float, dict]] = {}
 _SCAN_TTL = 20.0
+_SCAN_CACHE_MAX = 32  # keyed by client-chosen parameters: bounded
 
 # Per-symbol detail TTL (10s): /api/symbol costs ~21+ upstream calls.
 _SYMBOL_TTL = 10.0
@@ -70,6 +76,10 @@ _SYMBOL_CACHE_MAX = 128
 # /api/pulse: 10s cache (a watch list refresh must stay cheap).
 _PULSE_TTL = 10.0
 _PULSE_MAX_SYMBOLS = 20
+_PULSE_CACHE_MAX = 64  # keyed by the requested symbol tuple: bounded
+
+# Client-supplied symbols key the live/pulse state: keep it bounded too.
+_LIVE_CACHE_MAX = 128
 
 # Async scans: the fire-and-forget task keeps a strong reference via this set
 # (a bare create_task can be garbage-collected mid-flight); results are parked
@@ -94,22 +104,159 @@ class _PerKeyLocks:
     Loop-keyed because the TestClient (and ASGI transports in general) may serve
     successive requests on different event loops; a bare ``asyncio.Lock`` would
     stay bound to the first loop that awaited it.
+
+    Keys can be client-supplied (symbols), so the table is pruned once it grows
+    past ``_MAX_KEYS``. An entry is dropped only when nobody holds it AND nobody
+    waits for it: every caller counts itself in before it awaits the lock. (A
+    lock's ``locked()`` is already False between a release and the woken waiter
+    resuming, so ``locked()`` alone cannot tell an idle key from a queued one.)
     """
 
+    _MAX_KEYS = 256
+
     def __init__(self) -> None:
-        self._by_loop: dict[asyncio.AbstractEventLoop, dict[str, asyncio.Lock]] = {}
+        # loop -> key -> [lock, users]; ``users`` = current holder + queued waiters
+        self._by_loop: dict[asyncio.AbstractEventLoop, dict[str, list]] = {}
 
-    def lock(self, key: str) -> asyncio.Lock:
+    def lock(self, key: str):
+        """Async context manager that holds the lock for ``key`` on the running loop."""
+        return self._hold(key)
+
+    @asynccontextmanager
+    async def _hold(self, key: str):
         loop = asyncio.get_running_loop()
-        return self._by_loop.setdefault(loop, {}).setdefault(key, asyncio.Lock())
+        locks = self._by_loop.setdefault(loop, {})
+        entry = locks.get(key)
+        if entry is None:
+            if len(locks) >= self._MAX_KEYS:
+                for idle in [k for k, e in locks.items() if e[1] == 0]:
+                    del locks[idle]
+            entry = locks[key] = [asyncio.Lock(), 0]
+        entry[1] += 1
+        try:
+            async with entry[0]:
+                yield
+        finally:
+            entry[1] -= 1
 
 
+_WILDCARD_HOSTS = frozenset({"", "0.0.0.0", "::"})
+_BIND_HOST: str | None = None  # the --host the service is bound to (see configure_bind_host)
+
+
+def configure_bind_host(host: str) -> None:
+    """Record the ``--host`` the service listens on. Only a concrete (non-wildcard)
+    address is added to the origin guard's own-address set."""
+    global _BIND_HOST
+    cleaned = (host or "").strip().lower()
+    _BIND_HOST = None if cleaned in _WILDCARD_HOSTS else cleaned
+
+
+@lru_cache(maxsize=1)
+def _own_host_names() -> frozenset[str]:
+    """This machine's own names and addresses: loopback, its hostname and the
+    addresses that hostname resolves to."""
+    names = {"localhost", "127.0.0.1", "::1"}
+    try:
+        hostname = socket.gethostname()
+        names.add(hostname.lower())
+        for info in socket.getaddrinfo(hostname, None):
+            names.add(str(info[4][0]).lower())
+    except OSError:
+        pass  # no resolver: loopback and the bound address still apply
+    return frozenset(names)
+
+
+def _is_own_host(hostname: str) -> bool:
+    if hostname in _own_host_names():
+        return True
+    return _BIND_HOST is not None and hostname == _BIND_HOST
+
+
+def _origin_allowed(origin: str, host_header: str | None) -> bool:
+    """Whether a non-loopback ``Origin`` may make a state-changing request.
+
+    Allowed only for same-origin traffic to this machine: the Origin's authority
+    must equal the request's Host header AND that Host must name one of this
+    machine's own addresses. The Host check is what defeats DNS rebinding: an
+    attacker page on ``evil.example`` that resolves to the LAN address still sends
+    ``Host: evil.example``, which is not one of our addresses.
+    """
+    if _LOOPBACK_ORIGIN.match(origin):
+        return True
+    if not host_header:
+        return False
+    try:
+        parts = urlsplit(origin)
+        host_hostname = urlsplit("//" + host_header.strip()).hostname
+    except ValueError:
+        return False
+    if parts.scheme != "http" or not parts.netloc or not host_hostname:
+        return False
+    if parts.netloc.lower() != host_header.strip().lower():
+        return False
+    return _is_own_host(host_hostname)
+
+
+class _StateChangeOriginGuard:
+    """Refuse cross-site writes, cross-site API reads and WebSocket handshakes
+    before any route runs.
+
+    Browsers always send ``Origin`` on cross-site POSTs and WebSocket handshakes,
+    and CORS alone only hides the response while the request still executes. So a
+    non-loopback ``Origin`` is answered 403 here unless it is same-origin traffic
+    to one of this machine's own addresses (the ``--allow-remote`` LAN UI). Requests
+    without an ``Origin`` (curl, scripts, the test client) pass through as local tools.
+
+    GET routes under ``/api/`` also refuse a request the browser marks
+    ``Sec-Fetch-Site: cross-site``: the scan route archives verdicts and starts scans,
+    and a cross-site ``<img>`` or navigation must not be able to trigger that.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] not in ("http", "websocket"):
+            await self.app(scope, receive, send)
+            return
+        headers = {k: v for k, v in scope.get("headers", [])}
+        method = scope.get("method", "GET")
+        if scope["type"] == "http" and method in ("GET", "HEAD") and scope.get("path", "").startswith("/api/"):
+            if headers.get(b"sec-fetch-site", b"").decode("latin-1").lower() == "cross-site":
+                await PlainTextResponse("cross-site request refused", status_code=403)(scope, receive, send)
+                return
+        guarded = scope["type"] == "websocket" or method not in ("GET", "HEAD", "OPTIONS")
+        if guarded:
+            origin = headers.get(b"origin")
+            if origin is not None:
+                host = headers.get(b"host")
+                allowed = _origin_allowed(
+                    origin.decode("latin-1"), host.decode("latin-1") if host is not None else None,
+                )
+                if not allowed:
+                    if scope["type"] == "websocket":
+                        await send({"type": "websocket.close", "code": 1008})
+                    else:
+                        await PlainTextResponse("cross-origin request refused", status_code=403)(scope, receive, send)
+                    return
+        await self.app(scope, receive, send)
+
+
+_LOOPBACK_ORIGIN = re.compile(r"^http://(127\.0\.0\.1|localhost|\[::1\])(:\d{1,5})?$")
 _scan_locks = _PerKeyLocks()
 logger = logging.getLogger("trading_bot.api")
 
 
 def _log(msg: str, status: int = 200, ms: int = 0) -> None:
     _LOG.appendleft({"t": time.strftime("%H:%M:%S"), "m": msg, "s": status, "ms": ms})
+
+
+def _failure(where: str, exc: BaseException) -> str:
+    """User-safe failure code for the Network Log and JSON payloads. The raw upstream
+    text (Binance's message included) stays in the Python logger only."""
+    logger.warning("%s failed: %s", where, str(exc)[:200])
+    return describe_failure(exc)
 
 
 def _configure_logging() -> None:
@@ -135,6 +282,11 @@ def create_app() -> FastAPI:
     _async_tasks: set[asyncio.Task] = set()
     _async_results: dict[str, tuple[float, dict]] = {}
     _pulse_cache: dict[tuple[str, ...], tuple[float, list[dict]]] = {}
+
+    def _bound_live_state() -> None:
+        prune_oldest(_live_cache, _LIVE_CACHE_MAX)
+        prune_oldest(_live_fails, _LIVE_CACHE_MAX)
+        prune_oldest(_live_next_attempt, _LIVE_CACHE_MAX)
 
     def _park_result(scan_id: str, res: dict) -> None:
         now = time.monotonic()
@@ -172,10 +324,12 @@ def create_app() -> FastAPI:
                 logger.warning("live: %s failed (%s) — backing off %.0fs", symbol, str(e)[:80], delay)
                 frame = {"error": "live_fetch_failed", "symbol": symbol}
                 _live_cache[symbol] = (time.monotonic(), frame)
+                _bound_live_state()
                 return frame
             _live_fails.pop(symbol, None)
             _live_next_attempt.pop(symbol, None)
             _live_cache[symbol] = (time.monotonic(), obj)
+            _bound_live_state()
             return obj
 
     @asynccontextmanager
@@ -190,13 +344,14 @@ def create_app() -> FastAPI:
         CORSMiddleware, allow_origins=["http://127.0.0.1", "http://localhost"],
         allow_origin_regex=r"http://(127\.0\.0\.1|localhost):\d+", allow_methods=["GET", "POST"], allow_headers=["*"],
     )
+    app.add_middleware(_StateChangeOriginGuard)
 
     @app.get("/api/health")
     async def health() -> dict:
         return {"ok": True, "service": "dive-into-crypto-desktop", "version": VERSION, "ui_built": _UI_DIST.exists()}
 
     @app.get("/api/universe")
-    async def universe(limit: int = 60) -> list[dict]:
+    async def universe(limit: int = Query(60, ge=1, le=200)) -> list[dict]:
         t0 = time.monotonic()
         rows = await uni.list_universe(limit=limit)
         _log(f"GET /fapi/v1/exchangeInfo + ticker/24hr ({len(rows)} perps)", 200, int((time.monotonic() - t0) * 1000))
@@ -218,21 +373,26 @@ def create_app() -> FastAPI:
         t0 = time.monotonic()
         try:
             res = await scanner.scan(size=size, universe_limit=universe_limit, depth_top=depth_top, progress=rec)
+            ms = int((time.monotonic() - t0) * 1000)
+            _log(
+                f"Scan complete · {res['universeCount']} universe · {res['scannedCount']} scanned · "
+                f"{res['droppedCount']} dropped · {len(res['survivors'])} survivors",
+                200, ms,
+            )
+            try:  # evidence must never break scanning
+                await asyncio.to_thread(evidence.archive_scan, res)
+            except Exception as e:  # pragma: no cover - archive_scan already swallows
+                logger.warning("evidence archive hook failed: %s", str(e)[:80])
+            rec.finish(_scan_summary(res, ms))
+            return res
         except Exception as e:
             rec.fail(str(e))
             raise
-        ms = int((time.monotonic() - t0) * 1000)
-        _log(
-            f"Scan complete · {res['universeCount']} universe · {res['scannedCount']} scanned · "
-            f"{res['droppedCount']} dropped · {len(res['survivors'])} survivors",
-            200, ms,
-        )
-        try:  # evidence must never break scanning
-            await asyncio.to_thread(evidence.archive_scan, res)
-        except Exception as e:  # pragma: no cover - archive_scan already swallows
-            logger.warning("evidence archive hook failed: %s", str(e)[:80])
-        rec.finish(_scan_summary(res, ms))
-        return res
+        finally:
+            # Cancellation (CancelledError is not an Exception) or any other exit
+            # must never leave the progress record "running" forever.
+            if rec.status == "running":
+                rec.fail("scan cancelled")
 
     @app.get("/api/scan")
     async def scan(
@@ -241,6 +401,15 @@ def create_app() -> FastAPI:
         depth_top: int = Query(scanner.DEFAULT_DEPTH_TOP, ge=1, le=scanner.MAX_DEPTH_TOP),
         async_mode: bool = Query(False, alias="async"),
     ) -> dict:
+        """Ranked survivor table (sync) or a ``scan_id`` (``async=1``).
+
+        ``size`` is validated in 1–100 for compatibility, but the number of rows
+        that can ever be returned is bounded by the divergence budget: whale
+        divergence is computed for at most ``candidatesCap`` rows, and survivors
+        are drawn from those candidates. The effective size is therefore
+        ``min(size, candidatesCap)`` (``meta.size`` and the cache key carry the
+        effective value); the response's ``candidatesCap`` field reports the cap."""
+        size = min(size, scanner.DIVERGENCE_CANDIDATE_CAP)
         # Fire-and-forget mode: enqueue the scan, answer with a scan_id immediately.
         # Progress lives at /api/scan/progress, the result at /api/scan/result.
         if async_mode:
@@ -254,7 +423,7 @@ def create_app() -> FastAPI:
                     res = await _run_and_archive(rec, size, universe_limit, depth_top)
                     _park_result(scan_id, res)
                 except Exception as e:
-                    _log(f"Async scan {scan_id} FAILED: {str(e)[:60]}", 502, 0)
+                    _log(f"Async scan {scan_id} FAILED: {_failure('async scan', e)}", 502, 0)
 
             task = asyncio.create_task(_task())
             _async_tasks.add(task)
@@ -281,6 +450,7 @@ def create_app() -> FastAPI:
             })
             res = await _run_and_archive(rec, size, universe_limit, depth_top)
             _scan_cache[key] = (time.monotonic(), res)
+            prune_oldest(_scan_cache, _SCAN_CACHE_MAX)
             return res
 
     @app.get("/api/scan/progress")
@@ -308,16 +478,18 @@ def create_app() -> FastAPI:
         try:
             return await asyncio.to_thread(evidence.summary, horizon)
         except Exception as e:  # honest failure, never fabricated stats
-            _log(f"GET /api/evidence FAILED: {str(e)[:60]}", 502, 0)
-            return JSONResponse({"error": "evidence_unavailable", "detail": str(e)[:80]}, status_code=502)
+            logger.warning("evidence summary failed: %s", str(e)[:200])
+            _log("GET /api/evidence FAILED: internal_error", 502, 0)
+            return JSONResponse({"error": "evidence_unavailable", "detail": "internal_error"}, status_code=502)
 
     @app.post("/api/evidence/grade")
     async def evidence_grade(horizon: str = Query(evidence.DEFAULT_HORIZON, pattern=_HORIZON_PATTERN)) -> dict:
         try:
             out = await evidence.grade(horizon)
         except Exception as e:
-            _log(f"POST /api/evidence/grade FAILED: {str(e)[:60]}", 502, 0)
-            return JSONResponse({"error": "grading_failed", "detail": str(e)[:80]}, status_code=502)
+            code = _failure("evidence grade", e)
+            _log(f"POST /api/evidence/grade FAILED: {code}", 502, 0)
+            return JSONResponse({"error": "grading_failed", "detail": code}, status_code=502)
         _log(f"Graded {out['graded']} verdicts @ {out['horizon']} ({out['remaining']} remaining)", 200, 0)
         try:
             out["summary"] = await asyncio.to_thread(evidence.summary, horizon)
@@ -331,8 +503,9 @@ def create_app() -> FastAPI:
         try:
             out = await st.structure_summary(limit=limit)
         except Exception as e:
-            _log(f"GET /api/structure FAILED: {str(e)[:60]}", 502, int((time.monotonic() - t0) * 1000))
-            return JSONResponse({"error": "structure_unavailable", "detail": str(e)[:80]}, status_code=502)
+            logger.warning("structure failed: %s", str(e)[:200])
+            _log("GET /api/structure FAILED: internal_error", 502, int((time.monotonic() - t0) * 1000))
+            return JSONResponse({"error": "structure_unavailable", "detail": "internal_error"}, status_code=502)
         _log(f"Market structure · {out['count']} symbols · {len(out['clusters'])} clusters", 200,
              int((time.monotonic() - t0) * 1000))
         return out
@@ -341,15 +514,16 @@ def create_app() -> FastAPI:
     async def symbol(
         symbol: str,
         tf: str = Query("1h"),
-        end_ms: int | None = Query(None, ge=0),
+        end_ms: int | None = Query(None, ge=1),
     ) -> JSONResponse:
         """Full data-contract object. ``tf`` selects the primary timeframe (default
         ``1h``); ``end_ms`` requests a HISTORICAL view as of that instant (klines
-        are fetched with that ``endTime``)."""
+        are fetched with that ``endTime``). ``end_ms=0`` is refused: the epoch is
+        not a meaningful view and would share a cache slot with the live view."""
         key = symbol.upper()
         if tf not in kl.TF_LIST:
             raise HTTPException(status_code=422, detail=f"tf must be one of {kl.TF_LIST}")
-        cache_key = f"{key}:{tf}:{end_ms or 0}"
+        cache_key = f"{key}:{tf}:{'live' if end_ms is None else end_ms}"
         t0 = time.monotonic()
         hit = _symbol_cache.get(cache_key)
         if hit and t0 - hit[0] < _SYMBOL_TTL:
@@ -358,7 +532,8 @@ def create_app() -> FastAPI:
         try:
             obj = await sb.build_symbol(key, primary_tf=tf, end_ms=end_ms)
         except Exception as e:  # surface honestly, do not fabricate (and do not cache)
-            _log(f"GET symbol {symbol} FAILED: {str(e)[:60]}", 502, int((time.monotonic() - t0) * 1000))
+            code = _failure(f"symbol {key}", e)
+            _log(f"GET symbol {symbol} FAILED: {code}", 502, int((time.monotonic() - t0) * 1000))
             return JSONResponse({"error": "symbol_fetch_failed", "symbol": symbol}, status_code=502)
         if len(_symbol_cache) >= _SYMBOL_CACHE_MAX:
             oldest = min(_symbol_cache, key=lambda k: _symbol_cache[k][0])
@@ -390,8 +565,9 @@ def create_app() -> FastAPI:
         try:
             prem_all = await fnd.premium_index_all()
         except Exception as e:
-            _log(f"GET /api/pulse FAILED: {str(e)[:60]}", 502, 0)
-            return JSONResponse({"error": "pulse_unavailable", "detail": str(e)[:80]}, status_code=502)
+            code = _failure("pulse", e)
+            _log(f"GET /api/pulse FAILED: {code}", 502, 0)
+            return JSONResponse({"error": "pulse_unavailable", "detail": code}, status_code=502)
 
         ch_map = {}
         try:
@@ -420,6 +596,7 @@ def create_app() -> FastAPI:
 
         rows = list(await asyncio.gather(*(one(s) for s in syms)))
         _pulse_cache[key] = (time.monotonic(), rows)
+        prune_oldest(_pulse_cache, _PULSE_CACHE_MAX)
         _log(f"Pulse · {len(rows)} symbols", 200, 0)
         return rows
 
@@ -434,8 +611,9 @@ def create_app() -> FastAPI:
         try:
             out = await senti.macro_snapshot()
         except Exception as e:
-            _log(f"GET /api/macro FAILED: {str(e)[:60]}", 502, int((time.monotonic() - t0) * 1000))
-            return JSONResponse({"error": "macro_unavailable", "detail": str(e)[:80]}, status_code=502)
+            code = _failure("macro", e)
+            _log(f"GET /api/macro FAILED: {code}", 502, int((time.monotonic() - t0) * 1000))
+            return JSONResponse({"error": "macro_unavailable", "detail": code}, status_code=502)
         _log("Macro snapshot", 200, int((time.monotonic() - t0) * 1000))
         return out
 
@@ -508,7 +686,7 @@ def create_app() -> FastAPI:
         return {"registered": True, "file": path.name, "claim": claim}
 
     @app.get("/api/leaders")
-    async def leaders(limit: int = 8) -> dict:
+    async def leaders(limit: int = Query(8, ge=1, le=200)) -> dict:
         rows = await uni.list_universe(limit=200)
         gainers = sorted(rows, key=lambda r: r["ch"], reverse=True)[:limit]
         losers = sorted(rows, key=lambda r: r["ch"])[:limit]

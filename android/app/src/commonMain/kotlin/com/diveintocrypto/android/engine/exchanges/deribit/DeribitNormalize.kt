@@ -3,7 +3,7 @@ package com.diveintocrypto.android.engine.exchanges.deribit
 import com.diveintocrypto.android.engine.schema.*
 import kotlinx.serialization.json.*
 
-/** Deribit WS message → canonical records. Port of `crypcodile/exchanges/deribit/normalize.py`. */
+/** Deribit WS message → canonical records. Port of `crocodile/crypto/exchanges/deribit/normalize.py`. */
 object DeribitNormalize {
     private const val MS_TO_NS = 1_000_000L
     private const val EX = "deribit"
@@ -34,14 +34,18 @@ object DeribitNormalize {
             val t = el as? JsonObject ?: continue
             val sym = t.str("instrument_name") ?: continue
             val ts = (t.lng("timestamp") ?: continue) * MS_TO_NS
+            // A trade without a price or amount is malformed: dropping it is honest, a 0.0 would
+            // enter the stream as a real zero-priced print (and as a zero-priced liquidation).
+            val price = t.dbl("price") ?: continue
+            val amount = t.dbl("amount") ?: continue
             val s = side(t.str("direction"))
             val liqEl = t["liquidation"]
             val liq = liqEl != null && liqEl != JsonNull
             out.add(Trade(Venue.DERIBIT, canon(sym), sym, ts, localTs,
-                id = t.str("trade_id"), price = t.dbl("price") ?: 0.0,
-                amount = t.dbl("amount") ?: 0.0, side = s, liquidation = liq))
+                id = t.str("trade_id"), price = price,
+                amount = amount, side = s, liquidation = liq))
             if (liq) out.add(Liquidation(Venue.DERIBIT, canon(sym), sym, ts, localTs,
-                price = t.dbl("price") ?: 0.0, amount = t.dbl("amount") ?: 0.0, side = s, id = t.str("trade_id")))
+                price = price, amount = amount, side = s, id = t.str("trade_id")))
         }
         return out
     }
@@ -50,9 +54,11 @@ object DeribitNormalize {
         val a = arr as? JsonArray ?: return emptyList()
         return a.mapNotNull { row ->
             val r = row as? JsonArray ?: return@mapNotNull null
-            val action = r[0].jsonPrimitive.contentOrNull
-            val price = r[1].jsonPrimitive.doubleOrNull ?: 0.0
-            val amount = if (action == "delete") 0.0 else (r[2].jsonPrimitive.doubleOrNull ?: 0.0)
+            val action = (r.getOrNull(0) as? JsonPrimitive)?.contentOrNull
+            // A level without a price (or, for non-delete rows, without an amount) is dropped.
+            val price = (r.getOrNull(1) as? JsonPrimitive)?.doubleOrNull ?: return@mapNotNull null
+            val amount = if (action == "delete") 0.0
+                else ((r.getOrNull(2) as? JsonPrimitive)?.doubleOrNull ?: return@mapNotNull null)
             Level(price, amount)
         }
     }
@@ -92,13 +98,16 @@ object DeribitNormalize {
                 theta = greeks?.dbl("theta"), rho = greeks?.dbl("rho")))
         }
         val out = ArrayList<Record>()
+        // `fundingRate` is read from `current_funding`. `funding_8h` is not read here. The Deribit
+        // docs describe both fields only by label, so this code makes no claim that either one is
+        // realized or forward-looking. predictedFundingRate stays null: no forward field is mapped.
         out.add(DerivativeTicker(Venue.DERIBIT, canon(sym), sym, ts, localTs,
             lastPrice = td.dbl("last_price"), markPrice = td.dbl("mark_price"), indexPrice = td.dbl("index_price"),
-            fundingRate = td.dbl("current_funding"), predictedFundingRate = td.dbl("funding_8h"),
+            fundingRate = td.dbl("current_funding"), predictedFundingRate = null,
             openInterest = td.dbl("open_interest")))
         val cf = td.dbl("current_funding")
         if (cf != null) out.add(Funding(Venue.DERIBIT, canon(sym), sym, ts, localTs,
-            fundingRate = cf, predictedFundingRate = td.dbl("funding_8h"), fundingTs = ts, intervalHours = 8))
+            fundingRate = cf, predictedFundingRate = null, fundingTs = ts, intervalHours = 8))
         return out
     }
 }

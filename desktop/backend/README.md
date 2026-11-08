@@ -44,6 +44,8 @@ uv run pytest -m live -q     # network-gated, against live Binance
   beta/corr vs BTCUSDT + greedy corr>0.6 sector clustering); `GET /api/structure` maps the
   top universe. Report-only annotations.
 
-Design notes: `../../docs/superpowers/specs/2026-06-09-dive-into-crypto-desktop-design.md`.
-Data is fed by [Crypcodile](https://github.com/nazmiefearmutcu/Crypcodile) (pinned commit). Public
-Binance data only — no account, no keys.
+Design notes for the desktop edition are kept out of this repository. For the public API see
+[docs/api.md](../../docs/api.md); for the claims workflow see [docs/claims](../../docs/claims/README.md).
+Data is fed by [Crocodile](https://github.com/nazmiefearmutcu/Crocodile) (pinned commit). Public
+read-only data only: Binance futures and spot, Deribit options, alternative.me and DefiLlama (see
+the Data sources table in the root README). No account, no keys.

@@ -40,6 +40,10 @@ class HistVolPercentileIndicator(BaseIndicator):
         cur = float(window[-1])
         pctile = float((window <= cur).mean())
         move = (close[-1] - close[-1 - period]) / close[-1 - period] if close[-1 - period] else 0.0
+        # The current vol must be the latest bar's window (a NaN bar makes it NaN, and the
+        # percentile would otherwise be ranked on a stale, older window).
+        if not (np.isfinite(vol[-1]) and np.isfinite(move)):
+            return self._make_result(Signal.NEUTRAL, "HV%ile data invalid")
         raw = {"hv_percentile": round(pctile, 4), "move": round(float(move), 5)}
 
         if pctile < extreme or abs(move) < move_min:

@@ -1,7 +1,7 @@
 # Contributing to Dive into Crypto
 
-Thanks for your interest. This repo has three editions sharing one engine, so contributions
-touch one of four areas: the Python engine/backend (`desktop/backend`), the React UI
+Thanks for your interest. This repo has two editions (desktop and Android) sharing one engine, so
+contributions touch one of four areas: the Python engine/backend (`desktop/backend`), the React UI
 (`desktop/ui`), the Kotlin/Compose Android edition (`android/`), or the root E2E suite
 (`tests/`).
 
@@ -20,28 +20,31 @@ offline by default.
 
 ## Running the tests
 
-Four suites; test counts are approximate and grow as features land. See
+Four suites. Test counts change as features land, so take the current numbers from the CI run
+or from the test runners themselves rather than from the docs. See
 [docs/testing.md](docs/testing.md) for what each suite covers.
 
 ```bash
-# 1 · Backend engine suite (~112 tests, offline)
+# 1 · Backend engine suite (offline)
 cd desktop/backend && uv sync && uv run pytest -q
 
-# 2 · Root E2E suite (~95 tests, offline — data layer is mocked)
+# 2 · Root E2E suite (offline — data layer is mocked)
 uv run --project desktop/backend pytest tests/ -q
 
-# 3 · UI suite (5 tests) + rebuild the committed bundle
+# 3 · UI suite + rebuild the committed bundle
 cd desktop/ui && npm ci && npm test && node build.mjs
 
-# 4 · Android unit tests (~129 tests, JDK 17)
+# 4 · Android unit tests (JDK 17)
 cd android && ./gradlew :app:test
 ```
 
-`./run_tests.sh` runs all four in order and prints a summary. Live-network tests are opt-in:
-`uv run pytest -m live` (never run in CI; see docs/testing.md).
+`./run_tests.sh` runs all four in order and prints a summary; it exits non-zero if any suite
+fails. Live-network tests are opt-in and run from the backend directory:
+`cd desktop/backend && uv run pytest -m live -q` (never run in CI; see docs/testing.md).
 
-CI (`.github/workflows/ci.yml`) runs backend + root suites, the UI suite with a **dist-drift
-gate**, and Android tests + a debug APK build on every push to `main` and pull request.
+CI (`.github/workflows/ci.yml`) runs the backend and root suites, the UI suite with a **dist-drift
+gate**, and on every push to `main` and every pull request, the Android job: unit tests, lint,
+a debug APK, and an unsigned release build used as a smoke test.
 
 ## The committed-dist convention
 
@@ -88,10 +91,11 @@ README](README.md#parity).
 
 ## Platform notes
 
-**Windows:** Android builds require the project to live at an **ASCII-only path** — the
-Android Gradle Plugin's path check fails on non-ASCII directories (e.g. paths containing
-`ı`, `ş`, `ç`). If `C:\Users\<name>\...` contains non-ASCII characters, clone the repo
-somewhere like `C:\dev\dive-into-crypto`.
+**Windows:** if your user profile path contains non-ASCII characters (for example
+`C:\Users\Kullanıcı`), Gradle and the JDK can fail with `Unable to establish loopback connection`
+or `Could not find or load main class ...GradleWorkerMain`. Point `GRADLE_USER_HOME`, `TMP`/`TEMP`
+and `JAVA_TOOL_OPTIONS` at an ASCII-only folder, with JDK 17. The steps are in
+[Windows build notes](docs/testing.md#windows-build-notes).
 
 **Windows (Git Bash):** `run_tests.sh` needs a JDK 17; point it at yours per-invocation:
 `JAVA_HOME="/c/Program Files/Eclipse Adoptium/jdk-17.0.x-hotspot" ./run_tests.sh`.
@@ -100,16 +104,17 @@ somewhere like `C:\dev\dive-into-crypto`.
 
 - Keep PRs focused; run the relevant suites (ideally all four) before opening.
 - CI must be green; a red dist-drift job means you forgot step 2 above.
-- No API keys, keystore files, or secrets of any kind — the app reads public Binance data
-  only, and `.gitignore` blocks keystores deliberately.
+- No API keys, keystore files, or secrets of any kind — the app reads only public market data
+  (see the Data sources table in the README), and `.gitignore` blocks keystores deliberately.
 
 ## Release process
 
 Releases are tag-driven. Pushing a `v*` tag runs `.github/workflows/release.yml`, which:
 
-- builds the **Android** release APK + AAB (R8-minified, signed when the
-  `KEYSTORE_BASE64` / `KEYSTORE_PASSWORD` / `KEY_ALIAS` / `KEY_PASSWORD` secrets are set —
-  an unsigned build is still published otherwise) and attaches them to the GitHub Release;
+- builds the **Android** release AAB (for Google Play), a signed APK and `mapping.txt`
+  (R8-minified). It requires the `KEYSTORE_BASE64` / `KEYSTORE_PASSWORD` / `KEY_ALIAS` /
+  `KEY_PASSWORD` secrets and stops before building if any of them is missing, so an unsigned
+  release is never published. It attaches the files to the GitHub Release;
 - optionally packages the **desktop** edition with PyInstaller via the manual
   `package_desktop` workflow input (never on tags).
 

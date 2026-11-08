@@ -25,7 +25,10 @@ class SmaCrossIndicator(config: IndicatorConfig) : BaseIndicator(config) {
         val longPeriod = config.getInt("long_period", 50)
         val strongDivergencePct = config.getDouble("strong_divergence_pct", 0.02)
 
-        if (candles.size < longPeriod + 1) {
+        // Mirrors sma_cross.py: the current values need only the window to be full. At
+        // exactly long_period bars the previous long SMA is NaN, which makes the cross
+        // tests false (no fallback to the current value) while the alignment still reads.
+        if (candles.size < longPeriod) {
             return result(Signal.NEUTRAL, "SMA data insufficient")
         }
 
@@ -37,8 +40,9 @@ class SmaCrossIndicator(config: IndicatorConfig) : BaseIndicator(config) {
             ?: return result(Signal.NEUTRAL, "SMA data insufficient")
         val currentLong = smaLong.last()
             ?: return result(Signal.NEUTRAL, "SMA data insufficient")
-        val prevShort = smaShort[smaShort.size - 2] ?: currentShort
-        val prevLong = smaLong[smaLong.size - 2] ?: currentLong
+        // Previous bar exactly (iloc[-2]); a null (NaN) there keeps the cross tests false.
+        val prevShort: Double? = smaShort.getOrElse(smaShort.size - 2) { currentShort }
+        val prevLong: Double? = smaLong.getOrElse(smaLong.size - 2) { currentLong }
 
         val divergence = if (currentLong != 0.0) (currentShort - currentLong) / currentLong else 0.0
 
@@ -48,8 +52,10 @@ class SmaCrossIndicator(config: IndicatorConfig) : BaseIndicator(config) {
             "divergence_pct" to round4(divergence),
         )
 
-        val bullishCross = prevShort <= prevLong && currentShort > currentLong
-        val bearishCross = prevShort >= prevLong && currentShort < currentLong
+        val bullishCross = prevShort != null && prevLong != null &&
+            prevShort <= prevLong && currentShort > currentLong
+        val bearishCross = prevShort != null && prevLong != null &&
+            prevShort >= prevLong && currentShort < currentLong
 
         return when {
             bullishCross && abs(divergence) > strongDivergencePct ->

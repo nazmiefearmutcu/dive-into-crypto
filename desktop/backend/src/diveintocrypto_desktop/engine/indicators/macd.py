@@ -1,8 +1,6 @@
 """MACD (Moving Average Convergence Divergence) indicator."""
 
-from typing import Any
 import pandas as pd
-import numpy as np
 
 from diveintocrypto_desktop.engine.indicators.base import BaseIndicator, IndicatorResult, Signal
 

@@ -7,11 +7,11 @@ import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.appendPathSegments
-import io.ktor.http.isSuccess
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -27,6 +27,10 @@ import kotlinx.serialization.json.longOrNull
  * Endpoint base is `fapi.binance.com` (not `api.binance.com`), matching the
  * original reference implementation's market. Kline JSON shape is identical to spot,
  * so the candle parser is shared in spirit with [BinanceSpotClient].
+ *
+ * Error contract: every non-2xx answer throws [UpstreamHttpException]. A row whose
+ * REQUIRED numeric field is missing or malformed is dropped (or, for the single
+ * premium-index snapshot, the call fails) — never zero-filled.
  */
 class BinanceFuturesClient(
     private val baseUrl: String = DEFAULT_BASE_URL,
@@ -44,18 +48,18 @@ class BinanceFuturesClient(
                 appendPathSegments("fapi", "v1", "ticker", "24hr")
             }
         }
-        if (!response.status.isSuccess()) throw IllegalStateException("ticker/24hr HTTP ${response.status.value}")
+        requireUpstreamOk("ticker/24hr", response.status)
         val raw = response.bodyAsText()
         return Json.parseToJsonElement(raw).jsonArray.mapNotNull { entry ->
             val o = entry.jsonObject
-            val sym = o["symbol"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+            val sym = o.stringValue("symbol") ?: return@mapNotNull null
             Ticker24h(
                 symbol = sym,
-                lastPrice = o["lastPrice"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: 0.0,
-                priceChangePercent = o["priceChangePercent"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: 0.0,
-                quoteVolume = o["quoteVolume"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: 0.0,
-                highPrice = o["highPrice"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: 0.0,
-                lowPrice = o["lowPrice"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: 0.0,
+                lastPrice = o.finiteDouble("lastPrice") ?: return@mapNotNull null,
+                priceChangePercent = o.finiteDouble("priceChangePercent") ?: return@mapNotNull null,
+                quoteVolume = o.finiteDouble("quoteVolume") ?: return@mapNotNull null,
+                highPrice = o.finiteDouble("highPrice") ?: return@mapNotNull null,
+                lowPrice = o.finiteDouble("lowPrice") ?: return@mapNotNull null,
             )
         }
     }
@@ -78,14 +82,14 @@ class BinanceFuturesClient(
                 parameters.append("limit", limit.toString())
             }
         }
-        if (!response.status.isSuccess()) throw IllegalStateException("openInterestHist HTTP ${response.status.value}")
+        requireUpstreamOk("openInterestHist", response.status)
         val raw = response.bodyAsText()
         return Json.parseToJsonElement(raw).jsonArray.mapNotNull { entry ->
             val o = entry.jsonObject
             OpenInterestPoint(
-                timestamp = o["timestamp"]?.jsonPrimitive?.longOrNull ?: return@mapNotNull null,
-                sumOpenInterest = o["sumOpenInterest"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: 0.0,
-                sumOpenInterestValue = o["sumOpenInterestValue"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: 0.0,
+                timestamp = o.longValue("timestamp") ?: return@mapNotNull null,
+                sumOpenInterest = o.finiteDouble("sumOpenInterest") ?: return@mapNotNull null,
+                sumOpenInterestValue = o.finiteDouble("sumOpenInterestValue") ?: return@mapNotNull null,
             )
         }
     }
@@ -126,15 +130,15 @@ class BinanceFuturesClient(
                 parameters.append("limit", limit.toString())
             }
         }
-        if (!response.status.isSuccess()) throw IllegalStateException("$endpoint HTTP ${response.status.value}")
+        requireUpstreamOk(endpoint, response.status)
         val raw = response.bodyAsText()
         return Json.parseToJsonElement(raw).jsonArray.mapNotNull { entry ->
             val o = entry.jsonObject
             LongShortRatioPoint(
-                timestamp = o["timestamp"]?.jsonPrimitive?.longOrNull ?: return@mapNotNull null,
-                longAccount = o["longAccount"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: 0.0,
-                shortAccount = o["shortAccount"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: 0.0,
-                longShortRatio = o["longShortRatio"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: 0.0,
+                timestamp = o.longValue("timestamp") ?: return@mapNotNull null,
+                longAccount = o.finiteDouble("longAccount") ?: return@mapNotNull null,
+                shortAccount = o.finiteDouble("shortAccount") ?: return@mapNotNull null,
+                longShortRatio = o.finiteDouble("longShortRatio") ?: return@mapNotNull null,
             )
         }
     }
@@ -156,15 +160,15 @@ class BinanceFuturesClient(
                 parameters.append("limit", limit.toString())
             }
         }
-        if (!response.status.isSuccess()) throw IllegalStateException("takerlongshortRatio HTTP ${response.status.value}")
+        requireUpstreamOk("takerlongshortRatio", response.status)
         val raw = response.bodyAsText()
         return Json.parseToJsonElement(raw).jsonArray.mapNotNull { entry ->
             val o = entry.jsonObject
             TakerLongShortRatioPoint(
-                timestamp = o["timestamp"]?.jsonPrimitive?.longOrNull ?: return@mapNotNull null,
-                buySellRatio = o["buySellRatio"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: 0.0,
-                buyVol = o["buyVol"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: 0.0,
-                sellVol = o["sellVol"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: 0.0,
+                timestamp = o.longValue("timestamp") ?: return@mapNotNull null,
+                buySellRatio = o.finiteDouble("buySellRatio") ?: return@mapNotNull null,
+                buyVol = o.finiteDouble("buyVol") ?: return@mapNotNull null,
+                sellVol = o.finiteDouble("sellVol") ?: return@mapNotNull null,
             )
         }
     }
@@ -194,13 +198,13 @@ class BinanceFuturesClient(
                 parameters.append("limit", limit.toString())
             }
         }
-        if (!response.status.isSuccess()) throw IllegalStateException("fundingRate HTTP ${response.status.value}")
+        requireUpstreamOk("fundingRate", response.status)
         val raw = response.bodyAsText()
         return Json.parseToJsonElement(raw).jsonArray.mapNotNull { entry ->
             val o = entry.jsonObject
             FundingRatePoint(
-                timestamp = o["fundingTime"]?.jsonPrimitive?.longOrNull ?: return@mapNotNull null,
-                fundingRate = o["fundingRate"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: 0.0,
+                timestamp = o.longValue("fundingTime") ?: return@mapNotNull null,
+                fundingRate = o.finiteDouble("fundingRate") ?: return@mapNotNull null,
             )
         }
     }
@@ -209,6 +213,9 @@ class BinanceFuturesClient(
      * Premium index for one symbol — current mark price, index price, the
      * (predicted) last funding rate and the next funding time.
      * Binance public endpoint `/fapi/v1/premiumIndex`.
+     *
+     * Throws if a required field is missing or malformed: a degraded payload must
+     * surface as unavailable, never as a real-looking 0% funding rate or zero price.
      */
     suspend fun premiumIndex(symbol: String): PremiumIndexDto {
         val response = client.get(baseUrl) {
@@ -217,16 +224,39 @@ class BinanceFuturesClient(
                 parameters.append("symbol", symbol)
             }
         }
-        if (!response.status.isSuccess()) throw IllegalStateException("premiumIndex HTTP ${response.status.value}")
+        requireUpstreamOk("premiumIndex", response.status)
         val raw = response.bodyAsText()
         val o = Json.parseToJsonElement(raw).jsonObject
         return PremiumIndexDto(
-            symbol = o["symbol"]?.jsonPrimitive?.contentOrNull ?: symbol,
-            markPrice = o["markPrice"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: 0.0,
-            indexPrice = o["indexPrice"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: 0.0,
-            lastFundingRate = o["lastFundingRate"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: 0.0,
-            nextFundingTime = o["nextFundingTime"]?.jsonPrimitive?.longOrNull ?: 0L,
+            symbol = o.stringValue("symbol") ?: symbol,
+            markPrice = o.finiteDouble("markPrice") ?: missing("premiumIndex", "markPrice"),
+            indexPrice = o.finiteDouble("indexPrice") ?: missing("premiumIndex", "indexPrice"),
+            lastFundingRate = o.finiteDouble("lastFundingRate") ?: missing("premiumIndex", "lastFundingRate"),
+            nextFundingTime = o.longValue("nextFundingTime") ?: missing("premiumIndex", "nextFundingTime"),
         )
+    }
+
+    /**
+     * Funding interval in hours per symbol, from `/fapi/v1/fundingInfo`. Binance does
+     * not settle every USD-M perpetual on the same cadence, so the APR math must
+     * read this instead of assuming 8h. Symbols absent from the map use the venue
+     * default (8h); malformed rows are skipped.
+     */
+    suspend fun fundingIntervalHours(): Map<String, Int> {
+        val response = client.get(baseUrl) {
+            url {
+                appendPathSegments("fapi", "v1", "fundingInfo")
+            }
+        }
+        requireUpstreamOk("fundingInfo", response.status)
+        val raw = response.bodyAsText()
+        return Json.parseToJsonElement(raw).jsonArray.mapNotNull { entry ->
+            val o = entry.jsonObject
+            val sym = o.stringValue("symbol") ?: return@mapNotNull null
+            val hours = (o["fundingIntervalHours"] as? JsonPrimitive)?.intOrNull?.takeIf { it > 0 }
+                ?: return@mapNotNull null
+            sym to hours
+        }.toMap()
     }
 
     /**
@@ -240,24 +270,33 @@ class BinanceFuturesClient(
                 appendPathSegments("fapi", "v1", "ticker", "24hr")
             }
         }
-        if (!response.status.isSuccess()) throw IllegalStateException("ticker/24hr HTTP ${response.status.value}")
+        requireUpstreamOk("ticker/24hr", response.status)
         val raw = response.bodyAsText()
         val arr = Json.parseToJsonElement(raw).jsonArray
         return arr
             .map { it.jsonObject }
             .mapNotNull { obj ->
-                val sym = obj["symbol"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+                val sym = obj.stringValue("symbol") ?: return@mapNotNull null
                 if (!sym.endsWith("USDT")) return@mapNotNull null
                 if (sym in skip) return@mapNotNull null
-                val vol = obj["quoteVolume"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: 0.0
+                val vol = obj.finiteDouble("quoteVolume") ?: return@mapNotNull null
                 sym to vol
             }
             .sortedByDescending { it.second }
             .map { it.first }
     }
 
-    /** Kline endpoint — identical shape to spot but served from /fapi/v1/klines. */
-    suspend fun klines(symbol: String, interval: String = "1h", limit: Int = 300): List<Candle> {
+    /**
+     * Kline endpoint — identical shape to spot but served from /fapi/v1/klines.
+     * [startTimeMs] / [endTimeMs] (inclusive, epoch ms) bound the window when given.
+     */
+    suspend fun klines(
+        symbol: String,
+        interval: String = "1h",
+        limit: Int = 300,
+        startTimeMs: Long? = null,
+        endTimeMs: Long? = null,
+    ): List<Candle> {
         logDebug("BinanceFuturesClient", "klines: executing request for $symbol $interval...")
         val raw = try {
             val response = client.get(baseUrl) {
@@ -266,10 +305,12 @@ class BinanceFuturesClient(
                     parameters.append("symbol", symbol)
                     parameters.append("interval", interval)
                     parameters.append("limit", limit.toString())
+                    startTimeMs?.let { parameters.append("startTime", it.toString()) }
+                    endTimeMs?.let { parameters.append("endTime", it.toString()) }
                 }
             }
             logDebug("BinanceFuturesClient", "klines: request executed. code=${response.status.value}")
-            if (!response.status.isSuccess()) throw IllegalStateException("klines HTTP ${response.status.value}")
+            requireUpstreamOk("klines", response.status)
             val bodyString = response.bodyAsText()
             logDebug("BinanceFuturesClient", "klines: body string read. length=${bodyString.length}")
             bodyString
@@ -316,7 +357,8 @@ class BinanceFuturesClient(
      * This is what the rolling CVD is built from. `limit` is capped at 1000 by
      * the venue — for the most liquid symbols 1000 trades can span less than the
      * full 15-minute CVD window; the snapshot is then honest about the span it
-     * actually covers (see [CvdAggregator]).
+     * actually covers (see [CvdAggregator]). A trade without a price, quantity,
+     * timestamp or aggressor flag is dropped: it must not count as taker buying.
      */
     suspend fun aggTrades(symbol: String, limit: Int = 1000): List<AggTrade> {
         val response = client.get(baseUrl) {
@@ -326,19 +368,22 @@ class BinanceFuturesClient(
                 parameters.append("limit", limit.coerceIn(1, 1000).toString())
             }
         }
-        if (!response.status.isSuccess()) throw IllegalStateException("aggTrades HTTP ${response.status.value}")
+        requireUpstreamOk("aggTrades", response.status)
         val raw = response.bodyAsText()
         return Json.parseToJsonElement(raw).jsonArray.mapNotNull { entry ->
             val o = entry.jsonObject
             AggTrade(
-                aggTradeId = o["a"]?.jsonPrimitive?.longOrNull ?: return@mapNotNull null,
-                price = o["p"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: 0.0,
-                quantity = o["q"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: 0.0,
-                timestamp = o["T"]?.jsonPrimitive?.longOrNull ?: return@mapNotNull null,
-                isBuyerMaker = o["m"]?.jsonPrimitive?.booleanOrNull ?: false,
+                aggTradeId = o.longValue("a") ?: return@mapNotNull null,
+                price = o.finiteDouble("p") ?: return@mapNotNull null,
+                quantity = o.finiteDouble("q") ?: return@mapNotNull null,
+                timestamp = o.longValue("T") ?: return@mapNotNull null,
+                isBuyerMaker = (o["m"] as? JsonPrimitive)?.booleanOrNull ?: return@mapNotNull null,
             )
         }
     }
+
+    private fun missing(endpoint: String, field: String): Nothing =
+        throw IllegalStateException("$endpoint: missing or malformed '$field'")
 
     companion object {
         const val DEFAULT_BASE_URL = "https://fapi.binance.com"
@@ -412,6 +457,7 @@ data class FundingRatePoint(
  * One row of `/fapi/v1/premiumIndex` (single-symbol response).
  * [lastFundingRate] is the venue's CURRENT (predicted) funding rate for the
  * next settlement — the last SETTLED rate comes from /fapi/v1/fundingRate.
+ * Every field is required: the client throws rather than substituting a value.
  */
 data class PremiumIndexDto(
     val symbol: String,

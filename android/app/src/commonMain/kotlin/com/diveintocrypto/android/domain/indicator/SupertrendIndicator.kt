@@ -15,7 +15,9 @@ class SupertrendIndicator(config: IndicatorConfig) : BaseIndicator(config) {
         val multiplier = config.getDouble("multiplier", 3.0)
 
         val n = candles.size
-        if (n < period) {
+        // The ATR seed lives at index `period`, so n must be at least period + 1
+        // (also rejects period 0, which would otherwise index atr[-1]).
+        if (period < 1 || n < period + 1) {
             return result(Signal.NEUTRAL, "Supertrend data insufficient")
         }
 
@@ -32,11 +34,11 @@ class SupertrendIndicator(config: IndicatorConfig) : BaseIndicator(config) {
             tr[i] = maxOf(tr1, tr2, tr3)
         }
 
-        // ATR: seed = mean(tr[1:period+1]) (numpy slice clamps at n), then RMA (SMMA)
+        // ATR: seed = mean(tr[1..period]) placed at index `period`, then RMA (SMMA)
+        // from period+1. Seeding at period-1 counted tr[period] twice.
         val atr = DoubleArray(n)
-        val seedEnd = minOf(period + 1, n)
-        atr[period - 1] = tr.slice(1 until seedEnd).average()
-        for (i in period until n) {
+        atr[period] = tr.slice(1..period).average()
+        for (i in period + 1 until n) {
             atr[i] = (atr[i - 1] * (period - 1) + tr[i]) / period
         }
 

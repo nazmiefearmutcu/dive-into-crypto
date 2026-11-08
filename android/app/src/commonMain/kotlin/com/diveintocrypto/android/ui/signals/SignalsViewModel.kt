@@ -3,10 +3,13 @@ package com.diveintocrypto.android.ui.signals
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.diveintocrypto.android.AppContainer
+import com.diveintocrypto.android.data.binance.isRegionBlocked
 import com.diveintocrypto.android.domain.model.Candle
 import com.diveintocrypto.android.domain.model.IndicatorResult
 import com.diveintocrypto.android.domain.model.SignalDetail
 import com.diveintocrypto.android.platform.nowMillis
+import com.diveintocrypto.android.ui.common.userFacingText
+import com.diveintocrypto.android.ui.i18n.DiveStrings
 import com.diveintocrypto.android.ui.panel.ALL_TIMEFRAMES
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -20,12 +23,17 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * ViewModel for SignalsScreen — multi-timeframe version.
  * Loads history for all 12 timeframes in parallel when active symbol changes,
  * computes consensus outcome and indicator vote breakdown for all of them,
  * and maintains a live ticker stream subscription for the active timeframe.
+ *
+ * Threading: every job-handle mutation (symbol load, ticker restart, staleness watchdog)
+ * runs on the main dispatcher; only the network fetches and the indicator maths hop to
+ * [Dispatchers.Default]. Candle state is guarded by [mapLock].
  */
 class SignalsViewModel(private val container: AppContainer) : ViewModel() {
 
@@ -35,9 +43,15 @@ class SignalsViewModel(private val container: AppContainer) : ViewModel() {
     private val candlesMap = mutableMapOf<String, List<Candle>>()
     private val mapLock = kotlinx.atomicfu.locks.SynchronizedObject()
 
+    /** Symbol whose candles are loaded (set when a load starts). Ticks for any other symbol are
+     *  dropped. Guarded by [mapLock]. */
+    private var loadedSymbol: String? = null
+
     private var symbolJobs: Job? = null
     private var tickerJob: Job? = null
     private var stalenessJob: Job? = null
+
+    private fun strings(): DiveStrings = container.language.value
 
     init {
         // Collect active symbol changes.
@@ -75,37 +89,79 @@ class SignalsViewModel(private val container: AppContainer) : ViewModel() {
         restartSymbolJobs(currentSymbol)
     }
 
+    /** One timeframe's history load: the candles, or the failure that prevented them. */
+    private class TfLoad(val tf: String, val candles: List<Candle>, val failure: Throwable?)
+
+    private suspend fun loadTf(symbol: String, tf: String): TfLoad = try {
+        TfLoad(tf, container.repository.futuresHistory(symbol, tf, limit = 300), null)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (t: Throwable) {
+        TfLoad(tf, emptyList(), t)
+    }
+
     private fun restartSymbolJobs(symbol: String) {
         symbolJobs?.cancel()
-        symbolJobs = viewModelScope.launch(Dispatchers.Default) {
+        tickerJob?.cancel()
+        stalenessJob?.cancel()
+        // Switching symbol drops the previous symbol's candles, grid and live stream, so
+        // nothing of it stays on screen (was: BTC values kept under the ETH selection).
+        // A pull-to-refresh of the SAME symbol keeps the grid on screen while it reloads.
+        val switched = kotlinx.atomicfu.locks.synchronized(mapLock) {
+            val differs = loadedSymbol != symbol
+            if (differs) candlesMap.clear()
+            loadedSymbol = symbol
+            differs
+        }
+        if (switched) {
+            _ui.update {
+                it.copy(
+                    tfSignals = emptyMap(),
+                    isStale = true,
+                    dataAgeMs = null,
+                    failedTfs = emptySet(),
+                    regionBlocked = false,
+                )
+            }
+        }
+        symbolJobs = viewModelScope.launch {
             try {
-                // Fetch historical candles for all 12 timeframes in parallel
-                val results = coroutineScope {
-                    ALL_TIMEFRAMES.map { tf ->
-                        async {
-                            val cs = try {
-                                container.repository.futuresHistory(symbol, tf, limit = 300)
-                            } catch (_: Throwable) {
-                                emptyList()
-                            }
-                            tf to cs
-                        }
-                    }.awaitAll()
+                // Fetch historical candles for all 12 timeframes in parallel.
+                val loads = withContext(Dispatchers.Default) {
+                    coroutineScope {
+                        ALL_TIMEFRAMES.map { tf -> async { loadTf(symbol, tf) } }.awaitAll()
+                    }
                 }
 
-                results.forEach { (tf, cs) ->
-                    kotlinx.atomicfu.locks.synchronized(mapLock) { candlesMap[tf] = cs }
+                kotlinx.atomicfu.locks.synchronized(mapLock) {
+                    loads.forEach { candlesMap[it.tf] = it.candles }
                 }
 
                 recomputeAll()
 
+                // HONESTY: failed timeframes are counted and shown, never rendered as a quiet N/A.
+                val s = strings()
+                val failures = loads.filter { it.failure != null }
+                val allFailed = failures.size == loads.size
+                val firstFailure = failures.firstOrNull()?.failure
+                _ui.update {
+                    it.copy(
+                        isLoading = false,
+                        errorMessage = if (allFailed) firstFailure?.userFacingText(s) else null,
+                        regionBlocked = allFailed && firstFailure?.isRegionBlocked() == true,
+                        failedTfs = failures.map { f -> f.tf }.toSet(),
+                    )
+                }
+
                 // Automatically restart/synchronize the live stream for the active timeframe
                 restartTickerJob(container.activeTimeframe.value)
+            } catch (e: CancellationException) {
+                throw e
             } catch (t: Throwable) {
                 _ui.update {
                     it.copy(
                         isLoading = false,
-                        errorMessage = t.message ?: "Network error: failed to fetch data"
+                        errorMessage = t.userFacingText(strings()),
                     )
                 }
             }
@@ -115,7 +171,9 @@ class SignalsViewModel(private val container: AppContainer) : ViewModel() {
     private fun restartTickerJob(timeframe: String) {
         tickerJob?.cancel()
         stalenessJob?.cancel()
-        val symbol = container.activeSymbol.value
+        // Subscribe only once the current symbol has been loaded: its candles are then the base
+        // the live bars merge into. Before that there is nothing consistent to stream into.
+        val symbol = kotlinx.atomicfu.locks.synchronized(mapLock) { loadedSymbol } ?: return
 
         var lastWsMessageTime = 0L
 
@@ -128,10 +186,19 @@ class SignalsViewModel(private val container: AppContainer) : ViewModel() {
                 container.repository.liveKlines(symbol, timeframe).collect { update ->
                     lastWsMessageTime = nowMillis()
                     _ui.update { it.copy(isStale = false, dataAgeMs = 0L) }
-                    processTick(timeframe, update.candle)
+                    try {
+                        processTick(symbol, timeframe, update.candle)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Throwable) {
+                        // One bad tick must not kill the live stream; the feed itself is still alive.
+                    }
                 }
             } catch (e: CancellationException) {
                 throw e
+            } catch (_: Throwable) {
+                // HONESTY: the stream failed terminally — flag it stale instead of crashing the app.
+                _ui.update { it.copy(isStale = true) }
             }
         }
 
@@ -161,50 +228,78 @@ class SignalsViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
-    private fun processTick(timeframe: String, candle: Candle) {
-        val cs = kotlinx.atomicfu.locks.synchronized(mapLock) { candlesMap[timeframe] } ?: emptyList()
-        val lastCandle = cs.lastOrNull()
-        val newCandles = when {
-            lastCandle == null -> listOf(candle)
-            candle.openTime == lastCandle.openTime -> {
-                cs.dropLast(1) + candle
+    /** Merges one live bar into the loaded candles and recomputes that timeframe.
+     *  Returns silently for a tick whose symbol is no longer the loaded one. */
+    private fun processTick(symbol: String, timeframe: String, candle: Candle) {
+        val newCandles: List<Candle>? = kotlinx.atomicfu.locks.synchronized(mapLock) {
+            if (loadedSymbol != symbol) {
+                null
+            } else {
+                val cs = candlesMap[timeframe] ?: emptyList()
+                val lastCandle = cs.lastOrNull()
+                val merged = when {
+                    lastCandle == null -> listOf(candle)
+                    candle.openTime == lastCandle.openTime -> cs.dropLast(1) + candle
+                    candle.openTime > lastCandle.openTime -> (cs + candle).takeLast(300)
+                    else -> cs
+                }
+                candlesMap[timeframe] = merged
+                merged
             }
-            candle.openTime > lastCandle.openTime -> {
-                (cs + candle).takeLast(300)
-            }
-            else -> cs
         }
-        kotlinx.atomicfu.locks.synchronized(mapLock) { candlesMap[timeframe] = newCandles }
+        if (newCandles == null) return
 
         // Recompute only this timeframe to avoid unnecessary CPU load
         val updatedState = computeTfSignalState(timeframe, newCandles)
+        // Publish only while this symbol is still the loaded one. The check runs inside the update and
+        // reads loadedSymbol under mapLock; restartSymbolJobs sets loadedSymbol before it clears the grid,
+        // so a stale tick either lands before that clear or is skipped here.
         _ui.update {
-            it.copy(
-                tfSignals = it.tfSignals + (timeframe to updatedState),
-                lastUpdateMs = nowMillis()
-            )
+            if (kotlinx.atomicfu.locks.synchronized(mapLock) { loadedSymbol } != symbol) {
+                it
+            } else {
+                it.copy(
+                    tfSignals = it.tfSignals + (timeframe to updatedState),
+                    lastUpdateMs = nowMillis()
+                )
+            }
         }
     }
 
-    private fun recomputeAll() {
-        val newTfSignals = ALL_TIMEFRAMES.associateWith { tf ->
-            val cs = kotlinx.atomicfu.locks.synchronized(mapLock) { candlesMap[tf] } ?: emptyList()
-            computeTfSignalState(tf, cs)
+    /** Recomputes all 12 timeframes off the main thread, then publishes them. */
+    private suspend fun recomputeAll() {
+        val snapshot: Map<String, List<Candle>> = kotlinx.atomicfu.locks.synchronized(mapLock) {
+            ALL_TIMEFRAMES.associateWith { tf -> candlesMap[tf] ?: emptyList() }
+        }
+        val newTfSignals = withContext(Dispatchers.Default) {
+            ALL_TIMEFRAMES.associateWith { tf -> computeTfSignalState(tf, snapshot.getValue(tf)) }
         }
         _ui.update {
             it.copy(
                 tfSignals = newTfSignals,
-                isLoading = false,
                 lastUpdateMs = nowMillis()
             )
         }
     }
 
     private fun computeTfSignalState(tf: String, cs: List<Candle>): TfSignalState {
-        if (cs.isEmpty()) return TfSignalState(timeframe = tf)
+        val s = strings()
+        val now = nowMillis()
+        if (cs.isEmpty()) return TfSignalState(timeframe = tf, reason = s.sigNoDataTimeframe, computedAtMs = now)
+        // Same minimum-history gate as the scanner: a verdict from a handful of bars is not shown.
+        if (cs.size < MIN_HISTORY_CANDLES) {
+            return TfSignalState(
+                timeframe = tf,
+                reason = s.sigInsufficientHistory(cs.size, MIN_HISTORY_CANDLES),
+                computedAtMs = now,
+            )
+        }
 
         val results: List<IndicatorResult> = container.indicators.map { it.calculate(cs) }
-        val consensus = container.consensus.evaluate(results)
+        val consensus = container.consensus.evaluate(
+            results,
+            com.diveintocrypto.android.ui.i18n.consensusLabelsFor(container.language.value),
+        )
 
         val rows = if (results.isNotEmpty()) {
             results.map { r ->
@@ -226,7 +321,14 @@ class SignalsViewModel(private val container: AppContainer) : ViewModel() {
             consensus.confidence > 0 -> "LOW"
             else -> "N/A"
         }
-        val action = if (consensus.shouldTrade) "OPEN_${consensus.finalSignal.name}" else "HOLD"
+        // Non-executional threshold status (no OPEN_*/HOLD tokens): the screen maps these to
+        // "above threshold · upward bias" / "above threshold · downward bias" / "observe only".
+        val action = when {
+            !consensus.shouldTrade -> ACTION_BELOW_THRESHOLD
+            consensus.finalSignal.score > 0 -> ACTION_ABOVE_BULL
+            consensus.finalSignal.score < 0 -> ACTION_ABOVE_BEAR
+            else -> ACTION_BELOW_THRESHOLD
+        }
 
         return TfSignalState(
             timeframe = tf,
@@ -242,6 +344,7 @@ class SignalsViewModel(private val container: AppContainer) : ViewModel() {
             neutralCount = consensus.neutralCount,
             votes = rows,
             signalDetails = consensus.signalDetails,
+            computedAtMs = now,
         )
     }
 
@@ -258,6 +361,14 @@ class SignalsViewModel(private val container: AppContainer) : ViewModel() {
 
         /** Minimum interval between staleness-age state pushes (bounds recomposition). */
         const val STALE_AGE_PUSH_MS = 5_000L
+
+        /** Candles needed before a timeframe verdict is shown (mirrors the scanner's gate). */
+        const val MIN_HISTORY_CANDLES = 50
+
+        /** [TfSignalState.action] tokens — threshold status, never an execution command. */
+        const val ACTION_ABOVE_BULL = "ABOVE_BULL"
+        const val ACTION_ABOVE_BEAR = "ABOVE_BEAR"
+        const val ACTION_BELOW_THRESHOLD = "BELOW"
     }
 }
 
@@ -276,7 +387,8 @@ data class TfSignalState(
     val confidence: Int = 0,
     val weightedScore: Double = 0.0,
     val riskLevel: String = "N/A",
-    val action: String = "N/A",
+    /** Threshold-status token: see [SignalsViewModel.ACTION_ABOVE_BULL] and siblings. */
+    val action: String = SignalsViewModel.ACTION_BELOW_THRESHOLD,
     val shouldTrade: Boolean = false,
     val reason: String = "",
     val buyCount: Int = 0,
@@ -284,6 +396,8 @@ data class TfSignalState(
     val neutralCount: Int = 0,
     val votes: List<IndicatorVoteRow> = emptyList(),
     val signalDetails: List<SignalDetail> = emptyList(),
+    /** Wall-clock time this state was computed; 0 = never. Shown as "as of" on inactive timeframes. */
+    val computedAtMs: Long = 0L,
 )
 
 data class SignalsUiState(
@@ -292,7 +406,12 @@ data class SignalsUiState(
     val tfSignals: Map<String, TfSignalState> = emptyMap(),
     val lastUpdateMs: Long? = null,
     val isLoading: Boolean = true,
+    /** Localized failure text when the whole load failed (null = loaded, possibly partially). */
     val errorMessage: String? = null,
+    /** True when the failed load was a regional block (HTTP 451): no retry loop, dedicated text. */
+    val regionBlocked: Boolean = false,
+    /** Timeframes whose history could not be loaded; shown as a partial-data note. */
+    val failedTfs: Set<String> = emptySet(),
     /**
      * HONESTY FIELDS (replaces the deleted random-tick fallback):
      * true once no WebSocket frame has arrived for more than [SignalsViewModel.STALE_AFTER_MS]

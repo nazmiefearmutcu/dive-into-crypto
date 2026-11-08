@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from diveintocrypto_desktop.engine.indicators.base import IndicatorResult, Signal, SIGNAL_SCORES
+from diveintocrypto_desktop.engine.indicators.base import IndicatorResult, Signal
 from diveintocrypto_desktop.engine.utils.logger import get_logger
 
 logger = get_logger("consensus.scorer")

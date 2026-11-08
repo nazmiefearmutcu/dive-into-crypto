@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Round adaptive launcher icon (API 26+). Artwork sits inside the 66dp safe zone.
+     Kept in the explicit -v26 folder on purpose: without a version qualifier AAPT2
+     auto-versions this file to v33 because of <monochrome>, and the manifest's
+     @mipmap/ic_launcher_round then fails to resolve for minSdk 26. -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@drawable/ic_launcher_background" />
+    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+    <monochrome android:drawable="@drawable/ic_launcher_monochrome" />
+</adaptive-icon>

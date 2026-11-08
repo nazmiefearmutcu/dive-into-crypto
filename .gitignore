@@ -22,6 +22,8 @@ Thumbs.db
 
 # Secrets — never commit
 *.keystore
+*.p12
+*.pfx
 !release.keystore.example
 .env
 .env.local

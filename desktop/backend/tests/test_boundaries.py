@@ -53,7 +53,9 @@ def test_mfi_prices_only_up_division_by_zero():
     assert res.raw_values["mfi"] == 100.0
 
 def test_adx_di_equal_directional_changes():
-    # Check that equal directional changes produce plus_dm = 0.0 and minus_dm = 0.0
+    # Equal up/down moves on every bar give plus_dm = minus_dm = 0, so +DI and -DI are
+    # both 0 and DX (0/0) is undefined. ADX is therefore NaN and the indicator must
+    # answer NEUTRAL through its insufficient-data path, with no raw values.
     adx_ind = ADXDIIndicator(config={"indicator_thresholds": {"adx_di": {"period": 14}}})
     df_full = pd.DataFrame({
         "high": [10.0 + (i % 2) * 2.0 for i in range(30)],
@@ -61,7 +63,9 @@ def test_adx_di_equal_directional_changes():
         "close": [9.0] * 30
     })
     res = adx_ind.calculate(df_full)
-    assert res.signal in {Signal.BUY, Signal.SELL, Signal.NEUTRAL, Signal.STRONG_BUY, Signal.STRONG_SELL}
+    assert res.signal == Signal.NEUTRAL
+    assert res.reason == "ADX/DI data insufficient"
+    assert res.raw_values is None
 
 def test_bollinger_squeeze_breakout_signals():
     # Verify that a squeeze breakout:

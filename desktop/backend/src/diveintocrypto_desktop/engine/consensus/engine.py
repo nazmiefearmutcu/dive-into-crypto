@@ -1,14 +1,17 @@
 """Consensus engine - aggregates indicator signals into a final trading decision."""
 
+import math
 from typing import Any
 
-from diveintocrypto_desktop.engine.indicators.base import IndicatorResult, Signal, SIGNAL_SCORES
+from diveintocrypto_desktop.engine.indicators.base import IndicatorResult, Signal
 from diveintocrypto_desktop.engine.consensus.scorer import compute_weighted_score
-from diveintocrypto_desktop.engine.consensus.risk import assess_risk, RiskLevel
+from diveintocrypto_desktop.engine.consensus.risk import assess_risk
 from diveintocrypto_desktop.engine.utils.logger import get_logger
 from diveintocrypto_desktop.engine.utils.helpers import clamp
 
 logger = get_logger("consensus.engine")
+
+RISK_ORDER: dict[str, int] = {"LOW": 0, "MEDIUM": 1, "HIGH": 2}
 
 
 class ConsensusEngine:
@@ -16,9 +19,22 @@ class ConsensusEngine:
 
     def __init__(self, config: dict[str, Any]) -> None:
         self.config = config
-        self.weights = config.get("indicator_weights", {})
-        self.consensus_config = config.get("consensus", {})
-        self.no_trade_config = config.get("no_trade", {})
+        self.weights = config.get("indicator_weights") or {}
+        self.consensus_config = config.get("consensus") or {}
+        self.no_trade_config = config.get("no_trade") or {}
+
+        # Validate once at construction so a bad operator value fails loudly
+        # instead of silently loosening the trade gate (unknown level -> MEDIUM)
+        # or poisoning the weighted average (inf/NaN weight -> NaN score).
+        max_risk = str((config.get("risk") or {}).get("max_risk_level", "MEDIUM")).upper()
+        if max_risk not in RISK_ORDER:
+            raise ValueError(
+                f"risk.max_risk_level must be one of LOW/MEDIUM/HIGH, got {max_risk!r}"
+            )
+        self._max_risk = max_risk
+        for name, weight in self.weights.items():
+            if not math.isfinite(float(weight)):
+                raise ValueError(f"indicator_weights.{name} must be finite, got {weight!r}")
 
     def evaluate(self, results: list[IndicatorResult]) -> dict[str, Any]:
         """Evaluate all indicator results and produce consensus.
@@ -57,7 +73,9 @@ class ConsensusEngine:
             final_signal = Signal.NEUTRAL
 
         # Step 4: Force NEUTRAL on high conflict
-        conflict_threshold = self.consensus_config.get("conflict_ratio_threshold", 0.6)
+        # minority/active is at most 0.5 by construction, so the threshold must
+        # sit below 0.5 or this guard can never fire (see risk.py).
+        conflict_threshold = self.consensus_config.get("conflict_ratio_threshold", 0.4)
         active = score_data.get("active_signals", 0)
         if active > 0:
             minority = min(score_data["buy_count"], score_data["sell_count"])
@@ -129,22 +147,19 @@ class ConsensusEngine:
         if signal == Signal.NEUTRAL:
             return False
 
-        risk_config = self.config.get("risk", {})
-        min_confidence = risk_config.get("confidence_threshold", 55)
-        max_risk = risk_config.get("max_risk_level", "MEDIUM")
+        risk_config = self.config.get("risk") or {}
+        # Fallbacks mirror the shipped default.yaml values.
+        min_confidence = risk_config.get("confidence_threshold", 25)
 
         if confidence < min_confidence:
             return False
 
-        risk_order = {"LOW": 0, "MEDIUM": 1, "HIGH": 2}
-        current_risk = risk_order.get(risk_data["risk_level"], 2)
-        max_risk_val = risk_order.get(max_risk, 1)
-
-        if current_risk > max_risk_val:
+        current_risk = RISK_ORDER.get(risk_data["risk_level"], 2)
+        if current_risk > RISK_ORDER[self._max_risk]:
             return False
 
         # Check no-trade conditions
-        min_no_trade_confidence = self.no_trade_config.get("min_confidence", 40)
+        min_no_trade_confidence = self.no_trade_config.get("min_confidence", 30)
         if confidence < min_no_trade_confidence:
             return False
 

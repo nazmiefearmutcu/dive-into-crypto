@@ -9,13 +9,19 @@ import com.diveintocrypto.android.domain.divergence.WhaleDivergence
 import com.diveintocrypto.android.domain.model.Signal
 import com.diveintocrypto.android.domain.overlay.Microstructure
 import com.diveintocrypto.android.domain.overlay.MtfConfluence
+import com.diveintocrypto.android.data.binance.isRegionBlocked
 import com.diveintocrypto.android.platform.beginBackgroundTask
 import com.diveintocrypto.android.platform.endBackgroundTask
 import com.diveintocrypto.android.platform.nowMillis
+import com.diveintocrypto.android.ui.common.isRateLimited
+import com.diveintocrypto.android.ui.common.upstreamStatus
+import com.diveintocrypto.android.ui.common.userFacingText
+import com.diveintocrypto.android.ui.i18n.DiveStrings
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -38,7 +44,7 @@ import kotlin.math.abs
  *
  *   2. **Phase 1** — scan the high-time-weight timeframes [1d, 12h, 8h] across EVERY
  *      symbol in the universe. After phase 1 completes, aggregate each symbol's
- *      `finalScore` total and keep the top `scanSurvivors` (Settings, 50 by default).
+ *      `finalScore` total and keep the top `scanDepthTop` (Settings, 50 by default).
  *
  *   3. **Phase 2** — scan the remaining 9 lower-time-weight timeframes
  *      [1m, 3m, 5m, 15m, 30m, 1h, 2h, 4h, 6h] but ONLY across the phase-2
@@ -63,12 +69,35 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
     private val _ui = MutableStateFlow(ScannerUiState())
     val ui: StateFlow<ScannerUiState> = _ui.asStateFlow()
 
+    /** Set when a scan cycle hit a regional block or a 429/418 rate limit: continuous mode
+     *  must end instead of retrying the venue in a loop. Written on the scan coroutine only. */
+    private var abortContinuous = false
+
+    /** Per-cycle rate-limit facts, written by [runOneScan] right before a successful return (scan coroutine only). */
+    private var cycleRateLimited = false
+    private var cycleBanned = false
+
+    /** Consecutive cycles that hit 429/418; continuous mode aborts at [RATE_LIMIT_ABORT_AFTER]. */
+    private var consecutiveRateLimitedCycles = 0
+
+    private val RATE_LIMIT_ABORT_AFTER = 3
+
+    /** Continuous-mode backoff: 30 s first, doubling, capped at 5 min. */
+    private fun nextBackoffMs(previous: Long): Long =
+        if (previous == 0L) 30_000L else (previous * 2).coerceAtMost(300_000L)
+
+    private fun strings(): DiveStrings = container.language.value
+
     init {
         // App-scoped services that scans (and the watchlist) rely on. Both are
         // idempotent: the all-market mini-ticker socket feeds live prices, and
         // the alert engine arms its price-rule observation if rules exist.
         container.liveTickerEngine.ensureStarted()
         runCatching { container.alertEngine.startTickerObservation() }
+        // Seed the depth chip from the persisted mode, so it shows what the next scan will use.
+        val persisted = com.diveintocrypto.android.data.ScanUniverseMode
+            .fromLabel(container.settingsStore.getSettings().scanUniverse).label
+        _ui.update { it.copy(universeMode = persisted) }
     }
 
     /** Toggle CONTINUOUS (back-to-back) scanning. When on, a new scan starts as soon as one finishes. */
@@ -94,6 +123,8 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
 
     fun startScan() {
         if (_ui.value.scanning) return
+        abortContinuous = false
+        consecutiveRateLimitedCycles = 0
         // A new scan does NOT clear previous results — they stay on screen until new ones arrive.
         // (Only progress/error are reset; feed/survivors/eliminated are kept.)
         _ui.update {
@@ -111,25 +142,78 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
             )
         }
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.Default) {
-            var ok: Boolean
-            do {
-                // Best-effort: if the app goes to the background during a scan cycle,
-                // request a short extra execution window from iOS (≈30s). No-op on Android.
-                val bgToken = beginBackgroundTask("dive-scan")
-                try {
-                    ok = runOneScan()
-                } finally {
-                    endBackgroundTask(bgToken)
-                }
-                if (ok) _ui.update { it.copy(cycle = it.cycle + 1) }
-            } while (ok && _ui.value.continuous && !_ui.value.stopRequested)
-            _ui.update {
-                it.copy(
-                    scanning = false,
-                    stopRequested = false,
-                    currentPhase = ScanPhase.IDLE,
-                    currentSymbol = null,
+            var ok = false
+            var backoffMs = 0L
+            try {
+                do {
+                    // Best-effort: if the app goes to the background during a scan cycle,
+                    // request a short extra execution window from iOS (≈30s). No-op on Android.
+                    val bgToken = beginBackgroundTask("dive-scan")
+                    ok = try {
+                        runOneScan()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Throwable) {
+                        // HONESTY: an unexpected failure ends the cycle with a message. It must not
+                        // escape the coroutine, which left scanning=true and crashed the app.
+                        _ui.update {
+                            it.copy(
+                                universeLoading = false,
+                                currentPhase = ScanPhase.IDLE,
+                                currentSymbol = null,
+                                error = strings().scanUnexpectedError,
+                            )
+                        }
+                        false
+                    } finally {
+                        endBackgroundTask(bgToken)
+                    }
+                    var waitMs = 0L
+                    if (ok) {
+                        _ui.update { it.copy(cycle = it.cycle + 1) }
+                        if (cycleRateLimited) {
+                            // A partial cycle that hit 429/418 still delivers results, but the next full
+                            // cycle would hammer a venue that is already throttling us. Back off; abort on
+                            // a ban (418) or after RATE_LIMIT_ABORT_AFTER consecutive limited cycles.
+                            consecutiveRateLimitedCycles += 1
+                            if (cycleBanned || consecutiveRateLimitedCycles >= RATE_LIMIT_ABORT_AFTER) {
+                                abortContinuous = true
+                                _ui.update { it.copy(error = strings().scanRateLimited) }
+                            } else {
+                                backoffMs = nextBackoffMs(backoffMs)
+                                waitMs = backoffMs
+                            }
+                        } else {
+                            consecutiveRateLimitedCycles = 0
+                            backoffMs = 0L
+                        }
+                    } else if (_ui.value.continuous && !_ui.value.stopRequested &&
+                        !abortContinuous && _ui.value.error != null
+                    ) {
+                        // A failed continuous cycle backs off (30 s, doubling, capped at 5 min) and
+                        // never hammers the venue.
+                        backoffMs = nextBackoffMs(backoffMs)
+                        waitMs = backoffMs
+                    }
+                    // The wait is stop-aware.
+                    var waited = 0L
+                    while (waited < waitMs && !_ui.value.stopRequested) {
+                        delay(500L)
+                        waited += 500L
+                    }
+                } while (
+                    _ui.value.continuous && !_ui.value.stopRequested && !abortContinuous &&
+                        (ok || _ui.value.error != null)
                 )
+            } finally {
+                _ui.update {
+                    it.copy(
+                        scanning = false,
+                        stopRequested = false,
+                        currentPhase = ScanPhase.IDLE,
+                        currentSymbol = null,
+                    )
+                }
             }
         }
     }
@@ -155,17 +239,29 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
                 currentPhase = ScanPhase.UNIVERSE,
                 universeLoading = true,
                 error = null,
+                regionBlocked = false,
             )
         }
+        // Failure flags for this cycle (written under the scan mutex / after joins, read after them).
+        var regionBlockedSeen = false
+        var rateLimitedSeen = false
+        var bannedSeen = false
+        cycleRateLimited = false
+        cycleBanned = false
         run {
             val fullUniverse = try {
                 container.repository.futuresUniverse()
+            } catch (e: CancellationException) {
+                throw e
             } catch (t: Throwable) {
+                val s = strings()
+                if (t.isRegionBlocked() || t.isRateLimited()) abortContinuous = true
                 _ui.update {
                     it.copy(
                         universeLoading = false,
                         currentPhase = ScanPhase.IDLE,
-                        error = "Failed to fetch symbol list: ${t.message ?: "network error"}",
+                        regionBlocked = t.isRegionBlocked(),
+                        error = t.userFacingText(s),
                     )
                 }
                 return false
@@ -175,7 +271,7 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
                     it.copy(
                         universeLoading = false,
                         currentPhase = ScanPhase.IDLE,
-                        error = "Binance futures symbol list returned empty",
+                        error = strings().scanUniverseEmpty,
                     )
                 }
                 return false
@@ -189,8 +285,13 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
             // Phase-2 survivor pool N (scan_depth_top, default 50).
             val phase2N = settings.scanDepthTop.coerceAtLeast(1)
 
-            val totalTfScans = universe.size * PHASE1_TFS.size + phase2N * PHASE2_TFS.size
+            // Progress total: phase 1 only until the survivors are known; the phase-2 share is
+            // added when phase 2 starts (see below). Survivors can never exceed the universe, so
+            // the bar cannot stall at ~47% as it did with a fixed phase2N total.
+            val totalTfScans = universe.size * PHASE1_TFS.size
             val scanStartedMs = nowMillis()
+            // ETA is measured per phase: phase 2 restarts the clock together with the counter.
+            var phaseStartMs = scanStartedMs
             _ui.update {
                 it.copy(
                     universeLoading = false,
@@ -223,8 +324,11 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
                         container.repository.futuresHistory(symbol, tf, limit = 300)
                     } catch (e: CancellationException) {
                         throw e
-                    } catch (_: Throwable) {
+                    } catch (t: Throwable) {
                         mutex.withLock {
+                            if (t.isRegionBlocked()) regionBlockedSeen = true
+                            if (t.isRateLimited()) rateLimitedSeen = true
+                            if (t.upstreamStatus() == 418) bannedSeen = true
                             if (failedSymbols.add(symbol)) {
                                 _ui.update { s -> s.copy(failedCount = failedSymbols.size) }
                             }
@@ -234,7 +338,10 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
 
                     if (candles.size >= 50) {
                         val indicatorOuts = container.indicators.map { it.calculate(candles) }
-                        val out = container.consensus.evaluate(indicatorOuts)
+                        val out = container.consensus.evaluate(
+                            indicatorOuts,
+                            com.diveintocrypto.android.ui.i18n.consensusLabelsFor(container.language.value),
+                        )
                         val price = candles.last().close
                         val weight = TIME_WEIGHTS[tf] ?: 50
                         val finalScore = (out.confidence.toDouble().let { it * it } * weight) / 100.0
@@ -270,7 +377,7 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
                         // HONEST PROGRESS: rolling throughput → ETA (null until the
                         // first completions give a rate).
                         _ui.update { s ->
-                            val eta = estimateEtaSeconds(snap, s.totalCount, nowMillis() - scanStartedMs)
+                            val eta = estimateEtaSeconds(snap, s.totalCount, nowMillis() - phaseStartMs)
                             if (s.completedCount == snap && s.etaSeconds == eta) s
                             else s.copy(completedCount = snap, etaSeconds = eta)
                         }
@@ -291,6 +398,26 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
 
             if (_ui.value.stopRequested) return false
 
+            // HONESTY (PS-13): a cycle in which no symbol produced usable candles is a FAILED cycle.
+            // It must not report success (the screen would then say "No Scan Run Yet" or loop).
+            if (tfResults.values.none { it.isNotEmpty() }) {
+                if (regionBlockedSeen || rateLimitedSeen) abortContinuous = true
+                val s = strings()
+                _ui.update {
+                    it.copy(
+                        currentPhase = ScanPhase.IDLE,
+                        currentSymbol = null,
+                        regionBlocked = regionBlockedSeen,
+                        error = when {
+                            regionBlockedSeen -> s.errRegionBlockedBody
+                            rateLimitedSeen -> s.scanRateLimited
+                            else -> s.scanNoDataFetched
+                        },
+                    )
+                }
+                return false
+            }
+
             // ── Determine phase-2 survivors: top scanDepthTop by Σ phase-1 finalScore ──
             val p1Scores = mutableMapOf<String, Double>()
             for (tf in PHASE1_TFS) {
@@ -303,7 +430,21 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
                 .take(phase2N)
                 .map { it.key }
 
-            _ui.update { it.copy(currentPhase = ScanPhase.PHASE2) }
+            // Phase 2 gets its own progress bar. The counter restarts at 0 so the bar never drops from
+            // 100% to a fraction of a larger combined total. Phase-1 jobs were all awaited above, so no
+            // scanOne can race this reset.
+            mutex.withLock {
+                completed = 0
+                phaseStartMs = nowMillis()
+            }
+            _ui.update {
+                it.copy(
+                    currentPhase = ScanPhase.PHASE2,
+                    completedCount = 0,
+                    totalCount = survivors.size * PHASE2_TFS.size,
+                    etaSeconds = null,
+                )
+            }
 
             // ── Phase 2: survivors only on remaining 9 TFs ───────────────────
             coroutineScope {
@@ -329,7 +470,10 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
 
             // ── Cross-rank: union of symbols across all TF top15 lists + MTF-confluence
             //    overlay annotation (pure — see [crossRankRows] in the companion). ──────
+            // NEUTRAL-dominant rows carry no directional evidence: they are never candidates, so
+            // they cannot reach highTfLeaders, survivors, the alert engine or the evidence archive.
             val crossRows: List<CrossRankingRow> = crossRankRows(tfTop15)
+                .filter { it.dominantDir != Signal.NEUTRAL }
 
             // ── Whale L/S divergence: compute for the candidate pool (first DIVERGENCE_CANDIDATES,
             //    by netNss); then blend the table order with netNss. Since L/S data is expensive,
@@ -358,6 +502,10 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
                     }
                 }.awaitAll()
             }
+            // Stop pressed during the divergence phase: candidates whose divergence was skipped or
+            // returned no data would otherwise pass elimination as "clean" and be archived as a
+            // completed verdict. Abandon this cycle instead (state keeps the previous results).
+            if (_ui.value.stopRequested) return false
             val maxNet = crossRows.maxOfOrNull { it.netNss }?.takeIf { it > 0.0 } ?: 1.0
             // AIRTIGHT COVERAGE (reviewer P0): ranking/elimination/display is done ONLY over coins
             // whose whale divergence was COMPUTED (= candidates). Previously rankedRows came from
@@ -391,11 +539,16 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
             // ── ELIMINATION + BACKFILL: eliminate coins whose whale divergence runs OPPOSITE
             //    the indicator direction; fill the vacated slots with the next (lower-scoring)
             //    eligible coins (filter-then-take = automatic backfill). ───────────────
-            val (survivorsRaw, eliminatedRows) = eliminateAdverse(rankedRows)
+            // scanRank = the position the scan actually produced. An eliminated coin keeps its
+            // pre-elimination rank; a survivor is numbered within the survivor list it appears in.
+            val rankedWithRank = rankedRows.mapIndexed { i, r -> r.copy(scanRank = i + 1) }
+            val (survivorsRaw, eliminatedRows) = eliminateAdverse(rankedWithRank)
             // Fill the survivors' TF cells for ALL rows — displaySize=All shows every
             // survivor, so capping the backfill at the first 24 left rows 25+ with
             // empty TF cells. (Cost is trivial: in-memory lookups only.)
-            val survivorRows = survivorsRaw.map { patchPerTf(it, tfResults) }
+            val survivorRows = survivorsRaw.mapIndexed { i, r ->
+                patchPerTf(r.copy(scanRank = i + 1), tfResults)
+            }
             val elimRows = eliminatedRows.map { patchPerTf(it, tfResults) }
 
             // ── MICROSTRUCTURE overlay annotations (domain/overlay/Microstructure.kt) ──
@@ -410,7 +563,7 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
                     coroutineScope {
                         survivorRows.take(microLimit).map { row ->
                             async { row.symbol to computeMicrostructure(row.symbol, microGate) }
-                        }.awaitAll().toMap().filterValues { it != null } as Map<String, Microstructure.Result>
+                        }.awaitAll().mapNotNull { (symbol, result) -> result?.let { symbol to it } }.toMap()
                     }
                 } else emptyMap()
             val annotatedSurvivorRows = survivorRows.mapIndexed { i, row ->
@@ -513,6 +666,9 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
                 )
             }
         }
+        // Record this cycle's rate-limit facts for the continuous loop (partial cycles still return true).
+        cycleRateLimited = rateLimitedSeen || bannedSeen
+        cycleBanned = bannedSeen
         return true
     }
 
@@ -667,9 +823,11 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
             else -> "N/A"
         }
 
-        /** Is the whale divergence OPPOSITE the indicator direction? (adverse = will be eliminated)
-         *  Indicator BUY but divergence bearish (distribution) → adverse; Indicator SELL but
-         *  divergence bullish (accumulation) → adverse. Sub-threshold divergence or no
+        /** Is the whale divergence's PREDICTIVE direction OPPOSITE the indicator? (adverse = eliminated)
+         *  [CrossRankingRow.divergenceDirection] is the contrarian ranking sign
+         *  (WhaleDivergence: patternDirection × whalePredictiveSign), NOT the raw whale pattern.
+         *  So BUY is adverse when divergenceDirection == −1 (expects a fall, i.e. ACCUMULATION
+         *  pattern rows) and SELL is adverse when it is +1. Sub-threshold divergence or no
          *  direction → not adverse. */
         internal fun isAdverseRow(row: CrossRankingRow): Boolean {
             if (abs(row.divergenceScore) < DIVERGENCE_MIN_SHOWN) return false
@@ -713,7 +871,9 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
          */
         internal fun crossRankRows(tfTop15: Map<String, List<SymbolTfResult>>): List<CrossRankingRow> {
             data class Stats(
-                var count: Int = 0,
+                // Directional TF counts: NEUTRAL entries never count toward agreement.
+                var buyCount: Int = 0,
+                var sellCount: Int = 0,
                 var buyNss: Double = 0.0,
                 var sellNss: Double = 0.0,
                 var bestConf: Int = 0,
@@ -731,11 +891,16 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
                 val weight = TIME_WEIGHTS[tf] ?: 50
                 for (r in tfTop15[tf] ?: emptyList()) {
                     val s = symbolStats.getOrPut(r.symbol) { Stats() }
-                    s.count += 1
                     when (r.signal) {
-                        Signal.STRONG_BUY, Signal.BUY -> s.buyNss += r.finalScore
-                        Signal.STRONG_SELL, Signal.SELL -> s.sellNss += r.finalScore
-                        else -> Unit  // NEUTRAL contributes nothing
+                        Signal.STRONG_BUY, Signal.BUY -> {
+                            s.buyNss += r.finalScore
+                            s.buyCount += 1
+                        }
+                        Signal.STRONG_SELL, Signal.SELL -> {
+                            s.sellNss += r.finalScore
+                            s.sellCount += 1
+                        }
+                        else -> Unit  // NEUTRAL: no directional evidence, counts toward nothing
                     }
                     if (r.confidence > s.bestConf) {
                         s.bestConf = r.confidence
@@ -756,16 +921,19 @@ class ScannerViewModel(private val container: AppContainer) : ViewModel() {
 
             return symbolStats.entries
                 .map { (sym, s) ->
-                    val (dominantDir, netNss) = if (s.buyNss >= s.sellNss) {
-                        Signal.BUY to (s.buyNss - s.sellNss)
-                    } else {
-                        Signal.SELL to (s.sellNss - s.buyNss)
+                    // Dominant side by net score. A tie — including all-NEUTRAL (0 vs 0) — has NO winning
+                    // side: NEUTRAL, never a BUY. Mirrors desktop/backend scanner.py net_nss (tie → 0).
+                    val (dominantDir, netNss, agreeCount) = when {
+                        s.buyNss == s.sellNss -> Triple(Signal.NEUTRAL, 0.0, 0)
+                        s.buyNss > s.sellNss -> Triple(Signal.BUY, s.buyNss - s.sellNss, s.buyCount)
+                        else -> Triple(Signal.SELL, s.sellNss - s.buyNss, s.sellCount)
                     }
                     val row = CrossRankingRow(
                         symbol = sym,
                         dominantDir = dominantDir,
                         netNss = netNss,
-                        countHit = s.count,
+                        // AGREEMENT = TFs whose verdict matches the dominant side (not presence).
+                        countHit = agreeCount,
                         totalTfs = ALL_TFS.size,
                         perTf = s.perTf.toMap(),
                         price = s.price,
@@ -881,6 +1049,9 @@ data class CrossRankingRow(
     /** ATR(14) price-% (from the indicator layer, 1h preferred). DISPLAY-ONLY: only feeds
      *  the RISK advisor row; it never enters score/elimination/ranking. null = no data. */
     val atrPct: Double? = null,
+    /** 1-based scan rank as the scan produced it (survivors: order among survivors; eliminated:
+     *  pre-elimination position). 0 = not ranked. Shown as the card's rank chip. */
+    val scanRank: Int = 0,
     /** Whale L/S bearish divergence interest score (0..100). 0 = none. */
     val divergenceScore: Double = 0.0,
     /** The strongest timeframe that produced the divergence (e.g. "1d"), or null. */
@@ -961,11 +1132,14 @@ data class ScannerUiState(
     val failedCount: Int = 0,
     /** Universe size (full Binance USDT-M futures set after stablecoin filter). */
     val universeSize: Int = 0,
-    /** FULL-UNIVERSE MODE label for this scan: TOP20/TOP50/TOP100/TOP250/ALL. */
+    /** FULL-UNIVERSE MODE label: TOP20/TOP50/TOP100/TOP250/ALL. Seeded from the persisted setting. */
     val universeMode: String = "TOP50",
     /** HONEST ETA from rolling scan throughput; null = not enough samples yet. */
     val etaSeconds: Long? = null,
     val universeLoading: Boolean = false,
     val lastScanAtMs: Long? = null,
+    /** Localized, user-facing failure text (never a raw exception message). */
     val error: String? = null,
+    /** True when [error] is a regional block (HTTP 451): dedicated card, no retry button. */
+    val regionBlocked: Boolean = false,
 )

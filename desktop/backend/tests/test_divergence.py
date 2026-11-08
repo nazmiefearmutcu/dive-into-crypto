@@ -115,6 +115,32 @@ def test_skips_candles_before_ls_starts():
     assert price == prices[4:10]
 
 
+def test_forward_fill_is_bounded_to_three_periods():
+    # L/S feed stops after bucket 2: candles in buckets 3..5 (gap <= 3) carry the
+    # last reading, bucket 6 (gap 4) is dropped instead of scored with a stale value.
+    assert dv.MAX_FORWARD_FILL_PERIODS == 3
+    times = [i * P for i in range(10)]
+    prices = [100.0 + i for i in range(10)]
+    ls_times = [i * P for i in range(3)]
+    price, whale, matched = dv.align(times, prices, ls_times, [2.0, 2.1, 2.2], P)
+    assert matched == 3
+    assert price == prices[:6]
+    assert whale == [2.0, 2.1, 2.2, 2.2, 2.2, 2.2]
+
+
+def test_forward_fill_gap_longer_than_bound_is_dropped_then_resumes():
+    times = [i * P for i in range(8)]
+    prices = [100.0 + i for i in range(8)]
+    ls_kept = [0, 1, 6, 7]
+    ls_times = [i * P for i in ls_kept]
+    ls_vals = [1.0, 1.1, 1.6, 1.7]
+    price, whale, matched = dv.align(times, prices, ls_times, ls_vals, P)
+    # buckets 2..4 carry 1.1 (gaps 1..3); bucket 5 (gap 4) is dropped; 6 and 7 match again
+    assert price == [100.0, 101.0, 102.0, 103.0, 104.0, 106.0, 107.0]
+    assert whale == [1.0, 1.1, 1.1, 1.1, 1.1, 1.6, 1.7]
+    assert matched == 4
+
+
 def test_zero_period_and_empty_safe():
     assert dv.align([0], [1.0], [0], [1.0], 0)[2] == 0
     assert dv.align([], [], [], [], P)[0] == []
@@ -139,7 +165,7 @@ def test_zlema_correctness_and_parity():
     ]
     result = dv._zlema(input_vals, 5)
     assert len(result) == len(expected)
-    for r, e in zip(result, expected):
+    for r, e in zip(result, expected, strict=True):
         assert abs(r - e) < 1e-9
 
 
@@ -210,7 +236,9 @@ def test_tier_for_fixed_boundaries():
 
 def test_tier_annotation_does_not_change_elimination():
     # whale_regime_for is untouched by tiers: same inputs → same (regime, adverse)
-    sym = dv.SymbolResult(score=-30.0, direction=1)  # bullish divergence signal
+    # Real results carry score = direction * |magnitude| (divergence.per_tf / for_symbol),
+    # so a bullish signal (direction=1) has a positive score.
+    sym = dv.SymbolResult(score=30.0, direction=1)  # bullish divergence signal
     confirm = dv.whale_regime_for(sym, 1, 5.0)       # LONG verdict, divergence agrees
     assert confirm == ("confirm", False)
     adverse = dv.whale_regime_for(sym, -1, 5.0)      # SHORT verdict, divergence opposes

@@ -34,8 +34,9 @@ class DonchianBreakoutIndicator(config: IndicatorConfig) : BaseIndicator(config)
         }
 
         val n = candles.size
-        // Need `period` prior bars for the wide channel plus the current bar.
-        if (n < period + 1) {
+        // Need `period` prior bars for the wide channel plus the current bar. Zero-length
+        // channels (period or exit_period of 0) would take max()/min() of an empty list.
+        if (period < 1 || exitPeriod < 1 || n < period + 1) {
             return result(Signal.NEUTRAL, "Donchian data insufficient")
         }
 

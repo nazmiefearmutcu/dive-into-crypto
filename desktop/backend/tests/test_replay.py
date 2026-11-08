@@ -11,6 +11,7 @@ H = ev.HORIZONS["4h"]
 HOUR = 3_600_000
 NOW = 100 * H
 TS = NOW - 10 * HOUR
+CUR_HASH = rp._load_shipped_weights()[1]  # ic_table defaults to the current weights hash
 
 
 @pytest.fixture(autouse=True)
@@ -74,9 +75,11 @@ async def test_replay_grid_deterministic_and_skips_foreign_hash(monkeypatch):
     assert out1["events"]["replayable"] == 6
     assert out1["events"]["skipped_weights_hash"] == 1
     assert out1["events"]["skipped_no_signals"] == 1
-    assert out1["shipped_cell"] == {"buy": 0.4, "strong": 1.2, "conflict": 0.6}
+    assert out1["shipped_cell"] == rp.SHIPPED_DEFAULTS
+    shipped = rp.SHIPPED_DEFAULTS
     cell = next(c for c in out1["grid"]
-                if c["buy"] == 0.4 and c["strong"] == 1.2 and c["conflict"] == 0.6)
+                if c["buy"] == shipped["buy"] and c["strong"] == shipped["strong"]
+                and c["conflict"] == shipped["conflict"])
     assert cell["n_directional"] == 6 and cell["hit_rate"] == 1.0
     assert cell["bootstrap_win_vs_shipped"] is not None
 
@@ -91,7 +94,7 @@ def test_ic_table_constant_column_and_min_n():
     records, grades = [], []
     for i in range(rp.IC_MIN_N + 5):
         sig = {"rsi": 1, "macd": (1 if i % 2 else -1), "flat": 1}  # flat = constant column
-        records.append(_archive(sig, "any", symbol=f"S{i}", ts=TS - i * HOUR))
+        records.append(_archive(sig, CUR_HASH, symbol=f"S{i}", ts=TS - i * HOUR))
         grades.append(_grade(f"S{i}", ts=TS - i * HOUR, forward=0.01 * (1 if i % 2 else -1)))
     ic = rp.ic_table(records, grades)
     assert ic["n"] == rp.IC_MIN_N + 5
@@ -103,10 +106,57 @@ def test_ic_table_constant_column_and_min_n():
 
 
 def test_ic_table_below_min_n_is_na():
-    records = [_archive({"rsi": 1}, "h", symbol=f"S{i}", ts=TS - i * HOUR) for i in range(10)]
+    records = [_archive({"rsi": 1}, CUR_HASH, symbol=f"S{i}", ts=TS - i * HOUR) for i in range(10)]
     grades = [_grade(f"S{i}", ts=TS - i * HOUR) for i in range(10)]
     ic = rp.ic_table(records, grades)
     assert ic["indicators"]["rsi"]["ic"] == "n/a"
+
+
+def test_ic_table_excludes_foreign_weights_regime_by_default():
+    records = [_archive({"rsi": 1}, "deadbeef", symbol=f"S{i}", ts=TS - i * HOUR) for i in range(60)]
+    grades = [_grade(f"S{i}", ts=TS - i * HOUR, forward=0.01 * (1 if i % 2 else -1)) for i in range(60)]
+    ic = rp.ic_table(records, grades)  # default: current weights hash only
+    assert ic["n"] == 0  # old-regime archives never feed the suggestions
+
+
+def test_ic_sign_follows_realized_return_for_short_verdicts():
+    # an indicator that is right on SHORT verdicts (bearish reading, price fell)
+    # must show POSITIVE IC; the signed forward inverted it
+    records, grades = [], []
+    for i in range(12):
+        bearish = i % 2 == 0
+        sig = {"rsi": -1 if bearish else 1}
+        dir_ = -1 if bearish else 1
+        bnh = -0.02 if bearish else 0.02          # the indicator was right every time
+        rec = {**_archive(sig, CUR_HASH, symbol=f"Q{i}", ts=TS - i * HOUR), "dominant_dir": dir_}
+        records.append(rec)
+        grades.append({"ts": TS - i * HOUR, "symbol": f"Q{i}", "horizon": "4h", "hit": True,
+                       "forward": dir_ * bnh, "dir": dir_, "bnh_forward": bnh})
+    ic = rp.ic_table(records, grades, min_n=5)
+    assert ic["indicators"]["rsi"]["ic"] > 0.9
+
+
+def test_replay_scores_short_archived_records_correctly(monkeypatch):
+    # two SHORT records whose price FELL (the short won): the signed forward is +0.03
+    # and +0.02. The replayed SELL must count as two wins, not two losses.
+    weights = {"rsi": 1.0}
+    cur = ev.weights_hash(weights)
+    monkeypatch.setattr(rp, "_load_shipped_weights", lambda: (weights, cur))
+    records, grades = [], []
+    for i, fwd in enumerate([0.03, 0.02]):
+        sym = f"SHORT{i}"
+        records.append({**_archive({"rsi": -1}, cur, symbol=sym, ts=TS - i * HOUR), "dominant_dir": -1,
+                        "verdict": "SELL"})
+        grades.append({"ts": TS - i * HOUR, "symbol": sym, "horizon": "4h", "hit": True,
+                       "forward": fwd, "dir": -1, "bnh_forward": -fwd})
+    out = rp.replay_grid("4h", records=records, grades=grades, now_ms=NOW)
+    assert out["events"]["replayable"] == 2
+    shipped = rp.SHIPPED_DEFAULTS
+    cell = next(c for c in out["grid"]
+                if c["buy"] == shipped["buy"] and c["strong"] == shipped["strong"]
+                and c["conflict"] == shipped["conflict"])
+    assert cell["n_directional"] == 2
+    assert cell["shipped_hit_rate"] == 1.0 and cell["hit_rate"] == 1.0
 
 
 def test_suggest_weights_normalized_and_capped():

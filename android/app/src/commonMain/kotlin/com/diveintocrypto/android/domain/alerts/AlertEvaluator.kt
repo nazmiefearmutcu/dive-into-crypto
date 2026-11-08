@@ -1,6 +1,51 @@
 package com.diveintocrypto.android.domain.alerts
 
 /**
+ * Formatter for the human-readable text of a fired alert. The rule logic never
+ * changes with the language; only the message wording does. The UI layer feeds
+ * the active catalog (see `ui/i18n/DiveFormatters.kt`); tests and any caller
+ * without a catalog use [EnglishAlertMessages].
+ */
+interface AlertMessages {
+    fun priceAbove(symbol: String, threshold: Double, price: Double): String
+    fun priceBelow(symbol: String, threshold: Double, price: Double): String
+    fun verdict(symbol: String, signal: String, confidence: Int): String
+    fun confidenceAbove(symbol: String, confidence: Int, threshold: Double): String
+
+    /** OI COLLAPSE (negative threshold); [spike] is the signed percent. */
+    fun oiCollapse(symbol: String, spike: Double, threshold: Double): String
+
+    /** OI EXPANSION (positive threshold, or the legacy any-expansion watch). */
+    fun oiExpansion(symbol: String, spike: Double, threshold: Double): String
+
+    /** Separator between AND-ed condition messages of one fired rule. */
+    fun conditionJoiner(): String
+}
+
+/** English wording — identical to the historical alert text. */
+object EnglishAlertMessages : AlertMessages {
+    override fun priceAbove(symbol: String, threshold: Double, price: Double): String =
+        "$symbol price above $threshold (now $price)"
+
+    override fun priceBelow(symbol: String, threshold: Double, price: Double): String =
+        "$symbol price below $threshold (now $price)"
+
+    override fun verdict(symbol: String, signal: String, confidence: Int): String =
+        "$symbol verdict $signal (confidence ${confidence}%)"
+
+    override fun confidenceAbove(symbol: String, confidence: Int, threshold: Double): String =
+        "$symbol confidence ${confidence}% above $threshold"
+
+    override fun oiCollapse(symbol: String, spike: Double, threshold: Double): String =
+        "$symbol OI $spike% (threshold $threshold%)"
+
+    override fun oiExpansion(symbol: String, spike: Double, threshold: Double): String =
+        "$symbol OI +$spike% (threshold +$threshold%)"
+
+    override fun conditionJoiner(): String = " AND "
+}
+
+/**
  * PURE rule evaluation (no clock reads, no state, no I/O — the clock is a
  * parameter). Given the current rules and the data available this pass, returns
  * the alerts that fire and the updated rules (lastFiredTs advanced; one-shot
@@ -30,6 +75,7 @@ object AlertEvaluator {
         inputs: AlertInputs,
         nowMs: Long,
         coalesceMs: Long = COALESCE_MS,
+        messages: AlertMessages = EnglishAlertMessages,
     ): Outcome {
         val fired = mutableListOf<FiredAlert>()
         val updatedRules = rules.map { rule ->
@@ -42,14 +88,14 @@ object AlertEvaluator {
             val conditions = rule.effectiveConditions
             if (conditions.isEmpty()) return@map rule
 
-            val metMessages = conditions.map { conditionMessage(it, rule.symbol, inputs) }
+            val metMessages = conditions.map { conditionMessage(it, rule.symbol, inputs, messages) }
             if (metMessages.any { it == null }) return@map rule // AND: any unknown → silent
 
             fired += FiredAlert(
                 ruleId = rule.id,
                 symbol = rule.symbol,
                 kind = rule.kind,
-                message = metMessages.filterNotNull().joinToString(" AND "),
+                message = metMessages.filterNotNull().joinToString(messages.conditionJoiner()),
                 firedTs = nowMs,
             )
             if (rule.oneShot) rule.copy(enabled = false, lastFiredTs = nowMs)
@@ -59,18 +105,23 @@ object AlertEvaluator {
     }
 
     /** null = the condition is not met (or no data this pass) → silent. */
-    fun conditionMessage(condition: AlertCondition, symbol: String, inputs: AlertInputs): String? {
+    fun conditionMessage(
+        condition: AlertCondition,
+        symbol: String,
+        inputs: AlertInputs,
+        messages: AlertMessages = EnglishAlertMessages,
+    ): String? {
         return when (condition.kind) {
             AlertKind.PRICE_ABOVE -> {
                 val price = inputs.prices[symbol] ?: return null
                 if (price > condition.threshold) {
-                    "$symbol price above ${condition.threshold} (now $price)"
+                    messages.priceAbove(symbol, condition.threshold, price)
                 } else null
             }
             AlertKind.PRICE_BELOW -> {
                 val price = inputs.prices[symbol] ?: return null
                 if (price < condition.threshold) {
-                    "$symbol price below ${condition.threshold} (now $price)"
+                    messages.priceBelow(symbol, condition.threshold, price)
                 } else null
             }
             AlertKind.VERDICT -> {
@@ -82,13 +133,13 @@ object AlertEvaluator {
                     else -> 0 // ANY
                 }
                 val matches = wanted == 0 || wanted == dir
-                if (matches) "$symbol verdict ${v.signal} (confidence ${v.confidence}%)"
+                if (matches) messages.verdict(symbol, v.signal, v.confidence)
                 else null
             }
             AlertKind.CONFIDENCE_ABOVE -> {
                 val v = inputs.verdicts[symbol] ?: return null
                 if (v.confidence > condition.threshold) {
-                    "$symbol confidence ${v.confidence}% above ${condition.threshold}"
+                    messages.confidenceAbove(symbol, v.confidence, condition.threshold)
                 } else null
             }
             AlertKind.OI_SPIKE_PCT -> {
@@ -106,8 +157,8 @@ object AlertEvaluator {
                     else -> spike > 0
                 }
                 if (!met) return null
-                if (threshold < 0) "$symbol OI $spike% (threshold $threshold%)"
-                else "$symbol OI +$spike% (threshold +$threshold%)"
+                if (threshold < 0) messages.oiCollapse(symbol, spike, threshold)
+                else messages.oiExpansion(symbol, spike, threshold)
             }
         }
     }
@@ -121,7 +172,7 @@ object AlertEvaluator {
         val conditions = rule.effectiveConditions
         if (conditions.isEmpty()) return null
         val met = conditions.map { conditionMessage(it, rule.symbol, inputs) }
-        return if (met.any { it == null }) null else met.filterNotNull().joinToString(" AND ")
+        return if (met.any { it == null }) null else met.filterNotNull().joinToString(EnglishAlertMessages.conditionJoiner())
     }
 
     /** +1 for BUY/STRONG_BUY, −1 for SELL/STRONG_SELL, null for NEUTRAL/unknown. */

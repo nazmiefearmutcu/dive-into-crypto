@@ -15,12 +15,12 @@
    data.js is imported directly; the bundle is compiled through the same esbuild
    pipeline as demo-mode.test.mjs. Runs under `node --test`.
    ========================================================================== */
-import { test } from "node:test";
+import { after, mock, test } from "node:test";
 import assert from "node:assert/strict";
 import esbuild from "esbuild";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 
 const UI_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const APP = join(UI_ROOT, "src", "app");
@@ -189,6 +189,10 @@ test("portfolio: signed P&L math, strict row validation, corrupt storage dropped
 });
 
 /* ── 7. hash routes registered for every new view ────────────────────────── */
+/* One bundle file per process, removed when this file finishes (no accumulation). */
+const BUNDLE_FILE = join(UI_ROOT, "test", ".tmp", `v3-bundle-${process.pid}.mjs`);
+after(() => { try { rmSync(BUNDLE_FILE, { force: true }); } catch (e) { /* best effort */ } });
+let _bundleLoads = 0;
 async function loadBundle() {
   const FILES = ["data.js", "mock.js", "i18n.js", "desktop-app.jsx"];
   const prelude =
@@ -209,21 +213,28 @@ async function loadBundle() {
   globalThis.location = { hash: "" };
   globalThis.localStorage = { getItem: () => null, setItem: () => {} };
   delete globalThis.DIVE_APP;
-  const dir = join(UI_ROOT, "test", ".tmp");
-  mkdirSync(dir, { recursive: true });
-  const file = join(dir, `v3-${Date.now()}.mjs`);
-  writeFileSync(file, out.outputFiles[0].text);
-  await import(pathToFileURL(file).href);
+  mkdirSync(dirname(BUNDLE_FILE), { recursive: true });
+  writeFileSync(BUNDLE_FILE, out.outputFiles[0].text);
+  // ESM caches by URL: a distinct query per load forces a fresh evaluation of the same file.
+  await import(`${pathToFileURL(BUNDLE_FILE).href}?load=${++_bundleLoads}`);
   return globalThis.DIVE_APP;
 }
 test("hash routes exist for the new views and viewFromHash resolves both ways", async () => {
   const app = await loadBundle();
-  for (const hash of ["compare", "map", "portfolio", "structure", "scan", "panel", "flow", "signal", "evidence", "log", "settings"])
-    assert.ok(app.VIEW_HASH[hash] || Object.values(app.VIEW_HASH).includes(hash), `route ${hash} must be registered`);
+  // exact view → hash contract (the rail and the hash router both read VIEW_HASH)
+  const expectedHash = { scan: "scan", panel: "panel", flow: "flow", sig: "signal", evidence: "evidence",
+    compare: "compare", map: "map", portfolio: "portfolio", structure: "structure", logs: "log", settings: "settings" };
+  for (const [view, hash] of Object.entries(expectedHash))
+    assert.equal(app.VIEW_HASH[view], hash, `view ${view} must route as #/${hash}`);
   for (const [hash, view] of [["compare", "compare"], ["map", "map"], ["portfolio", "portfolio"], ["structure", "structure"]]) {
     globalThis.location.hash = `#/${hash}`;
     assert.equal(app.viewFromHash(), view, `#/${hash} must resolve to ${view}`);
   }
+  // the two renamed routes resolve to their real view keys, not via a values-branch match
+  globalThis.location.hash = "#/log";
+  assert.equal(app.viewFromHash(), "logs");
+  globalThis.location.hash = "#/signal";
+  assert.equal(app.viewFromHash(), "sig");
   globalThis.location.hash = "#/nonsense";
   assert.equal(app.viewFromHash(), null, "unknown hashes resolve to no view (default stays)");
   // rail quick keys cover the 7 canonical views
@@ -325,7 +336,7 @@ test("KANIT v2 renders Wilson labels, gated warnings and every v2 panel", async 
   // by_indicator disagree stats render through the gated formatter too
   assert.ok(html.includes("KARŞIT İSABET"), "disagree column present");
   // empty-archive honesty path still renders
-  window.SGS_EVIDENCE = { archived_count: 0 };
+  window.SGS_EVIDENCE = { horizon: "4h", archived_count: 0 };
   const empty = renderToStaticMarkup(React.createElement(app.Evidence, { horizon: "4h", setHorizon: () => {} }));
   assert.ok(empty.includes("HENÜZ ARŞİV YOK"), "empty archive state");
 });
@@ -373,7 +384,7 @@ test("PANEL renders the v0.3 depth cards and every unavailable block stays hones
     spot_perp: { premium_pct: 0.02, ret_spread_48h: 0.004, lead: "spot" },
   });
   const html = renderToStaticMarkup(React.createElement(app.Panel, { sym: "BTCUSDT", evHorizon: "4h" }));
-  for (const marker of ["PLANLAMA", "TP 2R", "KARŞIT KANIT", "macd", "ilişki, nedensellik değildir",
+  for (const marker of ["PLANLAMA", "ATR 2× SEVİYE", "KARŞIT KANIT", "ATR GEOMETRİSİ", "ilişki, nedensellik değildir",
     "FONLAMA", "01:00:00", "BASİS", "PARSİNEL", "KASKAD", "VEKİL/PROXY", "EMİR DEFTERİ", "L/S TERM",
     "SPOT–PERP", "SPOT ÖNDE", "TF-MATRİS", "DİVERJANS ORTA", "KONİ", "%72"])
     assert.ok(html.includes(marker), `panel must render "${marker}"`);
@@ -384,7 +395,8 @@ test("PANEL renders the v0.3 depth cards and every unavailable block stays hones
     indicators: [], funding_lens: { unavailable: "x" }, basis: { unavailable: "y" }, book: { unavailable: "book_too_thin" } });
   window.SGS_DATA_MAP.POORUSDT = poor;
   const html2 = renderToStaticMarkup(React.createElement(app.Panel, { sym: "POORUSDT", evHorizon: "4h" }));
-  assert.ok(html2.includes("kullanılamıyor · atr_missing"), "planning unavailable");
+  assert.ok(html2.includes("kullanılamıyor"), "planning unavailable is labelled");
+  assert.ok(!html2.includes("atr_missing") && !html2.includes("book_too_thin"), "backend reason codes are not shown raw");
   assert.ok(html2.includes("FONLAMA"), "funding card present even when unavailable");
   assert.ok(!html2.includes("VEKİL/PROXY"), "no proxy tag without cascade data");
 });
@@ -515,4 +527,123 @@ test("v0.3 adapters: failed fetches never populate globals; claims POSTs JSON", 
   } finally {
     globalThis.fetch = realFetch;
   }
+});
+
+/* ── 11. formatters: no zeroed micro-prices, no "1000.00K" roll-over ────────── */
+test("sgsFmtPrice keeps sub-cent prices visible; sgsFmtBig promotes rounding to the next unit", async () => {
+  await loadData();
+  assert.equal(window.sgsFmtPrice(0.00001234), "0.00001234", "micro-cap must not render as 0.0000");
+  assert.equal(window.sgsFmtPrice(0.0000567), "0.00005670");
+  assert.equal(window.sgsFmtPrice(0.00004), "0.00004000");
+  assert.equal(window.sgsFmtPrice(0.5), "0.5000");
+  assert.equal(window.sgsFmtPrice(0.04), "0.0400");
+  assert.equal(window.sgsFmtPrice(2.5), "2.500");
+  assert.equal(window.sgsFmtPrice(null), "—");
+  assert.equal(window.sgsFmtBig(999999), "1.00M", "999999 must not render as 1000.00K");
+  assert.equal(window.sgsFmtBig(999999999), "1.00B", "999999999 must not render as 1000.00M");
+  assert.equal(window.sgsFmtBig(1000), "1.00K");
+  assert.equal(window.sgsFmtBig(1500), "1.50K");
+  assert.equal(window.sgsFmtBig(2.5e6), "2.50M");
+  assert.equal(window.sgsFmtBig(999), "999");
+  assert.equal(window.sgsFmtBig(null), "—");
+});
+
+/* ── 12. the scan counter shares units with universeCount (symbols) ─────────── */
+test("scan counter: scanned is the symbol count (scannedCount), not the timeframe count", async () => {
+  await loadData();
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: true, status: 200,
+    json: async () => ({ survivors: [], eliminated: [], universeCount: 24, scanned: 288, scannedCount: 24 }),
+  });
+  try {
+    const s = await window.DIVE.scan(15, 24);
+    assert.equal(s.scanned, 24, "24 fully-assembled symbols, not 24×12 timeframes");
+    assert.equal(s.universeCount, 24);
+    assert.equal(window.SGS_SCAN.scanned, 24);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+/* ── 13. evidence: a failed horizon switch clears the old summary; races resolve newest-wins ─ */
+test("evidence: failed horizon switch drops the old summary; a pre-grade poll cannot overwrite the grade", async () => {
+  const w = await loadData();
+  const realFetch = globalThis.fetch;
+  const fail = async () => ({ ok: false, status: 502, json: async () => ({ error: "x" }) });
+  const okWith = (body) => async () => ({ ok: true, status: 200, json: async () => body });
+  try {
+    globalThis.fetch = okWith({ horizon: "4h", archived_count: 1 });
+    await w.DIVE.evidence("4h");
+    assert.equal(w.SGS_EVIDENCE.horizon, "4h");
+
+    globalThis.fetch = fail;
+    await assert.rejects(w.DIVE.evidence("1h"), /502/);
+    assert.equal(w.SGS_EVIDENCE, null, "the 4h summary must not stay under a failed 1h switch");
+
+    globalThis.fetch = okWith({ horizon: "4h", archived_count: 2 });
+    await w.DIVE.evidence("4h");
+    globalThis.fetch = fail;
+    await assert.rejects(w.DIVE.evidence("4h"), /502/);
+    assert.equal(w.SGS_EVIDENCE.archived_count, 2, "a same-horizon poll failure keeps the last good summary");
+
+    // a poll already in flight when a grade completes must not land after it
+    let resolvePoll;
+    globalThis.fetch = (url) => {
+      if (String(url).includes("/api/evidence?")) return new Promise((r) => { resolvePoll = r; });
+      return Promise.resolve({ ok: true, status: 200,
+        json: async () => ({ graded: 1, summary: { horizon: "4h", graded_count: 2 } }) });
+    };
+    const pollP = w.DIVE.evidence("4h");
+    await w.DIVE.gradeEvidence("4h");
+    assert.equal(w.SGS_EVIDENCE.graded_count, 2, "grade summary applied");
+    resolvePoll({ ok: true, status: 200, json: async () => ({ horizon: "4h", graded_count: 1 }) });
+    await pollP;
+    assert.equal(w.SGS_EVIDENCE.graded_count, 2, "a pre-grade poll must not overwrite the post-grade summary");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+/* ── 14. requests carry a deadline; 422 details are readable ─────────────────── */
+test("a stalled request fails with a named timeout instead of hanging", { skip: typeof mock.timers?.enable !== "function" }, async () => {
+  const w = await loadData();
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (_url, init) => new Promise((_, reject) => {
+    init.signal.addEventListener("abort", () => reject(new Error("aborted")));
+  });
+  mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    const pending = w.DIVE.health();
+    mock.timers.tick(90000);
+    await assert.rejects(pending, (e) => /\/api\/health → timeout 90s/.test(e.message));
+  } finally {
+    mock.timers.reset();
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("a FastAPI 422 is reported with its messages, not [object Object]", async () => {
+  const w = await loadData();
+  const realFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => ({ ok: false, status: 422, json: async () => ({
+      detail: [{ loc: ["query", "horizon"], msg: "string does not match regex", type: "string_pattern_mismatch" }] }) });
+    await assert.rejects(w.DIVE.gradeEvidence("9h"), (e) =>
+      e.message === "POST /api/evidence/grade?horizon=9h → 422 · string does not match regex");
+    globalThis.fetch = async () => ({ ok: false, status: 422, json: async () => ({ detail: "bad horizon" }) });
+    await assert.rejects(w.DIVE.gradeEvidence("9h"), (e) => /→ 422 · bad horizon$/.test(e.message));
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+/* ── 15. annotations: a corrupt store must not block every later save ───────── */
+test("annotation save recovers from a corrupt store instead of failing forever", async () => {
+  const store = new Map([["dive_annotations_v1", "{{not json"]]);
+  await loadData(store);
+  assert.equal(window.sgsAnnotationsSave("BTCUSDT", [{ price: 100, note: "x", ts: 1 }]), true);
+  assert.deepEqual(window.sgsAnnotationsLoad("BTCUSDT").map((a) => a.price), [100]);
+  assert.equal(window.sgsAnnotationsSave("ETHUSDT", [{ price: 5, note: "", ts: 2 }]), true);
+  assert.equal(window.sgsAnnotationsLoad("BTCUSDT").length, 1, "other symbols survive a later save");
 });

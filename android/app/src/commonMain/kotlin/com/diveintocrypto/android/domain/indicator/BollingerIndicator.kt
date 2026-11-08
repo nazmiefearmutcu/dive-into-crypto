@@ -16,7 +16,9 @@ class BollingerIndicator(config: IndicatorConfig) : BaseIndicator(config) {
         val stdDev = config.getDouble("std_dev", 2.0)
         val squeezeTh = config.getDouble("squeeze_threshold", 0.02)
 
-        if (candles.size < period) return result(Signal.NEUTRAL, "Bollinger data insufficient")
+        // period < 2: sample std is undefined (Python rolling(1).std() is NaN) and
+        // Series.rollingStd requires a window of at least 2.
+        if (period < 2 || candles.size < period) return result(Signal.NEUTRAL, "Bollinger data insufficient")
 
         val closes = candles.map { it.close }
         val sma = Series.rollingMean(closes, period)
@@ -41,15 +43,17 @@ class BollingerIndicator(config: IndicatorConfig) : BaseIndicator(config) {
 
         val isSqueeze = bandWidth < squeezeTh
 
+        // Squeeze breakouts follow the breakout direction (matches bollinger.py):
+        // below the lower band -> SELL, above the upper band -> BUY.
         return when {
             close < lower && isSqueeze ->
-                result(Signal.BUY, "Price below lower band during squeeze - potential breakout", raw)
+                result(Signal.SELL, "Price below lower band during squeeze - potential breakout", raw)
             close < lower ->
                 result(Signal.STRONG_BUY, "Price below lower Bollinger Band", raw)
             position < 0.15 ->
                 result(Signal.BUY, "Price near lower Bollinger Band (pos=${position.format(2)})", raw)
             close > upper && isSqueeze ->
-                result(Signal.SELL, "Price above upper band during squeeze - potential breakout", raw)
+                result(Signal.BUY, "Price above upper band during squeeze - potential breakout", raw)
             close > upper ->
                 result(Signal.STRONG_SELL, "Price above upper Bollinger Band", raw)
             position > 0.85 ->

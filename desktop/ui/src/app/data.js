@@ -1,6 +1,6 @@
 /* ============================================================================
    Dive Into Crypto — Desktop · data adapter
-   Pulls REAL data from the local backend (Crypcodile-fed) and exposes it through
+   Pulls REAL data from the local backend (Crocodile-fed) and exposes it through
    the globals the screens read: SGS_DATA / SGS_DATA_MAP / SGS_GAINERS /
    SGS_LOSERS / SGS_LOGS / sgsFmtPrice / sgsFmtBig. The scan itself is the
    backend's server-computed result (the canonical, Android-parity engine).
@@ -33,14 +33,17 @@ function sgsFmtPrice(v) {
   if (v == null || isNaN(v)) return "—";
   if (v >= 1000) return v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   if (v >= 1) return v.toFixed(3);
-  return v.toFixed(4);
+  if (v >= 0.01 || v <= 0) return v.toFixed(4);
+  /* sub-cent micro-caps keep 3 significant figures instead of collapsing to 0.0000 */
+  return v.toFixed(Math.min(12, -Math.floor(Math.log10(v)) + 3));
 }
 function sgsFmtBig(v) {
   if (v == null || isNaN(v)) return "—";
-  if (v >= 1e9) return (v / 1e9).toFixed(2) + "B";
-  if (v >= 1e6) return (v / 1e6).toFixed(2) + "M";
-  if (v >= 1e3) return (v / 1e3).toFixed(2) + "K";
-  return v.toFixed(0);
+  let d = v >= 1e9 ? 1e9 : v >= 1e6 ? 1e6 : v >= 1e3 ? 1e3 : 1;
+  let s = (v / d).toFixed(d === 1 ? 0 : 2);
+  /* rounding can reach the next unit (999999 → "1000.00K"): promote it to "1.00M" */
+  if (d < 1e9 && Math.abs(Number(s)) >= 1000) { d *= 1000; s = (v / d).toFixed(2); }
+  return s + (d === 1e9 ? "B" : d === 1e6 ? "M" : d === 1e3 ? "K" : "");
 }
 window.sgsFmtPrice = sgsFmtPrice;
 window.sgsFmtBig = sgsFmtBig;
@@ -229,8 +232,11 @@ function sgsAnnotationsLoad(sym) {
 }
 function sgsAnnotationsSave(sym, list) {
   try {
-    const all = JSON.parse(localStorage.getItem(ANNOTATIONS_KEY) || "{}");
-    if (!all || typeof all !== "object" || Array.isArray(all)) return false;
+    /* An unparseable store is treated as empty, so one corrupt value cannot make every
+       later save fail; a real storage failure still returns false. */
+    let all = {};
+    try { all = JSON.parse(localStorage.getItem(ANNOTATIONS_KEY) || "{}"); } catch (e) { all = {}; }
+    if (!all || typeof all !== "object" || Array.isArray(all)) all = {};
     all[sym] = Array.isArray(list) ? list : [];
     localStorage.setItem(ANNOTATIONS_KEY, JSON.stringify(all));
     return true;
@@ -248,38 +254,100 @@ window.SGS_PRESET_SORT_KEYS = PRESET_SORT_KEYS;
 /* ── backend client (the UI is served by the backend → same origin) ───────── */
 const API = "";  // same-origin
 
+/* Request deadlines: a stalled backend must not leave a fetch (or the GRADING button)
+   pending forever. The sync scan is the slowest GET, so its budget is generous. */
+const GET_TIMEOUT_MS = 90000;
+const POST_TIMEOUT_MS = 120000;
+
+/* Runs one request under an AbortController deadline; an expired deadline becomes an
+   explicit, named timeout error rather than a silent hang. */
+async function _timed(path, timeoutMs, run) {
+  const ctl = typeof AbortController === "function" ? new AbortController() : null;
+  const timer = ctl ? setTimeout(() => ctl.abort(), timeoutMs) : null;
+  try {
+    return await run(ctl ? ctl.signal : undefined);
+  } catch (e) {
+    if (ctl && ctl.signal.aborted) throw new Error(`${path} → timeout ${Math.round(timeoutMs / 1000)}s`);
+    throw e;
+  } finally {
+    if (timer != null) clearTimeout(timer);
+  }
+}
+
+/* FastAPI 422 bodies carry `detail` as an array of {loc, msg, type} objects; render the
+   messages instead of "[object Object]". */
+function _errDetail(d) {
+  if (d == null || d === "") return "";
+  if (typeof d === "string") return d;
+  if (Array.isArray(d)) return d.map((x) => (x && typeof x.msg === "string" ? x.msg : JSON.stringify(x))).join("; ");
+  try { return JSON.stringify(d); } catch (e) { return ""; }
+}
+
+/* A non-2xx answer keeps its HTTP status (and a structured error code when the body
+   carries one, e.g. {"error":"region_blocked"}) so the UI can explain it in words. The
+   message keeps the raw "path → status" form for console/debug use only. */
+class ApiError extends Error {
+  constructor(path, status, code) {
+    super(`${path} → ${status}`);
+    this.name = "ApiError";
+    this.path = path;
+    this.status = status;
+    this.code = code || null;
+  }
+}
+
 async function _get(path) {
-  const r = await fetch(API + path, { headers: { Accept: "application/json" } });
-  if (!r.ok) throw new Error(`${path} → ${r.status}`);
-  return r.json();
+  return _timed(path, GET_TIMEOUT_MS, async (signal) => {
+    const r = await fetch(API + path, { headers: { Accept: "application/json" }, signal });
+    if (!r.ok) {
+      let code = null;
+      try { const b = await r.json(); if (b && typeof b.error === "string") code = b.error; } catch (e) { /* opaque body */ }
+      throw new ApiError(path, r.status, code);
+    }
+    return r.json();
+  });
 }
 
 async function _post(path, body) {
-  const init = { method: "POST", headers: { Accept: "application/json" } };
-  if (body !== undefined) {
-    init.headers["Content-Type"] = "application/json";
-    init.body = JSON.stringify(body);
-  }
-  const r = await fetch(API + path, init);
-  if (!r.ok) {
-    let detail = "";
-    try { const b = await r.json(); if (b && (b.detail || b.error)) detail = ` · ${b.detail || b.error}`; } catch (e) { /* opaque */ }
-    throw new Error(`POST ${path} → ${r.status}${detail}`);
-  }
-  return r.json();
+  return _timed(path, POST_TIMEOUT_MS, async (signal) => {
+    const init = { method: "POST", headers: { Accept: "application/json" }, signal };
+    if (body !== undefined) {
+      init.headers["Content-Type"] = "application/json";
+      init.body = JSON.stringify(body);
+    }
+    const r = await fetch(API + path, init);
+    if (!r.ok) {
+      let detail = "";
+      try { const b = await r.json(); detail = _errDetail(b && (b.detail ?? b.error)); } catch (e) { /* opaque */ }
+      throw new Error(`POST ${path} → ${r.status}${detail ? " · " + detail : ""}`);
+    }
+    return r.json();
+  });
 }
+
+/* Demo freeze: while the manual DIVE_MOCK fixture is on, live adapters must not
+   overwrite the globals it filled. Real rows under a banner that says every value is
+   fabricated would be a lie. Reads still return the live payload to their caller. */
+function _demoFrozen() { return !!(window.DIVE_DEMO && window.DIVE_DEMO.active); }
 
 function _notify() { if (typeof window.__diveOnData === "function") window.__diveOnData(); }
 
 function _verdict(regime) {
   return regime === "confirm" ? "CONFIRM" : regime === "adverse" ? "ADVERSE" : "NEUTRAL";
 }
+/* TR fallback only when i18n.js is not loaded (the shipped bundle always loads it). */
+const _DIV_REASON_TR = {
+  div_adverse: "İndikatör yönüne karşı balina akışı (WF {0}).",
+  div_confirm: "Balina akışı indikatör yönünü teyit ediyor (WF {0}).",
+  div_none: "Belirgin balina uyumsuzluğu yok.",
+};
 function _divReason(row) {
   const wf = (row.divergence && row.divergence.score) || 0;
   const wfs = (wf >= 0 ? "+" : "") + wf.toFixed(1);
-  if (row.whaleRegime === "adverse") return `İndikatör yönüne karşı balina akışı (WF ${wfs}).`;
-  if (row.whaleRegime === "confirm") return `Balina akışı indikatör yönünü teyit ediyor (WF ${wfs}).`;
-  return "Belirgin balina uyumsuzluğu yok.";
+  const key = row.whaleRegime === "adverse" ? "div_adverse"
+    : row.whaleRegime === "confirm" ? "div_confirm" : "div_none";
+  if (typeof window.L === "function") return window.L(key, wfs);
+  return _DIV_REASON_TR[key].replace("{0}", wfs);
 }
 function _wrapRow(row) {
   return {
@@ -289,19 +357,26 @@ function _wrapRow(row) {
       verdict: _verdict(row.whaleRegime),
       adverse: !!row._adverse || row.whaleRegime === "adverse",
       wf: (row.divergence && row.divergence.score) || 0,
-      reason: _divReason(row),
+      /* a getter, not a stored string: the sentence is translated when it is read, so
+         a TR/EN switch re-renders it instead of keeping the language of the last poll */
+      get reason() { return _divReason(row); },
     },
   };
 }
+/* mock.js builds its fixture survivors through this same row shape */
+window.sgsWrapScanRow = _wrapRow;
 
 /* Shared absorption of a scan body (sync /api/scan or async /api/scan/result) —
    identical shaping so both paths render through the same table. */
 function _absorbScan(res) {
+  if (_demoFrozen()) return window.SGS_SCAN;
   const survivors = (res.survivors || []).map(_wrapRow);
   survivors.forEach((x, i) => (x.rank = i + 1));
   const eliminated = (res.eliminated || []).map(_wrapRow);
   [...(res.survivors || []), ...(res.eliminated || [])].forEach((r) => { window.SGS_DATA_MAP[r.s] = r; });
-  window.SGS_SCAN = { survivors, eliminated, scanned: res.scanned || 0, universeCount: res.universeCount || 0 };
+  /* scanned and universeCount share a unit (symbols). The backend's `scanned` is a
+     timeframe count (scannedCount × 12), so it is not used here. */
+  window.SGS_SCAN = { survivors, eliminated, scanned: res.scannedCount ?? 0, universeCount: res.universeCount || 0 };
   _notify();
   return window.SGS_SCAN;
 }
@@ -311,6 +386,7 @@ let _evSeq = 0;  // guards against an older horizon response overwriting a newer
 const DIVE = {
   async universe(limit = 60) {
     const rows = await _get(`/api/universe?limit=${limit}`);
+    if (_demoFrozen()) return rows;
     window.SGS_DATA = rows;  // lightweight {s,name,price,ch,quote_volume}; full objects fetched per symbol
     rows.forEach((r) => {
       if (!window.SGS_DATA_MAP[r.s]) {
@@ -328,7 +404,7 @@ const DIVE = {
     const obj = await _get(`/api/symbol/${encodeURIComponent(sym)}${qs ? "?" + qs : ""}`);
     /* commit:false → chart-only views (TF matrix, replay scrub, compare) get the
        real payload WITHOUT overwriting the canonical map entry the verdict reads. */
-    if (opts.commit !== false && obj && obj.s) { window.SGS_DATA_MAP[obj.s] = obj; _notify(); }
+    if (opts.commit !== false && obj && obj.s && !_demoFrozen()) { window.SGS_DATA_MAP[obj.s] = obj; _notify(); }
     return obj;
   },
   async scan(size = 10, universeLimit = 30) {
@@ -352,13 +428,27 @@ const DIVE = {
   /* Evidence layer — the engine grades itself (report-only). */
   async evidence(horizon = "4h") {
     const seq = ++_evSeq;
-    const res = await _get(`/api/evidence?horizon=${encodeURIComponent(horizon)}`);
+    let res;
+    try {
+      res = await _get(`/api/evidence?horizon=${encodeURIComponent(horizon)}`);
+    } catch (e) {
+      /* A failed horizon switch must not leave the previous horizon's summary on screen
+         under the new chip. A same-horizon poll failure keeps the last good summary. */
+      if (seq === _evSeq && window.SGS_EVIDENCE && window.SGS_EVIDENCE.horizon !== horizon) {
+        window.SGS_EVIDENCE = null;
+        _notify();
+      }
+      throw e;
+    }
     if (seq === _evSeq) { window.SGS_EVIDENCE = res; _notify(); }
     return res;
   },
   async gradeEvidence(horizon = "4h") {
+    /* A grade is the newest evidence write. Bumping the sequence stops any read that was
+       already in flight (a pre-grade poll, or an older horizon) from landing after it. */
+    const seq = ++_evSeq;
     const res = await _post(`/api/evidence/grade?horizon=${encodeURIComponent(horizon)}`);
-    if (res && res.summary) { window.SGS_EVIDENCE = res.summary; _notify(); }
+    if (res && res.summary && seq === _evSeq) { window.SGS_EVIDENCE = res.summary; _notify(); }
     return res;
   },
   /* Market structure (BTC beta / corr / clusters) — fetched once and cached. */
@@ -374,8 +464,7 @@ const DIVE = {
      without the USDT suffix (the backend normalizes). */
   async pulse(symbols = []) {
     const res = await _get(`/api/pulse?symbols=${encodeURIComponent(symbols.slice(0, 20).join(","))}`);
-    window.SGS_PULSE = res;
-    _notify();
+    if (!_demoFrozen()) { window.SGS_PULSE = res; _notify(); }
     return res;
   },
   /* Sentiment/macro backdrop (F&G, stablecoin share, defillama aggregate). */
@@ -446,6 +535,7 @@ const DIVE = {
   },
   async leaders() {
     const res = await _get(`/api/leaders`);
+    if (_demoFrozen()) return res;
     const fill = (r) => ({ ...r, candles: r.candles || [] });
     window.SGS_GAINERS = (res.gainers || []).map(fill);
     window.SGS_LOSERS = (res.losers || []).map(fill);
@@ -453,8 +543,8 @@ const DIVE = {
     return res;
   },
   async logs() {
-    window.SGS_LOGS = await _get(`/api/logs`);
-    _notify();
+    const rows = await _get(`/api/logs`);
+    if (!_demoFrozen()) { window.SGS_LOGS = rows; _notify(); }
     return window.SGS_LOGS;
   },
   async health() { return _get(`/api/health`); },

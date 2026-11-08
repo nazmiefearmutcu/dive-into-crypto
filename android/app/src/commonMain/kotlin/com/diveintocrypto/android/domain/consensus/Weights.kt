@@ -75,16 +75,10 @@ val ALL_INDICATOR_WEIGHTS: Map<String, Double> = mapOf(
 )
 
 /**
- * The FULL default weight map actually applied by the consensus engine.
- *
- * Precedence rule: the 15 CORE names keep the F2 consensus matrix values
- * ([DEFAULT_F2_WEIGHTS] — the weights production has always applied via
- * SettingsStore, so existing consensus behaviour for the core set is unchanged),
- * while the 45 EXTENDED names take the desktop-reference weights from
- * [ALL_INDICATOR_WEIGHTS]. The result has exactly 60 entries.
- *
- * `ALL_INDICATOR_WEIGHTS + DEFAULT_F2_WEIGHTS` — right operand wins, so the
- * F2 core overrides the 4 core names on which the two sources differ
- * (sma_cross 1.8→1.5, ichimoku 2.0→1.5, psar 1.3→1.2, obv 1.2→1.5).
+ * The FULL default weight map actually applied by the consensus engine: the 60 desktop
+ * reference weights ([ALL_INDICATOR_WEIGHTS]) with the 15 core overrides from
+ * [DEFAULT_F2_WEIGHTS] on top. Both tables carry the desktop `indicator_weights` values
+ * (engine/config/default.yaml), so the result equals [ALL_INDICATOR_WEIGHTS] exactly.
+ * Guarded by ConsensusGuardsTest.
  */
 val DEFAULT_FULL_WEIGHTS: Map<String, Double> = ALL_INDICATOR_WEIGHTS + DEFAULT_F2_WEIGHTS

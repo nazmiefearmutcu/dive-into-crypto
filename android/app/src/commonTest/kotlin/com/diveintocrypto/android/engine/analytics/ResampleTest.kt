@@ -24,8 +24,20 @@ class ResampleTest {
         assertEquals(10.0, b0.open); assertEquals(12.0, b0.high)
         assertEquals(10.0, b0.low); assertEquals(11.0, b0.close)
         assertEquals(4.0, b0.volume, 1e-12)
-        assertEquals(2.0, b0.buyVolume, 1e-12); assertEquals(2.0, b0.sellVolume, 1e-12)
+        assertEquals(2.0, b0.buyVolume!!, 1e-12); assertEquals(2.0, b0.sellVolume!!, 1e-12)
         assertEquals(3, b0.numTrades)
+        assertEquals((10.0 * 1 + 12.0 * 2 + 11.0 * 1) / 4.0, b0.vwap!!, 1e-12)
+    }
+
+    @Test fun unsplitBarLeavesSideVolumesUnknown() {
+        // Crocodile semantics: an OHLCV nobody split carries null, never a fake 0.0.
+        val bar = com.diveintocrypto.android.engine.schema.OHLCV(
+            venue = Venue.BINANCE_USDM, symbol = "binance-usdm:BTCUSDT", symbolRaw = "BTCUSDT",
+            exchangeTs = 0L, localTs = 0L, open = 1.0, high = 1.0, low = 1.0, close = 1.0,
+            volume = 5.0, interval = "1m",
+        )
+        assertEquals(null, bar.buyVolume); assertEquals(null, bar.sellVolume)
+        assertEquals(null, bar.numTrades); assertEquals(null, bar.vwap)
     }
 
     @Test fun metricsVwap() {

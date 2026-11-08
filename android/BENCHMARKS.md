@@ -77,7 +77,7 @@ suite to **62 tests**, all green.
 ## App package
 
 - APK size: **3.6 MB** (release, R8-minified)
-- `minSdk` 26, `targetSdk` 34
+- `minSdk` 26, `targetSdk` 36
 
 ## App runtime
 

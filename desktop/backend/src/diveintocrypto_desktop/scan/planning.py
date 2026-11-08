@@ -20,19 +20,21 @@ _Z = 1.0           # envelope width in σ
 def planning_strip(atr_pct: float | None, atr_tf_hours: float = 1.0) -> dict:
     """``planning`` block from one ATR-percentage reading.
 
-    ``sl_distance_pct`` = 1.5·ATR%; ``tp_1r/2r/3r_pct`` are the same distance
-    ×1/2/3; ``envelope`` is the ±1σ expected move over 1h/4h/24h
-    (ATR%·√(hours/atr_tf_hours)). Informational only.
+    ``sl_distance_pct`` = 1.5·ATR%; ``tp_1r/2r/3r_pct`` are the stop distance
+    ×1/2/3 (1R = the stop distance, not the bare ATR); ``envelope`` is the ±1σ
+    expected move over 1h/4h/24h (ATR%·√(hours/atr_tf_hours)). Informational only.
     """
     if atr_pct is None or atr_pct <= 0:
         return {"unavailable": "atr_missing"}
     atr = float(atr_pct)
     scale = lambda h: atr * ((h / atr_tf_hours) ** 0.5)  # noqa: E731
+    sl = round(atr * SL_ATR_MULT, 4)  # 1R = stop distance; the ladder is built on the
+    # rounded stop so each rung is an exact multiple of the one below it
     return {
-        "sl_distance_pct": round(atr * SL_ATR_MULT, 4),
-        "tp_1r_pct": round(atr, 4),
-        "tp_2r_pct": round(atr * 2.0, 4),
-        "tp_3r_pct": round(atr * 3.0, 4),
+        "sl_distance_pct": sl,
+        "tp_1r_pct": sl,
+        "tp_2r_pct": round(sl * 2.0, 4),
+        "tp_3r_pct": round(sl * 3.0, 4),
         "envelope": {
             "h1": round(scale(1.0), 4),
             "h4": round(scale(4.0), 4),

@@ -24,7 +24,7 @@ from typing import Any
 import aiohttp
 
 from diveintocrypto_desktop.data import universe as uni
-from diveintocrypto_desktop.data.http import get_json
+from diveintocrypto_desktop.data.http import describe_failure, get_json
 
 logger = logging.getLogger("trading_bot.data.sentiment")
 
@@ -85,7 +85,7 @@ async def fear_greed() -> dict:
         block = parse_fng(payload)
     except Exception as e:
         logger.warning("sentiment: fng fetch failed — %s", str(e)[:80])
-        return {"unavailable": f"fng_unreachable: {str(e)[:80]}"}  # NOT cached
+        return {"unavailable": f"fng_unreachable: {describe_failure(e)}"}  # NOT cached
     if "unavailable" in block:
         return block  # payload-level failure — re-attempted on the next call
     _fng_cache = (time.monotonic(), block)
@@ -131,8 +131,14 @@ def stablecoin_proxy(tickers: list[dict], perp_symbols: set[str]) -> dict:
 
 
 # ── DefiLlama (optional, best-effort) ────────────────────────────────────────
-def parse_defillama(payload: list) -> dict:
-    """Aggregate circulating supply from the DefiLlama stablecoins list."""
+def parse_defillama(payload: Any) -> dict:
+    """Aggregate circulating supply from the DefiLlama stablecoins payload.
+
+    The live endpoint answers ``{"peggedAssets": [...]}``; a bare list of the same
+    rows is accepted too.
+    """
+    if isinstance(payload, dict):
+        payload = payload.get("peggedAssets")
     total = 0.0
     by_asset: dict[str, float] = {}
     for row in payload or []:
@@ -154,7 +160,9 @@ def parse_defillama(payload: list) -> dict:
     return {
         "total_mcap_usd": round(total, 2),
         "usdt_share": round(by_asset.get("TETHER", 0.0) / total, 4),
-        "usdc_share": round(by_asset.get("USDC COIN", by_asset.get("USDC", 0.0)) / total, 4),
+        "usdc_share": round(
+            by_asset.get("USD COIN", by_asset.get("USDC COIN", by_asset.get("USDC", 0.0))) / total, 4
+        ),
         "top": [{"name": n, "mcap_usd": round(v, 2)} for n, v in top[:5]],
     }
 
@@ -177,21 +185,30 @@ async def defillama_stablecoins() -> dict:
         block = parse_defillama(payload)
     except Exception as e:
         logger.warning("sentiment: defillama fetch failed — %s", str(e)[:80])
-        return {"unavailable": f"defillama_unreachable: {str(e)[:80]}"}  # NOT cached
+        return {"unavailable": f"defillama_unreachable: {describe_failure(e)}"}  # NOT cached
     if "unavailable" in block:
         return block  # payload-level failure — re-attempted on the next call
     _defillama_cache = (time.monotonic(), block)
     return block
 
 
+async def _stablecoin_block() -> dict:
+    """Exchange-native stablecoin proxy; ``{"unavailable": reason}`` if the shared
+    ticker/perp universe cannot be fetched (its own failure domain)."""
+    try:
+        tickers, perps = await asyncio.gather(uni.all_tickers(), uni.perp_symbols())
+    except Exception as e:
+        logger.warning("sentiment: stablecoin proxy unavailable — %s", str(e)[:80])
+        return {"unavailable": f"universe_unreachable: {describe_failure(e)}"}
+    return stablecoin_proxy(tickers, set(perps))
+
+
 async def macro_snapshot() -> dict:
     """Aggregate ``/api/macro`` body — each block fails independently."""
-    tickers, perps, fng, llama = await asyncio.gather(
-        uni.all_tickers(), uni.perp_symbols(), fear_greed(), defillama_stablecoins()
-    )
+    stable, fng, llama = await asyncio.gather(_stablecoin_block(), fear_greed(), defillama_stablecoins())
     return {
         "fng": fng,
-        "stablecoin": stablecoin_proxy(tickers, set(perps)),
+        "stablecoin": stable,
         "defillama": llama,
         "generated_at": _iso(time.time()),
     }

@@ -19,5 +19,7 @@ def load_config() -> dict[str, Any]:
     ``indicator_thresholds[name]`` per indicator) and ``ConsensusEngine(config)``
     (which reads ``indicator_weights`` / ``consensus`` / ``no_trade``).
     """
-    with _CONFIG_PATH.open() as f:
+    # Explicit UTF-8: the default locale codec is cp1254 on Windows and cannot
+    # decode every UTF-8 byte sequence.
+    with _CONFIG_PATH.open(encoding="utf-8") as f:
         return yaml.safe_load(f)

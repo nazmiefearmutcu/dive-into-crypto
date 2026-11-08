@@ -23,7 +23,8 @@ data class PanelUiState(
 
     val latestSignal: String = "NEUTRAL",
     val confidence: Int = 0,
-    val action: String = "HOLD",
+    /** Neutral threshold status token — see [PanelAction]; rendered through DiveStrings. */
+    val action: String = PanelAction.BELOW,
     val reason: String = "",
 
     val distBuy: Int = 0,
@@ -115,6 +116,25 @@ data class PanelUiState(
     /** ATR%-based SL/TP/envelope planning strip for the consensus direction; null = no ATR%/direction/price. */
     val planning: com.diveintocrypto.android.engine.analytics.PlanningStrip.Plan? = null,
 )
+
+/**
+ * Threshold status of the consensus verdict. Deliberately non-executional: it says
+ * whether the analytics bias passed the threshold, never "open" or "hold" an order.
+ */
+object PanelAction {
+    const val ABOVE_UP = "ABOVE_UP"
+    const val ABOVE_DOWN = "ABOVE_DOWN"
+    const val BELOW = "BELOW"
+
+    fun of(signal: com.diveintocrypto.android.domain.model.Signal, shouldTrade: Boolean): String = when {
+        !shouldTrade -> BELOW
+        signal == com.diveintocrypto.android.domain.model.Signal.STRONG_BUY ||
+            signal == com.diveintocrypto.android.domain.model.Signal.BUY -> ABOVE_UP
+        signal == com.diveintocrypto.android.domain.model.Signal.STRONG_SELL ||
+            signal == com.diveintocrypto.android.domain.model.Signal.SELL -> ABOVE_DOWN
+        else -> BELOW
+    }
+}
 
 /** Per-TF signal cell. */
 data class TfSignal(

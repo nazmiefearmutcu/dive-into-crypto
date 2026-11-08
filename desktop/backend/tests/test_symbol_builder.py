@@ -2,6 +2,7 @@
 
 import asyncio
 import math
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -42,8 +43,15 @@ def test_assemble_produces_full_data_contract():
     assert obj["buy"] + obj["sell"] + obj["neutral"] == 12
     assert len(obj["indicators"]) == expected_indicator_count
     assert {i["name"] for i in obj["indicators"]} >= {"rsi", "macd", "adx_di"}
+    # per-indicator vote + configured-weight contribution (UI "opposing evidence" ranking)
+    from diveintocrypto_desktop.engine.indicators.base import SIGNAL_SCORES, Signal
+    weights = load_config().get("indicator_weights", {})
+    for ind in obj["indicators"]:
+        assert ind["score"] == SIGNAL_SCORES[Signal(ind["signal"])]
+        assert ind["weighted_score"] == pytest.approx(round(ind["score"] * ind["weight"], 4))
+        assert ind["weight"] == float(weights.get(ind["name"], 1.0))
     assert obj["finalSignal"] in {"STRONG_BUY", "BUY", "NEUTRAL", "SELL", "STRONG_SELL"}
-    assert obj["action"] in {"AL", "SAT", "BEKLE"}
+    assert obj["action"] in {"LONG", "SHORT", "NONE"}  # direction-only tokens, never imperatives
     assert obj["risk"] in {"LOW", "MEDIUM", "HIGH"}
     assert set(obj["series"]) == _SERIES_KEYS
     assert len(obj["series"]["bias"]) == 48
@@ -118,7 +126,7 @@ def test_record_from_row_v2_schema_fields():
         "s": "BTCUSDT", "finalSignal": "BUY", "confidence": 70, "risk": "LOW",
         "netNss": 10.0, "dominantDir": 1, "price": 100.0, "whaleRegime": "confirm",
         "multiTf": [{"tf": "1d", "signal": "BUY", "confidence": 80}], "indicators": [],
-        "regime": {"regime": "TREND"}, "microstructure": {"score": 33.0},
+        "regime": {"regime": "TREND"}, "microstructure": {"score": 33.0, "active": 2},
         "mtfConfluence": {"gate": True},
         "divergence": {"score": 30.0, "tf": "1d", "coverage": 2},
         "cluster_id": 3, "cluster_agreement": 0.667, "weights_hash": "abc123",
@@ -132,6 +140,23 @@ def test_record_from_row_v2_schema_fields():
     assert rec["divergence_tier"] == "MODERATE"  # 25 ≤ 30 < 55
     assert rec["cluster_id"] == 3 and rec["cluster_agreement"] == 0.667
     assert rec["weights_hash"] == "abc123"
+
+
+def test_record_from_row_inactive_microstructure_is_null_not_zero():
+    """Scan rows carry no futures series: active == 0 means "no reading", not a
+    neutral 0.0 score archived as if it were a measurement."""
+    from diveintocrypto_desktop.scan.evidence import record_from_row
+    row = {"s": "X", "finalSignal": "BUY", "confidence": 50, "netNss": 1.0, "dominantDir": 1,
+           "price": 5.0, "multiTf": [], "indicators": [],
+           "microstructure": {"score": 0.0, "direction": 0, "label": "NEUTRAL", "active": 0}}
+    assert record_from_row(row, ts_ms=1)["micro_score"] is None
+
+
+def test_record_from_row_uses_snapshot_ms_as_verdict_time():
+    from diveintocrypto_desktop.scan.evidence import record_from_row
+    row = {"s": "X", "finalSignal": "BUY", "confidence": 50, "netNss": 1.0, "dominantDir": 1,
+           "price": 5.0, "multiTf": [], "indicators": [], "snapshot_ms": 1_700_000_123_000}
+    assert record_from_row(row)["ts"] == 1_700_000_123_000  # not the archive-time clock
 
 
 def test_record_from_row_legacy_row_has_null_v2_fields():
@@ -157,6 +182,79 @@ def _hist_candles(n: int, step_ms: int) -> list[dict]:
                      "l": min(price, close) - 0.3, "c": close, "v": 1000 + i})
         price = close
     return rows
+
+
+@pytest.mark.asyncio
+async def test_build_symbol_historical_never_fetches_end_unsafe_feeds(monkeypatch):
+    """OI / L/S ratio / funding / divergence have no endTime upstream: an as-of view
+    must not fetch them at all (they would carry post-end_ms data), and says so."""
+    candles_by_tf = {"1h": _hist_candles(120, 3_600_000), "5m": _hist_candles(200, 300_000)}
+
+    async def fake_all_tf(symbol, limit=300, intervals=None, end_ms=None):
+        return candles_by_tf
+
+    def must_not_call(name):
+        async def boom(*a, **kw):
+            raise AssertionError(f"historical view fetched end-unsafe feed {name}")
+        return boom
+
+    monkeypatch.setattr(sb.kl, "fetch_all_tf", fake_all_tf)
+    monkeypatch.setattr(sb.oi_mod, "fetch_oi_hist", must_not_call("oi"))
+    monkeypatch.setattr(sb.rat, "fetch_ratio_series", must_not_call("ratios"))
+    monkeypatch.setattr(sb.fnd, "funding_hist", must_not_call("funding"))
+    monkeypatch.setattr(sb.rat, "position_ls_timeseries", must_not_call("position_ls"))
+    monkeypatch.setattr(sb, "_ticker_24hr", must_not_call("ticker"))
+    monkeypatch.setattr(sb.cvd_mod, "snapshot", must_not_call("cvd"))
+
+    obj = await sb.build_symbol("BTCUSDT", end_ms=END_MS)
+
+    assert obj["futures"] == {"unavailable": "historical_view"}
+    assert obj["series"]["oi"] == [] and obj["series"]["funding"] == []
+    assert "cascade" not in obj  # no OI series → cascade omitted, never guessed
+    assert obj["quantBias"] == 0.0 and obj["divergence"]["coverage"] == 0
+
+
+@pytest.mark.asyncio
+async def test_build_symbol_failed_ticker_omits_ch_instead_of_zero(monkeypatch):
+    async def fake_all_tf(symbol, limit=300, intervals=None, end_ms=None):
+        return {"1h": _hist_candles(120, 3_600_000), "5m": _hist_candles(200, 300_000)}
+
+    async def empty_feed(*a, **kw):
+        return []
+
+    async def no_ratios(*a, **kw):
+        return {}
+
+    async def no_div(symbol, candles):
+        return {}
+
+    async def no_panel(*a, **kw):
+        return {}
+
+    async def ticker_failed(symbol):
+        return {}  # _ticker_24hr's failure value: no price, no change
+
+    monkeypatch.setattr(sb.kl, "fetch_all_tf", fake_all_tf)
+    monkeypatch.setattr(sb.oi_mod, "fetch_oi_hist", empty_feed)
+    monkeypatch.setattr(sb.rat, "fetch_ratio_series", no_ratios)
+    monkeypatch.setattr(sb.fnd, "funding_hist", empty_feed)
+    monkeypatch.setattr(sb, "_divergence_inputs", no_div)
+    monkeypatch.setattr(sb, "_panel_extras", no_panel)
+    monkeypatch.setattr(sb.cvd_mod, "snapshot", AsyncMock(return_value={"unavailable": "x"}))
+    monkeypatch.setattr(sb, "_ticker_24hr", ticker_failed)
+    monkeypatch.setattr(sb, "assemble",
+                        lambda symbol, name, ch, price, *a, **k: {"s": symbol, "ch": ch, "price": price})
+
+    obj = await sb.build_symbol("BTCUSDT")
+    assert "ch" not in obj  # unavailable, omitted — never a fabricated 0% move
+    assert obj["price"] > 0  # price still falls back honestly to the last close
+
+
+@pytest.mark.asyncio
+async def test_panel_extras_end_ms_zero_is_historical():
+    """end_ms=0 is still a historical view: no live panel extras, no fetches."""
+    panel = await sb._panel_extras("BTCUSDT", 1.0, {}, [], [], end_ms=0)
+    assert panel == {}
 
 
 @pytest.mark.asyncio
@@ -217,3 +315,40 @@ async def test_build_symbol_historical_view_has_no_live_extras(monkeypatch):
     assert "historical" in obj["price_note"] and "end_ms" in obj["price_note"]
     # klines are truncated at end_ms (primary-TF candles never cross it)
     assert all(c["t"] // 1_000_000 <= END_MS for c in obj["candles"])
+
+
+@pytest.mark.asyncio
+async def test_build_symbol_without_any_price_source_is_null_not_zero(monkeypatch):
+    """No closed 5m candle (listed minutes ago) and a failed ticker: the price is
+    unknown, so it is null, never a 0.0 that reads as a real quote."""
+    async def fake_all_tf(symbol, limit=300, intervals=None, end_ms=None):
+        return {"1h": _hist_candles(120, 3_600_000), "5m": []}
+
+    async def empty_feed(*a, **kw):
+        return []
+
+    async def no_ratios(*a, **kw):
+        return {}
+
+    async def no_div(symbol, candles):
+        return {}
+
+    async def no_panel(*a, **kw):
+        return {}
+
+    async def ticker_failed(symbol):
+        return {}
+
+    monkeypatch.setattr(sb.kl, "fetch_all_tf", fake_all_tf)
+    monkeypatch.setattr(sb.oi_mod, "fetch_oi_hist", empty_feed)
+    monkeypatch.setattr(sb.rat, "fetch_ratio_series", no_ratios)
+    monkeypatch.setattr(sb.fnd, "funding_hist", empty_feed)
+    monkeypatch.setattr(sb, "_divergence_inputs", no_div)
+    monkeypatch.setattr(sb, "_panel_extras", no_panel)
+    monkeypatch.setattr(sb.cvd_mod, "snapshot", AsyncMock(return_value={"unavailable": "x"}))
+    monkeypatch.setattr(sb, "_ticker_24hr", ticker_failed)
+    monkeypatch.setattr(sb, "assemble",
+                        lambda symbol, name, ch, price, *a, **k: {"s": symbol, "ch": ch, "price": price})
+
+    obj = await sb.build_symbol("NEWUSDT")
+    assert obj["price"] is None

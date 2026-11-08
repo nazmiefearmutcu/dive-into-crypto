@@ -59,7 +59,8 @@ class LinregSlopeIndicator(config: IndicatorConfig) : BaseIndicator(config) {
         val r2 = if (ssTot > 0.0) 1.0 - ssRes / ssTot else 0.0
         // Python: `mean = y.mean() or 1.0` — falsy 0.0 falls back to 1.0.
         val mean = if (yBar == 0.0) 1.0 else yBar
-        val slopePct = slope * period / mean // total % move implied over the window
+        // x runs 0..period-1: the fitted line moves slope*(period-1) first-to-last.
+        val slopePct = slope * (period - 1) / mean
 
         val raw = mapOf<String, Double?>(
             "slope_pct" to roundTo(slopePct, 5),

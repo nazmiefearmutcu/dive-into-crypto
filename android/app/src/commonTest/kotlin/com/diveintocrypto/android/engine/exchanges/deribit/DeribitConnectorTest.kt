@@ -1,10 +1,13 @@
 package com.diveintocrypto.android.engine.exchanges.deribit
 
+import com.diveintocrypto.android.engine.schema.BookDelta
+import com.diveintocrypto.android.engine.schema.BookSnapshot
 import com.diveintocrypto.android.engine.schema.Channel
 import com.diveintocrypto.android.engine.schema.DerivativeTicker
 import com.diveintocrypto.android.engine.schema.Venue
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class DeribitConnectorTest {
@@ -40,5 +43,23 @@ class DeribitConnectorTest {
 
     @Test fun handleFrameTextSwallowsBadJson() {
         assertTrue(c.handleFrameText("not json", localTs = 5L).isEmpty())
+    }
+
+    @Test fun bookGateAcceptsChainedDeltasAndFlagsASequenceGap() {
+        val gate = DeribitBookGate()
+        val sym = "BTC-PERPETUAL"
+        fun snap(seq: Long) = BookSnapshot(Venue.DERIBIT, "deribit:$sym", sym, null, 1L, emptyList(), emptyList(), seqId = seq)
+        fun delta(seq: Long, prev: Long) = BookDelta(Venue.DERIBIT, "deribit:$sym", sym, null, 1L, emptyList(), emptyList(), seqId = seq, prevSeqId = prev)
+
+        assertTrue(gate.accept(snap(100L)))
+        assertTrue(gate.accept(delta(101L, prev = 100L)))
+        assertTrue(gate.accept(delta(102L, prev = 101L)))
+        // 103 was lost: 104 claims to follow 103, so the local book is no longer valid.
+        assertFalse(gate.accept(delta(104L, prev = 103L)))
+    }
+
+    @Test fun bookGateRejectsDeltaWithoutASnapshot() {
+        val gate = DeribitBookGate()
+        assertFalse(gate.accept(BookDelta(Venue.DERIBIT, "deribit:X", "X", null, 1L, emptyList(), emptyList(), seqId = 5L, prevSeqId = 4L)))
     }
 }

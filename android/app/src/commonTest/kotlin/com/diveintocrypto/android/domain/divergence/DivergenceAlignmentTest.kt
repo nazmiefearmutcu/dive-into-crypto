@@ -78,4 +78,32 @@ class DivergenceAlignmentTest {
         assertEquals(0, r.price.size)
         assertEquals(0, r.matched)
     }
+
+    @Test
+    fun trailingLsGapStopsCarryingTheStaleValue() {
+        // 200 candles, L/S feed stops after bucket 175 (24 periods before the end).
+        val times = (0L until 200L).map { it * P }
+        val prices = times.indices.map { 100.0 + it }
+        val lsKept = (0..175).toList()
+        val lsTimes = lsKept.map { it * P }
+        val lsVals = lsKept.map { 1.0 + it * 0.01 }
+        val r = DivergenceAlignment.align(times, prices, lsTimes, lsVals, P)
+        assertEquals(176, r.matched)
+        // Buckets 176..178 are within MAX_FORWARD_FILL_PERIODS (3) of bucket 175; 179+ are dropped.
+        assertEquals(179, r.price.size)
+        assertEquals(prices[178], r.price.last(), 1e-9)
+        assertEquals(lsVals.last(), r.whale.last(), 1e-9)
+    }
+
+    @Test
+    fun maxForwardFillIsConfigurable() {
+        val times = (0L until 10L).map { it * P }
+        val prices = times.indices.map { 100.0 + it }
+        val lsKept = listOf(0, 1)               // last real bucket = 1
+        val lsTimes = lsKept.map { it * P }
+        val lsVals = lsKept.map { 2.0 }
+        // Buckets 2..4 are within 3 periods of bucket 1 (default); a bound of 1 keeps only bucket 2.
+        assertEquals(5, DivergenceAlignment.align(times, prices, lsTimes, lsVals, P).price.size)
+        assertEquals(3, DivergenceAlignment.align(times, prices, lsTimes, lsVals, P, maxForwardFillPeriods = 1L).price.size)
+    }
 }

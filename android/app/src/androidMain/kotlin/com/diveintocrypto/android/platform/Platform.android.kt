@@ -5,8 +5,9 @@ import com.diveintocrypto.android.BuildConfig
 import io.ktor.client.engine.HttpClientEngineFactory
 import io.ktor.client.engine.okhttp.OkHttp
 
+/** Debug logs exist for development only: release builds never write them to logcat. */
 actual fun logDebug(tag: String, message: String) {
-    Log.d(tag, message)
+    if (BuildConfig.DEBUG) Log.d(tag, message)
 }
 
 actual fun logError(tag: String, message: String, throwable: Throwable?) {

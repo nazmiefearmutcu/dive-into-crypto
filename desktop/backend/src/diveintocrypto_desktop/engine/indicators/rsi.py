@@ -7,7 +7,14 @@ from diveintocrypto_desktop.engine.indicators.base import BaseIndicator, Indicat
 
 
 class RSIIndicator(BaseIndicator):
-    """RSI with configurable thresholds for signal generation."""
+    """RSI with configurable thresholds for signal generation.
+
+    Convention: average gain and average loss are simple rolling means of the last
+    ``period`` deltas (Cutler-style RSI), NOT Wilder's RMA smoothing used by most
+    charting platforms. ``stoch_rsi`` deliberately uses the same convention so both
+    read the identical RSI series. Values therefore differ from charting-platform RSI
+    for the same closes; the thresholds are calibrated to this convention.
+    """
 
     @property
     def name(self) -> str:

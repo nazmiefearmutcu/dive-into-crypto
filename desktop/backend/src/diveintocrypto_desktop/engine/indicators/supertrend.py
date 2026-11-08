@@ -21,9 +21,9 @@ class SupertrendIndicator(BaseIndicator):
         close = df["close"].values
         
         n = len(df)
-        if n < period:
+        if period < 1 or n < period + 1:
             return self._make_result(Signal.NEUTRAL, "Supertrend data insufficient")
-            
+
         # Calculate ATR
         tr = np.zeros(n)
         for i in range(1, n):
@@ -31,11 +31,13 @@ class SupertrendIndicator(BaseIndicator):
             tr2 = abs(high[i] - close[i-1])
             tr3 = abs(low[i] - close[i-1])
             tr[i] = max(tr1, tr2, tr3)
-            
+
+        # Wilder/RMA seed: mean of the first `period` true ranges (tr[1..period]),
+        # placed at index `period`. The recursion then starts at period+1, so no bar's
+        # true range is counted twice (seeding at period-1 double-counted tr[period]).
         atr = np.zeros(n)
-        if n >= period:
-            atr[period-1] = np.mean(tr[1:period+1])
-        for i in range(period, n):
+        atr[period] = np.mean(tr[1:period+1])
+        for i in range(period + 1, n):
             # RMA (smma) is usually used in Supertrend for ATR
             atr[i] = (atr[i-1] * (period - 1) + tr[i]) / period
             

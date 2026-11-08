@@ -1,9 +1,11 @@
 """Claims registry lifecycle — validation, immutability, and the
 post-registration-only evaluation rule. Fully offline (tmp dirs)."""
 
+import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 from diveintocrypto_desktop.scan import claims as cl
 from diveintocrypto_desktop.scan import evidence as ev
@@ -103,8 +105,8 @@ def test_lifecycle_pending_then_confirmed_post_registration_only(claims_env):
     out = cl.evaluate(claim)
     assert out["status"] == "CONFIRMED" and out["n"] == 2 and out["value"] == 1.0
 
-    # same data, impossible threshold → REFUTED (value 1.0 < 1.01)
-    strict = cl.evaluate({**claim, "threshold": {"op": ">=", "value": 1.01}, "min_n": 2})
+    # same data (value 1.0), a valid probability threshold it cannot meet → REFUTED
+    strict = cl.evaluate({**claim, "threshold": {"op": "<=", "value": 0.5}, "min_n": 2})
     assert strict["status"] == "REFUTED"
     # <= threshold form works too
     low = cl.evaluate({**claim, "threshold": {"op": "<=", "value": 1.0}, "min_n": 2})
@@ -193,3 +195,77 @@ def test_load_claims_skips_corrupt_files(claims_env):
     cl.register(_claim())
     rows = cl.load_claims()
     assert [r["claim_id"] for r in rows] == ["CL-TEST-1"]
+
+
+def test_schema_invalid_claim_is_safe_pending_not_a_crash(claims_env):
+    """A hand-edited claim with an unknown op must never be judged (guessed as <=)
+    and must not fail the whole listing."""
+    import yaml
+
+    bad = _claim()
+    bad["threshold"] = {"op": "==", "value": 0.5}
+    records = [_record("A", REG_MS + HOUR), _record("B", REG_MS + 2 * HOUR)]
+    grades = [_grade("A", REG_MS + HOUR, hit=True), _grade("B", REG_MS + 2 * HOUR, hit=True)]
+    out = cl.evaluate(bad, records=records, grades=grades)
+    assert out["status"] == "PENDING" and out["n"] == 0 and out["value"] is None
+    assert "invalid claim" in out["note"]
+
+    # the same broken claim on disk: listed as PENDING, the listing itself succeeds
+    directory = claims_env / "claims"
+    directory.mkdir(parents=True, exist_ok=True)
+    broken = dict(bad, claim_id="CL-BROKEN")
+    (directory / "CL-BROKEN.yaml").write_text(yaml.safe_dump(broken, sort_keys=False), encoding="utf-8")
+    listing = {c["claim_id"]: c for c in cl.list_evaluations()}
+    assert listing["CL-BROKEN"]["status"] == "PENDING"
+    assert "invalid claim" in listing["CL-BROKEN"]["note"]
+
+
+def test_rate_metric_threshold_must_be_a_probability(claims_env):
+    for bad_value in (55, 1.5, -0.1, float("nan"), float("inf")):
+        with pytest.raises(cl.ClaimError, match="within"):
+            cl.validate_claim(_claim(threshold=bad_value))
+    cl.validate_claim(_claim(threshold=0.0))
+    cl.validate_claim(_claim(threshold=1.0))
+    # avg_forward is a return, not a probability: no [0, 1] bound applies to it
+    avg = _claim(claim_id="CL-AVG-RANGE", threshold=0.015)
+    avg["metric"] = "avg_forward"
+    cl.validate_claim(avg)
+    avg["threshold"] = {"op": ">=", "value": -0.2}
+    cl.validate_claim(avg)
+
+
+def test_builtin_registry_is_the_bundled_docs_claims_dir():
+    # the frozen build bundles this exact directory (dive.spec datas "docs/claims")
+    assert (cl.bundled_dir() / "CL-001-LONG-4H-EDGE.yaml").exists()
+    spec = (Path(__file__).resolve().parents[1] / "dive.spec").read_text(encoding="utf-8")
+    assert '"docs/claims"' in spec
+
+
+def test_frozen_build_reads_bundle_and_writes_runtime_dir(monkeypatch, tmp_path):
+    bundle = tmp_path / "_internal"
+    shipped = bundle / "docs" / "claims"
+    shipped.mkdir(parents=True)
+    (shipped / "CL-BUILTIN.yaml").write_text(
+        yaml.safe_dump(_claim("CL-BUILTIN"), sort_keys=False), encoding="utf-8"
+    )
+    monkeypatch.delenv("DIVE_CLAIMS_DIR", raising=False)
+    monkeypatch.setenv("DIVE_CLAIMS_STATUS_PATH", str(tmp_path / "status.json"))
+    monkeypatch.setattr(cl.ev, "_default_dir", lambda: tmp_path / "runtime")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(bundle), raising=False)
+
+    runtime_claims = tmp_path / "runtime" / "claims"
+    assert cl.claims_dir() == runtime_claims
+    assert [c["claim_id"] for c in cl.load_claims()] == ["CL-BUILTIN"]
+
+    # new claims land in the writable runtime folder, never inside the bundle
+    path = cl.register(_claim("CL-NEW"))
+    assert path.parent == runtime_claims and path.exists()
+    assert not (shipped / "CL-NEW.yaml").exists()
+    assert sorted(c["claim_id"] for c in cl.load_claims()) == ["CL-BUILTIN", "CL-NEW"]
+
+    # a shipped id can never be shadowed by a runtime file
+    with pytest.raises(cl.ClaimExistsError):
+        cl.register(_claim("CL-BUILTIN"))
+    assert not (runtime_claims / "CL-BUILTIN.yaml").exists()
+

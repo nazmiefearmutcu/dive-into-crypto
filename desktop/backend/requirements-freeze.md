@@ -40,5 +40,5 @@ uv run --with pyinstaller pyinstaller dive.spec --noconfirm
 ```
 
 (`--with pyinstaller` overlays the packager onto the locked env — PyInstaller's
-Analysis needs to import pandas/fastapi/uvicorn/crypcodile from that env to bundle
+Analysis needs to import pandas/fastapi/uvicorn/crocodile from that env to bundle
 them; an isolated `uv tool run` environment cannot see them.)

@@ -47,7 +47,9 @@ class StochasticIndicator(config: IndicatorConfig) : BaseIndicator(config) {
         val curD = dLine.last()
         if (curK.isNaN() || curD == null) return result(Signal.NEUTRAL, "Stochastic data insufficient")
 
-        val prevK = kValues.dropLast(1).lastOrNull { !it.isNaN() } ?: curK
+        // Exactly bar n-2 (k_line.iloc[-2] in stochastic.py). A NaN there stays NaN, so
+        // every comparison is false, as in pandas; falling back to an older bar is wrong.
+        val prevK = kValues.getOrElse(kValues.size - 2) { curK }
         val prevD = dLine.dropLast(1).lastOrNull { it != null } ?: curD
 
         val raw = mapOf<String, Double?>(

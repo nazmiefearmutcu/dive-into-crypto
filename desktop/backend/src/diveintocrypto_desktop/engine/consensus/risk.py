@@ -39,7 +39,9 @@ def assess_risk(
             if volatility == "HIGH":
                 risk_score += 3
                 risk_factors.append("High ATR volatility")
-            elif volatility == "LOW":
+            # The producer labels LOW only when atr_ratio < 0.5; 0.5-0.8 is NORMAL.
+            # The ratio check below is a guard for that same cutoff.
+            elif volatility == "LOW" and r.raw_values.get("atr_ratio", 0.0) < 0.5:
                 risk_factors.append("Low ATR volatility (squeeze potential)")
 
     # 2. Check ADX trend strength
@@ -59,7 +61,8 @@ def assess_risk(
     if active > 0:
         minority = min(buy_count, sell_count)
         conflict_ratio = minority / active
-        conflict_threshold = config.get("consensus", {}).get("conflict_ratio_threshold", 0.6)
+        # Shipped 0.4: minority/active never exceeds 0.5, so 0.6 was unreachable.
+        conflict_threshold = config.get("consensus", {}).get("conflict_ratio_threshold", 0.4)
 
         if conflict_ratio > conflict_threshold:
             risk_score += 3

@@ -15,6 +15,7 @@ object DeribitSymbols {
         "JUL" to 7, "AUG" to 8, "SEP" to 9, "OCT" to 10, "NOV" to 11, "DEC" to 12,
     )
     private val DATE_RE = Regex("^(\\d{1,2})([A-Z]{3})(\\d{2})$")
+    private const val EXPIRY_HOUR_UTC = 8L
 
     /** Parse BASE-DdMMMyy-STRIKE-(C|P). Returns null if not a 4-part option symbol. */
     fun parseOptionSymbol(sym: String): ParsedOption? {
@@ -31,7 +32,8 @@ object DeribitSymbols {
         val day = m.groupValues[1].toInt()
         val month = MONTHS[m.groupValues[2]] ?: return null
         val year = 2000 + m.groupValues[3].toInt()
-        val epochSec = LocalDate(year, month, day).atStartOfDayIn(TimeZone.UTC).epochSeconds
+        // Deribit options (like futures) settle and expire at 08:00 UTC, not midnight.
+        val epochSec = LocalDate(year, month, day).atStartOfDayIn(TimeZone.UTC).epochSeconds + EXPIRY_HOUR_UTC * 3_600L
         return ParsedOption(underlying, strike, epochSec * 1_000_000_000L, optType)
     }
 }

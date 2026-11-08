@@ -43,6 +43,11 @@ class TfResult:
 
 
 NONE_TF = TfResult()
+DEFAULT_PARAMS = Params()  # frozen: one shared default instead of a per-call Params()
+# Longest run of periods a whale L/S value may be carried forward by align().
+# Mirrors DivergenceAlignment.MAX_FORWARD_FILL_PERIODS (Android): candles further
+# than this past the last real L/S bucket are dropped, never scored with a stale value.
+MAX_FORWARD_FILL_PERIODS = 3
 
 
 @dataclass(frozen=True)
@@ -119,7 +124,7 @@ def _zlema(x: list[float], w: int) -> list[float]:
     return out
 
 
-def per_tf(price: list[float], whale_ls: list[float], tf_weight: int, params: Params = Params()) -> TfResult:
+def per_tf(price: list[float], whale_ls: list[float], tf_weight: int, params: Params = DEFAULT_PARAMS) -> TfResult:
     n = min(len(price), len(whale_ls))
     if n < params.min_bars:
         return NONE_TF
@@ -165,7 +170,7 @@ def per_tf(price: list[float], whale_ls: list[float], tf_weight: int, params: Pa
     )
 
 
-def for_symbol(per_tf_results: dict[str, TfResult], params: Params = Params()) -> SymbolResult:
+def for_symbol(per_tf_results: dict[str, TfResult], params: Params = DEFAULT_PARAMS) -> SymbolResult:
     detected = {k: v for k, v in per_tf_results.items() if v.detected}
     if not detected:
         return NONE_SYMBOL
@@ -190,8 +195,10 @@ def align(
     ls_times: list[int], ls_vals: list[float], period_ms: int,
 ) -> tuple[list[float], list[float], int]:
     """Align price & whale-L/S by timestamp bucket (t // period_ms). Forward-fill
-    missing L/S buckets; skip candles before L/S data starts. Returns
-    (price, whale, matched).
+    missing L/S buckets for at most ``MAX_FORWARD_FILL_PERIODS`` periods; skip
+    candles before L/S data starts and candles further past the last real L/S
+    bucket (a stale feed contributes no value). Returns (price, whale, matched).
+    ``matched`` counts candles tied to a real L/S bucket (not forward-fills).
     """
     if period_ms <= 0:
         return [], [], 0
@@ -205,15 +212,21 @@ def align(
     price: list[float] = []
     whale: list[float] = []
     last_whale = math.nan
+    last_bucket = 0
     matched = 0
     for i in range(n):
-        w = ls_by_bucket.get(price_times[i] // period_ms)
+        bucket = price_times[i] // period_ms
+        w = ls_by_bucket.get(bucket)
         if w is not None:
             last_whale = w
+            last_bucket = bucket
             matched += 1
-        if not math.isnan(last_whale):
-            price.append(price_vals[i])
-            whale.append(last_whale)
+        if math.isnan(last_whale):  # before the L/S data starts
+            continue
+        if bucket - last_bucket > MAX_FORWARD_FILL_PERIODS:  # L/S feed stale: nothing to carry
+            continue
+        price.append(price_vals[i])
+        whale.append(last_whale)
     return price, whale, matched
 
 
@@ -223,7 +236,8 @@ def whale_regime_for(sym_div: SymbolResult, dir_ind: int, min_shown: float) -> t
     direction (elimination), "confirm" when it supports it (ranking lift),
     "neutral" below the display threshold or without a whale direction.
     """
-    adverse = abs(sym_div.score) >= min_shown and sym_div.direction == -dir_ind
+    # a neutral row (dir_ind == 0) has no direction to oppose — never adverse
+    adverse = dir_ind != 0 and abs(sym_div.score) >= min_shown and sym_div.direction == -dir_ind
     if abs(sym_div.score) < min_shown or sym_div.direction == 0:
         regime = "neutral"
     elif adverse:

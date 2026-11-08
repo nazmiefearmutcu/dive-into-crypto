@@ -10,25 +10,25 @@ self-extracting executable is a classic antivirus false-positive trigger and
 pays a temp-dir extraction cost on every launch. Afterwards run
 dist/dive-desktop/dive-desktop.exe; it serves 127.0.0.1:8780 and opens the UI.
 
-How the frozen app finds the UI bundle
---------------------------------------
-api/app.py resolves the prebuilt UI as:
+How the frozen app finds its bundled resources
+----------------------------------------------
+Bundled, read-only resources live under ``sys._MEIPASS`` (the ``_internal``
+folder of the onedir build). Each one is listed in ``datas`` below and resolved
+at runtime from that root:
 
-    _UI_DIST = Path(__file__).resolve().parents[4] / "ui" / "dist"
+* UI bundle — api/app.py: ``_BASE_DIR = Path(getattr(sys, "_MEIPASS", <checkout>))``
+  and ``_UI_DIST = _BASE_DIR / "ui" / "dist"``. This spec copies
+  desktop/ui/dist to ``ui/dist`` under sys._MEIPASS.
+* Engine config — engine/loader.py reads ``engine/config/default.yaml`` next to
+  the package (copied by the ``datas`` entry for ``engine/config``).
+* Built-in claim registry (CL-001) — scan/claims.py reads
+  ``docs/claims`` under sys._MEIPASS (copied by the ``datas`` entry for
+  ``docs/claims``). Newly registered claims are NOT written there: the frozen
+  build writes them to the writable runtime folder (``<app>/runtime/claims``).
 
-In the checkout (app.py at desktop/backend/src/diveintocrypto_desktop/api/app.py)
-parents[4] == desktop/, i.e. desktop/ui/dist. In a frozen onedir build the
-module lives at <app>/_internal/diveintocrypto_desktop/api/app.pyc, so
-parents[4] is one level ABOVE the app folder — the untouched path math can
-never see inside the bundle. Two complementary measures close that gap:
-
-1. This spec copies desktop/ui/dist to sys._MEIPASS/ui/dist (datas dest
-   "ui/dist"), which is exactly where the sys._MEIPASS fallback in api/app.py
-   looks for it.
-2. The packaging job in .github/workflows/release.yml (`package-desktop`)
-   mirrors the bundle to <dist-root>/ui/dist — the location parents[4]
-   resolves to in the frozen tree — so the legacy resolution ALSO finds it
-   when the whole dist/ tree is extracted together. See docs/packaging.md.
+No separate mirror of the UI bundle is needed: the packaging job
+(.github/workflows/release.yml, ``package-desktop``) runs this spec and zips
+``dist/dive-desktop`` as-is.
 
 pandas / numpy / aiohttp / fastapi are picked up automatically by Analysis;
 the hiddenimports below cover uvicorn's dynamically-selected standard extras,
@@ -56,6 +56,18 @@ a = Analysis(
         # Bundled under sys._MEIPASS as "ui/dist" (see header): the
         # frozen-build fallback location in api/app.py.
         (_UI_DIST, "ui/dist"),
+        # Engine config read via Path(__file__).parent / "config" / "default.yaml"
+        # in engine/loader.py. PyInstaller does not collect non-Python data files
+        # on its own, so without this entry every symbol build fails with
+        # FileNotFoundError in the frozen app.
+        (
+            os.path.join(_ROOT, "src", "diveintocrypto_desktop", "engine", "config", "default.yaml"),
+            "diveintocrypto_desktop/engine/config",
+        ),
+        # Built-in claims registry (CL-001, docs/claims/*.yaml). Bundled under
+        # sys._MEIPASS/docs/claims so the frozen app ships the pre-registered claims
+        # (scan/claims.py reads them from there; new claims go to the runtime dir).
+        (os.path.join(_ROOT, os.pardir, os.pardir, "docs", "claims"), "docs/claims"),
     ],
     hiddenimports=[
         # uvicorn[standard] — dynamically imported, invisible to Analysis.

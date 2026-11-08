@@ -54,8 +54,13 @@ class ObvIndicator(config: IndicatorConfig) : BaseIndicator(config) {
         val baseObv = obvList[n - 1 - lookback]
         val priceChange = if (baseClose != 0.0) (closes[n - 1] - baseClose) / baseClose else 0.0
         val obvChange = currentObv - baseObv
-        val obvBase = abs(baseObv)
-        val obvChangePct = if (obvBase != 0.0) obvChange / obvBase else 0.0
+        // Python: obv_change / volume.iloc[-lookback:].sum(). The window's traded volume
+        // is the scale, not |base OBV| (a cumulative sum unrelated to the window).
+        // lookback == 0 selects the whole series, as iloc[-0:] does in pandas.
+        val volStart = if (lookback > 0) n - lookback else 0
+        var windowVolume = 0.0
+        for (i in volStart until n) windowVolume += volumes[i]
+        val obvChangePct = if (windowVolume != 0.0) obvChange / windowVolume else 0.0
 
         val obvTrendStr = if (currentObv > currentObvSma) "UP" else "DOWN"
         val raw = mapOf<String, Double?>(

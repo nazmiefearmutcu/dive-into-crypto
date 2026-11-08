@@ -76,6 +76,12 @@ class AtrPercentileIndicator(config: IndicatorConfig) : BaseIndicator(config) {
         val base = closes[n - 1 - period]
         val move = if (base != 0.0) (closes[n - 1] - base) / base else 0.0
 
+        // A non-finite current bar must not reach the directional branches (NaN
+        // comparisons fall through to SELL) nor reuse a stale ATR.
+        if (!closes[n - 1].isFinite() || !atr[n - 1].isFinite() || !move.isFinite()) {
+            return result(Signal.NEUTRAL, "ATR%ile data invalid")
+        }
+
         val raw = mapOf<String, Double?>(
             "atr_pct_percentile" to roundTo(pctile, 4),
             "move" to roundTo(move, 5),

@@ -159,5 +159,7 @@ fun PulseStrip(container: AppContainer, modifier: Modifier = Modifier) {
 private fun ChartDecimalsFor(price: Double): Int = when {
     price >= 1000.0 -> 2
     price >= 1.0 -> 3
-    else -> 5
+    // Keep 4 significant digits below 1 (a fixed 5 decimals showed 0.0000124 as 0.00001).
+    price <= 0.0 -> 5
+    else -> (kotlin.math.floor(-kotlin.math.log10(price)).toInt() + 4).coerceIn(5, 12)
 }

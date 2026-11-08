@@ -7,6 +7,7 @@ import io.ktor.client.plugins.HttpSend
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.plugin
 import io.ktor.client.plugins.websocket.WebSockets
+import kotlinx.coroutines.CancellationException
 
 /**
  * Shared Ktor [HttpClient] factory for every Binance client.
@@ -18,7 +19,7 @@ import io.ktor.client.plugins.websocket.WebSockets
  * `NetworkLog.okHttpInterceptor()`.
  *
  * The engine is supplied by the platform layer ([httpEngine] → OkHttp on
- * Android, Darwin/NSURLSession on iOS) so this stays in `commonMain`.
+ * Android) so this stays in `commonMain`.
  */
 internal fun binanceHttpClient(): HttpClient = HttpClient(httpEngine()) {
     install(HttpTimeout) {
@@ -45,6 +46,9 @@ internal fun binanceHttpClient(): HttpClient = HttpClient(httpEngine()) {
                 error = null,
             )
             call
+        } catch (t: CancellationException) {
+            // Our own teardown (screen left, symbol switched): not a network failure.
+            throw t
         } catch (t: Throwable) {
             val url = request.url.build()
             NetworkLog.recordRest(

@@ -1,3 +1,4 @@
+import org.gradle.api.tasks.testing.Test
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import java.util.Properties
 
@@ -12,6 +13,11 @@ plugins {
 kotlin {
     androidTarget {
         compilerOptions { jvmTarget.set(JvmTarget.JVM_17) }
+    }
+
+    // expect/actual classes are Beta in Kotlin 2.0; the project uses them deliberately.
+    compilerOptions {
+        freeCompilerArgs.add("-Xexpect-actual-classes")
     }
 
     sourceSets {
@@ -29,8 +35,6 @@ kotlin {
             implementation(libs.kotlinx.datetime)
             implementation(libs.atomicfu)
             implementation(libs.ktor.client.core)
-            implementation(libs.ktor.client.content.negotiation)
-            implementation(libs.ktor.serialization.kotlinx.json)
             implementation(libs.ktor.client.websockets)
         }
         commonTest.dependencies {
@@ -56,29 +60,31 @@ kotlin {
 
 android {
     namespace = "com.diveintocrypto.android"
-    compileSdk = 35
+    compileSdk = 36
 
-    // Release signing is driven by environment variables first, then a local git-ignored keystore.properties.
-    // Absent either, the release build is simply left unsigned instead of failing.
-    val envStoreFile = System.getenv("STORE_FILE")
-    val envStorePassword = System.getenv("STORE_PASSWORD")
-    val envKeyAlias = System.getenv("KEY_ALIAS")
-    val envKeyPassword = System.getenv("KEY_PASSWORD")
-
+    // Release signing: environment variables first, then a local git-ignored
+    // keystore.properties. A blank value counts as unset (CI exports an unset secret
+    // as an empty string), so it falls through to the properties file.
     val keystorePropsFile = rootProject.file("keystore.properties")
     val keystoreProps = Properties().apply {
         if (keystorePropsFile.exists()) keystorePropsFile.inputStream().use { load(it) }
     }
+    fun signingValue(envName: String, propName: String): String? =
+        System.getenv(envName)?.takeIf { it.isNotBlank() }
+            ?: keystoreProps.getProperty(propName)?.takeIf { it.isNotBlank() }
 
-    val finalStoreFile = envStoreFile ?: keystoreProps.getProperty("storeFile")
-    val finalStorePassword = envStorePassword ?: keystoreProps.getProperty("storePassword")
-    val finalKeyAlias = envKeyAlias ?: keystoreProps.getProperty("keyAlias")
-    val finalKeyPassword = envKeyPassword ?: keystoreProps.getProperty("keyPassword")
+    val finalStoreFile = signingValue("STORE_FILE", "storeFile")
+    val finalStorePassword = signingValue("STORE_PASSWORD", "storePassword")
+    val finalKeyAlias = signingValue("KEY_ALIAS", "keyAlias")
+    val finalKeyPassword = signingValue("KEY_PASSWORD", "keyPassword")
 
-    val hasSigningConfig = !finalStoreFile.isNullOrBlank() &&
-            !finalStorePassword.isNullOrBlank() &&
-            !finalKeyAlias.isNullOrBlank() &&
-            !finalKeyPassword.isNullOrBlank()
+    val hasSigningConfig = finalStoreFile != null &&
+            finalStorePassword != null &&
+            finalKeyAlias != null &&
+            finalKeyPassword != null
+
+    // Explicit opt-out for CI's unsigned smoke build (e.g. -PallowUnsignedRelease=true).
+    val allowUnsignedRelease = project.findProperty("allowUnsignedRelease")?.toString() == "true"
 
     signingConfigs {
         if (hasSigningConfig) {
@@ -91,12 +97,31 @@ android {
         }
     }
 
+    // Never publish an unsigned release by accident: a release bundle/APK task in the
+    // graph without a complete signing config fails the build with a clear message.
+    // Kotlin DSL: Action<TaskExecutionGraph> exposes the graph as the receiver (`this`).
+    gradle.taskGraph.whenReady {
+        val releaseRequested = allTasks.any { task ->
+            task.name.endsWith("Release") &&
+                (task.name.startsWith("assemble") ||
+                    task.name.startsWith("bundle") ||
+                    task.name.startsWith("install"))
+        }
+        if (releaseRequested && !hasSigningConfig && !allowUnsignedRelease) {
+            throw GradleException(
+                "Release build requested without a complete signing config. Set STORE_FILE, " +
+                    "STORE_PASSWORD, KEY_ALIAS and KEY_PASSWORD (environment or keystore.properties), " +
+                    "or pass -PallowUnsignedRelease=true for an unsigned smoke build."
+            )
+        }
+    }
+
     defaultConfig {
         applicationId = "com.diveintocrypto.android"
         minSdk = 26
-        targetSdk = 35
-        versionCode = 3
-        versionName = "0.3.0"
+        targetSdk = 36
+        versionCode = 4
+        versionName = "0.4.0"
     }
 
     sourceSets["main"].manifest.srcFile("src/androidMain/AndroidManifest.xml")
@@ -106,6 +131,12 @@ android {
         unitTests.isReturnDefaultValues = true
     }
 
+    // ScanBenchmark is opt-in: `-Ddive.bench=true` on the Gradle command line must reach the
+    // unit-test JVMs, otherwise the benchmark's assumeTrue always skips it. Ordinary runs stay "false".
+    tasks.withType<Test>().configureEach {
+        systemProperty("dive.bench", System.getProperty("dive.bench") ?: "false")
+    }
+
     buildTypes {
         getByName("debug") {
             applicationIdSuffix = ".debug"
@@ -113,6 +144,7 @@ android {
         }
         getByName("release") {
             isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             if (hasSigningConfig) signingConfig = signingConfigs.getByName("release")
         }

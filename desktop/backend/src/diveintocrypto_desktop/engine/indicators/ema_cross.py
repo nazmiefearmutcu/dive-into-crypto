@@ -1,6 +1,5 @@
 """EMA (Exponential Moving Average) Crossover indicator."""
 
-from typing import Any
 import pandas as pd
 
 from diveintocrypto_desktop.engine.indicators.base import BaseIndicator, IndicatorResult, Signal
@@ -54,10 +53,10 @@ class EMACrossIndicator(BaseIndicator):
         elif current_short > current_long and short_slope > 0:
             if divergence > strong_divergence_pct:
                 return self._make_result(Signal.STRONG_BUY, f"EMA bullish with positive slope, div={divergence:.3f}", raw)
-            return self._make_result(Signal.BUY, f"EMA bullish alignment, slope positive", raw)
+            return self._make_result(Signal.BUY, "EMA bullish alignment, slope positive", raw)
         elif current_short < current_long and short_slope < 0:
             if abs(divergence) > strong_divergence_pct:
                 return self._make_result(Signal.STRONG_SELL, f"EMA bearish with negative slope, div={divergence:.3f}", raw)
-            return self._make_result(Signal.SELL, f"EMA bearish alignment, slope negative", raw)
+            return self._make_result(Signal.SELL, "EMA bearish alignment, slope negative", raw)
         else:
             return self._make_result(Signal.NEUTRAL, "EMA neutral / mixed signals", raw)

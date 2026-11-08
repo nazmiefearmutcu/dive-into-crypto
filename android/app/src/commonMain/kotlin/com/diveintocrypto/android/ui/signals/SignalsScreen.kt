@@ -26,20 +26,23 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.diveintocrypto.android.AppContainer
 import com.diveintocrypto.android.platform.format
+import com.diveintocrypto.android.platform.formatTime
+import com.diveintocrypto.android.ui.i18n.DiveStrings
+import com.diveintocrypto.android.ui.i18n.LocalDiveStrings
+import com.diveintocrypto.android.ui.panel.ALL_TIMEFRAMES
 import com.diveintocrypto.android.ui.panel.components.PageHeader
 import com.diveintocrypto.android.ui.panel.components.RiskBadge
 import com.diveintocrypto.android.ui.panel.components.SignalBadge
 import com.diveintocrypto.android.ui.panel.components.StaleChip
+import com.diveintocrypto.android.ui.panel.components.VerdictBadge
 import com.diveintocrypto.android.ui.panel.components.DiveCard
 import com.diveintocrypto.android.ui.theme.DiveColors
 import com.diveintocrypto.android.ui.theme.DiveDims
@@ -53,22 +56,21 @@ import com.diveintocrypto.android.ui.theme.DiveFonts
  *   1. PageHeader  — signals.html:11-14 (.page-header h1 + .update-time)
  *   2. Consensus Result card                       — signals.html:17-59
  *      - 2×2 metric box grid (Final Signal / Confidence / Risk / Weighted Score)
- *      - Action + Should Trade row                — signals.html:46-55
+ *      - Threshold status + "Above threshold" row  — signals.html:46-55 (wording is analytic,
+ *        never an execution command)
  *      - reason-text                              — signals.html:56-58
  *   3. Signal Distribution card                    — signals.html:62-76
  *      - dist-bar with BUY / NEUTRAL / SELL segments
  *   4. Indicator Details ({count}) card            — signals.html:79-125
- *      - mobile: vertical stack of DataCard items, one per indicator.
- *        Same 6 fields as desktop's `<tr>` (name + signal + score + weight +
- *        weighted + reason), just stacked instead of side-by-side. Desktop's
- *        6-column horizontally-scrollable table did not fit a 360dp phone.
- *      - empty-state when votes is empty          — signals.html:122-124
+ *      - a horizontally scrollable table of indicators (see [IndicatorTableCard])
+ *   5. Footer: the permanent not-investment-advice line.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SignalsScreen(container: AppContainer) {
     val vm: SignalsViewModel = viewModel { SignalsViewModel(container) }
     val state by vm.ui.collectAsStateWithLifecycle()
+    val s = LocalDiveStrings.current
 
     PullToRefreshBox(
         isRefreshing = state.isLoading,
@@ -85,7 +87,7 @@ fun SignalsScreen(container: AppContainer) {
         ) {
             // from dashboard/templates/signals.html:11-14 (.page-header)
             PageHeader(
-                title = "Signals",
+                title = s.sigTitle,
                 lastUpdateMs = state.lastUpdateMs,
                 stale = false,
                 onRefresh = { vm.refresh() },
@@ -94,6 +96,25 @@ fun SignalsScreen(container: AppContainer) {
             // HONESTY: WS staleness chip — "BAĞLANIYOR" before the first frame,
             // amber "GECİKME · N sn önce" once the live stream goes quiet.
             StaleChip(isStale = state.isStale, dataAgeMs = state.dataAgeMs)
+
+            // HONESTY: a failed load is an error card with retry, never a silent grid of N/A.
+            state.errorMessage?.let { message ->
+                LoadErrorCard(
+                    title = if (state.regionBlocked) s.errRegionBlockedTitle else s.sigLoadFailedTitle,
+                    body = message,
+                    showRetry = !state.regionBlocked,
+                    onRetry = { vm.refresh() },
+                )
+            }
+
+            // Partial failure: some timeframes could not be loaded — say which ones.
+            if (state.errorMessage == null && state.failedTfs.isNotEmpty()) {
+                PartialLoadNote(
+                    text = s.sigLoadPartial(
+                        ALL_TIMEFRAMES.filter { it in state.failedTfs }.joinToString(", ") { it.uppercase() },
+                    ),
+                )
+            }
 
             // 12-Timeframe Grid Selector
             TimeframeGrid(
@@ -114,8 +135,94 @@ fun SignalsScreen(container: AppContainer) {
 
             // from dashboard/templates/signals.html:79-125 (.card "Indicator Details")
             IndicatorTableCard(votes = tfState.votes)
+
+            // Permanent not-investment-advice line (Play policy).
+            Text(
+                text = s.disclaimerShort,
+                color = DiveColors.TextDim,
+                fontSize = 11.sp,
+                fontFamily = DiveFonts.body,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
+}
+
+/** Dedicated error card for a failed history load. A region block shows no retry control. */
+@Composable
+private fun LoadErrorCard(title: String, body: String, showRetry: Boolean, onRetry: () -> Unit) {
+    val s = LocalDiveStrings.current
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(DiveDims.Radius))
+            .background(DiveColors.RedTint15)
+            .border(1.dp, DiveColors.RedTint25, RoundedCornerShape(DiveDims.Radius))
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(
+            text = title,
+            color = DiveColors.Red,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold,
+            fontFamily = DiveFonts.body,
+        )
+        Text(
+            text = body,
+            color = DiveColors.TextMuted,
+            fontSize = 12.sp,
+            lineHeight = 16.sp,
+            fontFamily = DiveFonts.body,
+        )
+        if (showRetry) {
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(DiveDims.RadiusSm))
+                    .background(DiveColors.Red)
+                    .clickable(onClick = onRetry)
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = s.btnRetry,
+                    color = androidx.compose.material3.MaterialTheme.colorScheme.onPrimary,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 0.6.sp,
+                    fontFamily = DiveFonts.body,
+                )
+            }
+        }
+    }
+}
+
+/** Amber note: some timeframes failed to load; the rest are shown. */
+@Composable
+private fun PartialLoadNote(text: String) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(DiveDims.Radius))
+            .background(DiveColors.Warn.copy(alpha = 0.10f))
+            .border(1.dp, DiveColors.Warn.copy(alpha = 0.35f), RoundedCornerShape(DiveDims.Radius))
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+    ) {
+        Text(
+            text = text,
+            color = DiveColors.Warn,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            fontFamily = DiveFonts.body,
+        )
+    }
+}
+
+/** Maps the threshold-status token to its analytic wording (never an execution command). */
+private fun thresholdText(token: String, s: DiveStrings): String = when (token) {
+    SignalsViewModel.ACTION_ABOVE_BULL -> s.sigAboveBull
+    SignalsViewModel.ACTION_ABOVE_BEAR -> s.sigAboveBear
+    else -> s.sigBelowThreshold
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -123,17 +230,18 @@ fun SignalsScreen(container: AppContainer) {
 // ════════════════════════════════════════════════════════════════════════
 @Composable
 private fun ConsensusResultCard(state: TfSignalState) {
-    DiveCard(title = "Consensus Result") {
+    val s = LocalDiveStrings.current
+    DiveCard(title = s.sigConsensusTitle) {
         // .grid .grid-4 — signals.html:19-45. Mobile keeps the 4-up row on a
         // single line (was 2×2 on previous mobile pass) since dropping each
         // big-number from 28→16sp lets all four fit at ~80dp per cell.
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             // .metric-box "Final Signal" — signals.html:20-25
-            MetricBoxCol(label = "Final Signal", modifier = Modifier.weight(1f)) {
-                SignalBadge(state.finalSignal)
+            MetricBoxCol(label = s.sigFinalSignal, modifier = Modifier.weight(1f)) {
+                VerdictBadge(state.finalSignal)
             }
             // .metric-box "Confidence" — signals.html:26-32
-            MetricBoxCol(label = "Confidence", modifier = Modifier.weight(1f)) {
+            MetricBoxCol(label = s.sigConfidence, modifier = Modifier.weight(1f)) {
                 // .big-number — style.css:147 (desktop is 28px; mobile 16sp).
                 Text(
                     text = "${state.confidence}%",
@@ -158,11 +266,11 @@ private fun ConsensusResultCard(state: TfSignalState) {
                 }
             }
             // .metric-box "Risk Level" — signals.html:33-38
-            MetricBoxCol(label = "Risk", modifier = Modifier.weight(1f)) {
+            MetricBoxCol(label = s.sigRisk, modifier = Modifier.weight(1f)) {
                 RiskBadge(state.riskLevel)
             }
             // .metric-box "Weighted Score" — signals.html:39-44
-            MetricBoxCol(label = "W. Score", modifier = Modifier.weight(1f)) {
+            MetricBoxCol(label = s.sigWeightedScore, modifier = Modifier.weight(1f)) {
                 val ws = state.weightedScore
                 val color = when {
                     ws > 0 -> DiveColors.Green        // .positive — style.css:149
@@ -180,13 +288,19 @@ private fun ConsensusResultCard(state: TfSignalState) {
             }
         }
 
-        // .grid .grid-2 Action + Should Trade — signals.html:46-55
+        // .grid .grid-2 threshold status + "Above threshold" — signals.html:46-55
         Spacer(Modifier.height(8.dp))
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            LabelValueCol(label = "Action", value = state.action, modifier = Modifier.weight(1f))
+            // No verdict yet (no data / insufficient history): show N/A, never a threshold claim.
+            val hasVerdict = state.finalSignal != "N/A"
             LabelValueCol(
-                label = "Should Trade",
-                value = if (state.shouldTrade) "Yes" else "No",
+                label = s.sigAnalyticStatus,
+                value = if (hasVerdict) thresholdText(state.action, s) else "N/A",
+                modifier = Modifier.weight(1f),
+            )
+            LabelValueCol(
+                label = s.sigAboveThreshold,
+                value = if (!hasVerdict) "N/A" else if (state.shouldTrade) s.sigYes else s.sigNo,
                 modifier = Modifier.weight(1f),
             )
         }
@@ -257,7 +371,8 @@ private fun LabelValueCol(label: String, value: String, modifier: Modifier = Mod
 // ════════════════════════════════════════════════════════════════════════
 @Composable
 private fun DistributionCard(buy: Int, neutral: Int, sell: Int) {
-    DiveCard(title = "Signal Distribution") {
+    val s = LocalDiveStrings.current
+    DiveCard(title = s.sigDistribution) {
         val total = (buy + neutral + sell).coerceAtLeast(1)
         Row(
             modifier = Modifier
@@ -266,17 +381,17 @@ private fun DistributionCard(buy: Int, neutral: Int, sell: Int) {
                 .clip(RoundedCornerShape(DiveDims.Radius)),
         ) {
             DistSegment(
-                label = "BUY $buy",
+                label = s.sigDistBuy(buy),
                 weight = buy.toFloat() / total,
                 bg = DiveColors.GreenTint25, fg = DiveColors.Green,
             )
             DistSegment(
-                label = "NEUTRAL $neutral",
+                label = s.sigDistNeutral(neutral),
                 weight = neutral.toFloat() / total,
                 bg = DiveColors.NeutralTint15, fg = DiveColors.TextMuted,
             )
             DistSegment(
-                label = "SELL $sell",
+                label = s.sigDistSell(sell),
                 weight = sell.toFloat() / total,
                 bg = DiveColors.RedTint25, fg = DiveColors.Red,
             )
@@ -308,11 +423,9 @@ private fun androidx.compose.foundation.layout.RowScope.DistSegment(
 // True horizontal-scroll table — a faithful port of desktop's .table-wrap
 // (style.css:247-271). One <tr> per indicator with 6 columns:
 //   Indicator | Signal | Score | Weight | W.Score | Reason
-// The previous mobile pass wrapped each row into a 440px-tall DataCard
-// stack; only 2 of the 15 indicators were visible per screen. Compact
-// table rows (~34dp) fit all 15 inside one DiveCard without scroll, and
-// long Reason text scrolls horizontally inside the row instead of pushing
-// the row height.
+// Compact table rows (~34dp) fit all indicators inside one DiveCard without
+// scroll, and long Reason text scrolls horizontally inside the row instead of
+// pushing the row height.
 // ════════════════════════════════════════════════════════════════════════
 private val COL_NAME_WIDTH = 70.dp
 private val COL_SIGNAL_WIDTH = 90.dp
@@ -323,7 +436,8 @@ private val COL_REASON_WIDTH = 300.dp
 
 @Composable
 private fun IndicatorTableCard(votes: List<IndicatorVoteRow>) {
-    DiveCard(title = "Indicator Details (${votes.size})") {
+    val s = LocalDiveStrings.current
+    DiveCard(title = s.sigIndicatorDetails(votes.size)) {
         if (votes.isEmpty()) {
             // .empty-state — style.css:272-277
             Box(
@@ -333,7 +447,7 @@ private fun IndicatorTableCard(votes: List<IndicatorVoteRow>) {
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    text = "No indicators computed yet",
+                    text = s.sigNoIndicators,
                     color = DiveColors.TextDim,
                     fontSize = 12.sp,
                 )
@@ -369,6 +483,7 @@ private fun totalRowWidth(): Dp =
 
 @Composable
 private fun IndicatorTableHeader() {
+    val s = LocalDiveStrings.current
     // thead — signals.html:84-92. 10sp uppercase letter-spaced labels.
     Row(
         modifier = Modifier
@@ -376,12 +491,12 @@ private fun IndicatorTableHeader() {
             .padding(vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        TableHeadCell("Indicator", COL_NAME_WIDTH)
-        TableHeadCell("Signal", COL_SIGNAL_WIDTH)
-        TableHeadCell("Score", COL_SCORE_WIDTH, end = true)
-        TableHeadCell("Weight", COL_WEIGHT_WIDTH, end = true)
-        TableHeadCell("W. Score", COL_WSCORE_WIDTH, end = true)
-        TableHeadCell("Reason", COL_REASON_WIDTH)
+        TableHeadCell(s.sigColIndicator, COL_NAME_WIDTH)
+        TableHeadCell(s.sigColSignal, COL_SIGNAL_WIDTH)
+        TableHeadCell(s.sigColScore, COL_SCORE_WIDTH, end = true)
+        TableHeadCell(s.sigColWeight, COL_WEIGHT_WIDTH, end = true)
+        TableHeadCell(s.sigColWeighted, COL_WSCORE_WIDTH, end = true)
+        TableHeadCell(s.sigColReason, COL_REASON_WIDTH)
     }
 }
 
@@ -406,6 +521,7 @@ private fun TableHeadCell(label: String, width: Dp, end: Boolean = false) {
 
 @Composable
 private fun IndicatorTableRow(row: IndicatorVoteRow, zebra: Boolean) {
+    val s = LocalDiveStrings.current
     // Zebra striping — style.css:265 (tbody tr:nth-child(even) background)
     val bg = if (zebra) DiveColors.BgCardHover else Color.Transparent
     val scoreColor = when {
@@ -487,12 +603,13 @@ private fun TimeframeGrid(
     tfSignals: Map<String, TfSignalState>,
     onTfSelected: (String) -> Unit
 ) {
-    DiveCard(title = "Timeframe Signals (12 TF)") {
+    val s = LocalDiveStrings.current
+    DiveCard(title = s.sigTimeframesTitle(ALL_TIMEFRAMES.size)) {
         Column(
             verticalArrangement = Arrangement.spacedBy(6.dp),
             modifier = Modifier.fillMaxWidth()
         ) {
-            com.diveintocrypto.android.ui.panel.ALL_TIMEFRAMES.chunked(4).forEach { rowTfs ->
+            ALL_TIMEFRAMES.chunked(4).forEach { rowTfs ->
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -576,6 +693,17 @@ private fun TimeframeCell(
             fontWeight = FontWeight.Bold,
             fontFamily = DiveFonts.body
         )
+
+        // HONESTY: only the active timeframe streams live. Every other cell is a snapshot taken
+        // when the symbol loaded, so it carries its own "as of" time.
+        if (!isSelected && state.computedAtMs > 0L) {
+            Text(
+                text = formatTime(state.computedAtMs, "HH:mm"),
+                color = DiveColors.TextDim,
+                fontSize = 8.sp,
+                fontFamily = DiveFonts.body,
+                maxLines = 1,
+            )
+        }
     }
 }
-

@@ -17,7 +17,8 @@ data class WidgetVerdictRow(
 
 /**
  * What the TopVerdicts widget renders: the last scan's top survivors + when
- * the scan ran (the data-age line keeps a deferred Doze run HONEST).
+ * the scan ran (the data-age line keeps a deferred Doze run HONEST) + how much
+ * of the planned universe that run actually covered.
  * Persisted through [SettingsStore.putRaw] so the widget (which may wake in a
  * fresh process) reads exactly what the worker wrote.
  */
@@ -25,7 +26,14 @@ data class WidgetVerdictRow(
 data class WidgetScanState(
     val scannedAtMs: Long,
     val items: List<WidgetVerdictRow> = emptyList(),
+    /** Symbol/timeframe fetches that succeeded in the run. */
+    val okFetches: Int = 0,
+    /** Symbol/timeframe fetches the run planned; 0 = coverage unknown (state written before tracking). */
+    val plannedFetches: Int = 0,
 ) {
+    /** True when the run could not cover the whole planned universe (throttled, failed or out of time). */
+    val partial: Boolean get() = plannedFetches > 0 && okFetches < plannedFetches
+
     companion object {
         const val KEY = "widget_last_scan_v1"
         private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }

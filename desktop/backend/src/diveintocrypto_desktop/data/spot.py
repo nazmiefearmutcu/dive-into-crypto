@@ -24,7 +24,7 @@ import os
 import time
 from typing import Any
 
-from diveintocrypto_desktop.data.http import FAPI_V1, get_json
+from diveintocrypto_desktop.data.http import BinanceApiError, describe_failure, get_json, prune_oldest
 
 logger = logging.getLogger("trading_bot.data.spot")
 
@@ -34,6 +34,8 @@ SPOT_V3 = f"{SPOT_BASE}/api/v3"
 KLINE_LIMIT = 48
 LEAD_MARGIN = 0.05
 CACHE_TTL = 60.0
+CACHE_MAX = 256  # symbol-keyed: bounded so arbitrary /api/symbol strings cannot grow it
+INVALID_SYMBOL_CODE = -1121  # Binance: "Invalid symbol." (no spot market for this pair)
 
 _cache: dict[str, tuple[float, dict]] = {}
 
@@ -49,7 +51,7 @@ async def _spot_json(path: str, params: dict[str, Any]) -> Any:
 
 def log_returns(closes: list[float]) -> list[float]:
     out: list[float] = []
-    for a, b in zip(closes, closes[1:]):
+    for a, b in zip(closes, closes[1:], strict=False):
         if a > 0 and b > 0:
             out.append(math.log(b / a))
     return out
@@ -64,7 +66,7 @@ def _corr(a: list[float], b: list[float]) -> float | None:
     vb = sum(x * x for x in db)
     if va <= 0 or vb <= 0:
         return None
-    return sum(x * y for x, y in zip(da, db)) / (va * vb) ** 0.5
+    return sum(x * y for x, y in zip(da, db, strict=False)) / (va * vb) ** 0.5
 
 
 def classify_lead(spot_rets: list[float], perp_rets: list[float],
@@ -105,7 +107,7 @@ def spot_perp_block(spot_closes: list[float], spot_price: float | None,
                     perp_price: float, perp_closes: list[float]) -> dict:
     """Assemble the ``spot_perp`` block (pure)."""
     premium = None
-    if spot_price and spot_price > 0 and perp_price > 0:
+    if spot_price and spot_price > 0 and perp_price is not None and perp_price > 0:
         premium = round((perp_price - spot_price) / spot_price * 100.0, 4)
 
     spread = None
@@ -127,12 +129,12 @@ def spot_perp_block(spot_closes: list[float], spot_price: float | None,
 
 
 async def snapshot(symbol: str, perp_price: float, perp_closes: list[float]) -> dict:
-    """Cached ``spot_perp`` block for ``symbol`` (60s TTL on SUCCESS only).
+    """Cached ``spot_perp`` block for ``symbol`` (60s TTL on SUCCESS and on the
+    definitive ``no_spot_market`` answer).
 
-    ``{"unavailable": "no_spot_market"}`` for perp-only listings (normal state);
-    other failures report their reason. Errors and unavailable states are never
-    cached — every call after a failure re-attempts upstream (so a listing that
-    gains a spot market is picked up on the very next call, not an hour later).
+    ``{"unavailable": "no_spot_market"}`` for perp-only listings (normal state; the
+    spot API answers Binance code -1121). Transient failures report their reason
+    and are never cached, so the next call re-attempts upstream.
     """
     now = time.monotonic()
     cached = _cache.get(symbol)
@@ -147,17 +149,21 @@ async def snapshot(symbol: str, perp_price: float, perp_closes: list[float]) -> 
         spot_price = None
         try:
             spot_price = float(ticker.get("lastPrice"))
-        except (KeyError, TypeError, ValueError):
+        except (KeyError, TypeError, ValueError, AttributeError):
             pass
         block = spot_perp_block(closes, spot_price, perp_price, perp_closes)
     except Exception as e:
-        text = str(e)
-        if "-1121" in text or "Invalid symbol" in text:
-            block = {"unavailable": "no_spot_market"}
+        if _is_invalid_symbol(e):
+            block = {"unavailable": "no_spot_market"}  # definitive, cached below
         else:
-            logger.warning("spot: %s fetch failed — %s", symbol, text[:80])
-            block = {"unavailable": f"spot_unreachable: {text[:80]}"}
-    if "unavailable" in block:
-        return block  # never cached — re-attempted on the next call
+            logger.warning("spot: %s fetch failed — %s", symbol, str(e)[:80])
+            return {"unavailable": f"spot_unreachable: {describe_failure(e)}"}  # never cached
+    if "unavailable" in block and block["unavailable"] != "no_spot_market":
+        return block  # insufficient history etc.: re-attempted on the next call
     _cache[symbol] = (time.monotonic(), block)
+    prune_oldest(_cache, CACHE_MAX)
     return block
+
+
+def _is_invalid_symbol(e: Exception) -> bool:
+    return isinstance(e, BinanceApiError) and e.code == INVALID_SYMBOL_CODE

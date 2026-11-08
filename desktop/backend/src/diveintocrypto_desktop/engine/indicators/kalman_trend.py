@@ -6,7 +6,6 @@ level = uptrend. The filter is inherently causal (each estimate uses only past+c
 observations). Gains are set by the process/measurement variance ratio.
 """
 
-import numpy as np
 import pandas as pd
 
 from diveintocrypto_desktop.engine.indicators.base import BaseIndicator, IndicatorResult, Signal

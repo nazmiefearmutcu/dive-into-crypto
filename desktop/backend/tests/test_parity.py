@@ -47,5 +47,7 @@ def test_indicator_raw_values_parity(name):
         if not isinstance(v, (int, float)):
             continue  # skip string fields like volatility="NORMAL"
         assert k in raw, f"{name}: missing raw value {k}"
-        tol = max(0.1, abs(float(v)) * 0.005)
+        # Relative 0.5% with a small absolute floor for values near zero. The floor must
+        # stay small: a 0.1 floor let a ~0.0476 ratio drift to 0.148 and still pass.
+        tol = max(1e-3, abs(float(v)) * 0.005)
         assert abs(float(raw[k]) - float(v)) <= tol, f"{name}.{k}: {raw[k]} != {v} (tol {tol})"

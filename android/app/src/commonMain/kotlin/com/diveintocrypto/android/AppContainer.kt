@@ -38,6 +38,9 @@ class AppContainer(kv: KeyValueStore) {
 
     private val kvStore: KeyValueStore = kv
 
+    /** Shared preference store, exposed for small UI-owned flags (e.g. the first-run disclaimer). */
+    val keyValueStore: KeyValueStore get() = kvStore
+
     val settingsStore = SettingsStore(kv)
 
     // ── LANGUAGE (TR/EN, LANE-7 i18n) ─────────────────────────────────────────
@@ -107,6 +110,8 @@ class AppContainer(kv: KeyValueStore) {
             settingsStore = settingsStore,
             notifier = com.diveintocrypto.android.domain.alerts.createAlertNotifier(),
             tickerSource = liveTickerEngine.tickers,
+            // Fired-alert text follows the active language (read per evaluation).
+            messages = { com.diveintocrypto.android.ui.i18n.alertMessagesFor(languageFlow.value) },
         )
     }
 
@@ -186,7 +191,7 @@ class AppContainer(kv: KeyValueStore) {
         entryPrice: Double,
         size: Double,
         direction: String,
-    ): com.diveintocrypto.android.domain.portfolio.PortfolioEntry =
+    ): com.diveintocrypto.android.domain.portfolio.PortfolioEntry? =
         portfolioStore.add(symbol, entryPrice, size, direction)
 
     fun removePortfolioEntry(id: String) = portfolioStore.remove(id)

@@ -32,9 +32,13 @@ object BackgroundScanScheduler {
 
     /**
      * (Re-)enqueues the periodic scan with the CURRENT stored constraints.
-     * UPDATE keeps the existing cadence when only constraints changed.
+     * [policy] UPDATE (the default, used by setting changes) applies the new constraints to the
+     * existing work; KEEP (used at app start) leaves an already-scheduled run untouched.
      */
-    fun start(context: Context) {
+    fun start(
+        context: Context,
+        policy: ExistingPeriodicWorkPolicy = ExistingPeriodicWorkPolicy.UPDATE,
+    ) {
         val app = context.applicationContext
         val container = createAppContainer(app)
         val settings = container.settingsStore.getSettings()
@@ -51,7 +55,7 @@ object BackgroundScanScheduler {
             .build()
         WorkManager.getInstance(app).enqueueUniquePeriodicWork(
             UNIQUE_WORK_NAME,
-            ExistingPeriodicWorkPolicy.UPDATE,
+            policy,
             request,
         )
     }
@@ -63,12 +67,19 @@ object BackgroundScanScheduler {
     }
 
     /**
-     * Settings-driven sync — call after the user flips the background-scan
-     * toggle (and on app start). Enabled → start (constraints re-read),
-     * disabled → stop.
+     * Settings-driven sync — enabled → [start] with the current constraints, disabled → [stop].
+     *
+     * Called after the user flips the background-scan toggle or changes the unmetered-network
+     * setting (default [ExistingPeriodicWorkPolicy.UPDATE], so the new constraints apply to the
+     * existing work). It is also called once from `DiveIntoCryptoApplication.onCreate` with
+     * [ExistingPeriodicWorkPolicy.KEEP]: that re-asserts the persisted setting after a process
+     * restart without resetting the running 15-minute cadence.
      */
-    fun syncFromSettings(context: Context) {
+    fun syncFromSettings(
+        context: Context,
+        policy: ExistingPeriodicWorkPolicy = ExistingPeriodicWorkPolicy.UPDATE,
+    ) {
         val settings = createAppContainer(context).settingsStore.getSettings()
-        if (settings.backgroundScansEnabled) start(context) else stop(context)
+        if (settings.backgroundScansEnabled) start(context, policy) else stop(context)
     }
 }

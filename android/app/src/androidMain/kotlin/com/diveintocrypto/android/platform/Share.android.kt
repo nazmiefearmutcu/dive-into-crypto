@@ -5,6 +5,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.platform.LocalContext
 import com.diveintocrypto.android.share.ShareVerdictRow
 import com.diveintocrypto.android.share.shareVerdict
+import com.diveintocrypto.android.ui.i18n.LocalDiveStrings
 import kotlinx.coroutines.launch
 
 /**
@@ -23,6 +24,7 @@ import kotlinx.coroutines.launch
 actual fun rememberShareVerdict(): (ShareVerdictPayload) -> Boolean {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val strings = LocalDiveStrings.current
     return { payload ->
         scope.launch {
             shareVerdict(
@@ -34,6 +36,7 @@ actual fun rememberShareVerdict(): (ShareVerdictPayload) -> Boolean {
                     perTf = payload.perTf,
                     timestampMs = payload.timestampMs,
                 ),
+                strings,
             )
         }
         true

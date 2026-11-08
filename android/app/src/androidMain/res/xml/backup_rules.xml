@@ -1,2 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
-<full-backup-content />
+<!--
+  Android 11 and lower (full-backup). The app's preferences file holds the local
+  portfolio, alert rules and alert/evidence history, which the app documents as
+  local-only and never networked. It is excluded so it is not copied to the
+  user's Google account. dive_permissions.xml holds only the notification
+  prompt flag and is excluded so a restore cannot skip the first prompt.
+-->
+<full-backup-content>
+    <exclude domain="sharedpref" path="dive_settings.xml" />
+    <exclude domain="sharedpref" path="dive_permissions.xml" />
+</full-backup-content>

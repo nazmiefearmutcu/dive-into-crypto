@@ -1,9 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <!-- Local alert notifications (API 33+ runtime grant; requesting is the UI lane's job). -->
+    <!-- Local alert notifications (API 33+ runtime grant; requested from Settings / the alert flow). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
@@ -17,7 +18,9 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.DiveIntoCrypto"
         android:usesCleartextTraffic="false"
-        android:networkSecurityConfig="@xml/network_security_config">
+        android:networkSecurityConfig="@xml/network_security_config"
+        tools:targetApi="33"
+        android:enableOnBackInvokedCallback="true">
 
         <activity
             android:name=".MainActivity"
@@ -29,12 +32,13 @@
             </intent-filter>
         </activity>
 
-        <!-- Glance "Top Kararlar" widget: last background scan's top-3 + data age.
-             exported=false — only the system (APPWIDGET_UPDATE) may drive it. -->
+        <!-- Glance "Top Verdicts" widget: last background scan's top-3 + data age.
+             exported=false — only the system (APPWIDGET_UPDATE) may drive it.
+             The label is localized (values/ = English, values-tr/ = Turkish). -->
         <receiver
             android:name=".widget.TopVerdictsWidgetReceiver"
             android:exported="false"
-            android:label="Top Kararlar">
+            android:label="@string/widget_label">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
             </intent-filter>

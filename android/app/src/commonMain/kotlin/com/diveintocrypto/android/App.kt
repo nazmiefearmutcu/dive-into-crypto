@@ -16,6 +16,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.diveintocrypto.android.ui.i18n.LocalDiveStrings
+import com.diveintocrypto.android.ui.settings.FirstRunDisclaimerGate
 import com.diveintocrypto.android.ui.mobile.MobileShell
 import com.diveintocrypto.android.ui.theme.DiveThemeController
 import com.diveintocrypto.android.ui.theme.DiveIntoCryptoTheme
@@ -31,7 +32,7 @@ import com.diveintocrypto.android.ui.theme.DiveColors
  *   - **scanlines**  — a subtle CRT overlay for TERMINAL presets.
  */
 @Composable
-fun App(container: AppContainer) {
+fun App(container: AppContainer, openRoute: String? = null) {
     DiveIntoCryptoTheme {
         val base = LocalDensity.current
         // TR/EN string catalog — provided app-wide; screens read LocalDiveStrings.
@@ -75,7 +76,10 @@ fun App(container: AppContainer) {
                         } else Modifier
                     )
             ) {
-                MobileShell(container = container)
+                // First-run not-investment-advice notice; the app sits behind it until accepted.
+                FirstRunDisclaimerGate(container = container) {
+                    MobileShell(container = container, openRoute = openRoute)
+                }
             }
         }
     }

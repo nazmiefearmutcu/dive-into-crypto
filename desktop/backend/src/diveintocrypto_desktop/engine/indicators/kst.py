@@ -27,9 +27,7 @@ The decision reads only the last two fully-formed values (iloc[-1], iloc[-2]).
 No future rows, no centred windows, no full-series extrema -> no repainting.
 """
 
-from typing import Any
 
-import numpy as np
 import pandas as pd
 
 from diveintocrypto_desktop.engine.indicators.base import (

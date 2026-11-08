@@ -1,5 +1,7 @@
 package com.diveintocrypto.android.ui.common
 
+import com.diveintocrypto.android.ui.i18n.EnStrings
+import com.diveintocrypto.android.ui.i18n.TrStrings
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -7,7 +9,8 @@ import kotlin.test.assertTrue
 /**
  * PURE UI label tests (lane 5) — P&L formatters, countdown, window labels,
  * Wilson hit-rate rendering, calibration badges and the agreement-tag color
- * mapping. No Compose, no clock, no I/O.
+ * mapping. No Compose, no clock, no I/O. Wording comes from the DiveStrings
+ * catalog, so each word-bearing label is checked in both TR and EN.
  */
 class UiLabelsTest {
 
@@ -17,7 +20,34 @@ class UiLabelsTest {
     fun pnlPercentFormatsSignedWithTwoDecimals() {
         assertEquals("+12.34%", UiLabels.pnlPercentLabel(12.341))
         assertEquals("-3.20%", UiLabels.pnlPercentLabel(-3.2))
-        assertEquals("+0.00%", UiLabels.pnlPercentLabel(0.001))
+        // Rounds to zero at 2 decimals → bare zero, no sign (sign follows the rounded value).
+        assertEquals("0.00%", UiLabels.pnlPercentLabel(0.001))
+        assertEquals("0.00%", UiLabels.pnlPercentLabel(-0.001))
+    }
+
+    @Test
+    fun pnlSignNeverContradictsRoundedLabelOrColor() {
+        // Tiny negative values: label has no minus, colour is MUTED (not RED).
+        assertEquals("0.00%", UiLabels.pnlPercentLabel(-0.001))
+        assertEquals(UiLabels.TOK_MUTED, UiLabels.pnlColorToken(-0.001))
+        assertEquals("$0.00", UiLabels.pnlNominalLabel(-0.004))
+        assertEquals("$0.00", UiLabels.pnlNominalLabel(0.004))
+        assertEquals(UiLabels.TOK_MUTED, UiLabels.pnlColorToken(0.004))
+        // Just above the rounding boundary keeps its sign and colour.
+        assertEquals("-0.01%", UiLabels.pnlPercentLabel(-0.01))
+        assertEquals(UiLabels.TOK_RED, UiLabels.pnlColorToken(-0.01))
+    }
+
+    @Test
+    fun priceLabelScalesDecimalsWithMagnitude() {
+        assertEquals("1,234.57", UiLabels.priceLabel(1234.5678))
+        assertEquals("0.5000", UiLabels.priceLabel(0.5))
+        assertEquals("0.0123", UiLabels.priceLabel(0.0123456))
+        assertEquals("0.000123", UiLabels.priceLabel(0.00012345678))
+        assertEquals("0.00001235", UiLabels.priceLabel(0.0000123456))
+        assertEquals("<0.00000001", UiLabels.priceLabel(1e-12))
+        assertEquals("—", UiLabels.priceLabel(null))
+        assertEquals("—", UiLabels.priceLabel(Double.NaN))
     }
 
     @Test
@@ -38,10 +68,17 @@ class UiLabelsTest {
 
     @Test
     fun agreementTagLabelMapsTr() {
-        assertEquals("UYUMLU", UiLabels.agreementTagLabel("AGREE"))
-        assertEquals("KARŞIT", UiLabels.agreementTagLabel("AGAINST"))
-        assertEquals("BELİRSİZ", UiLabels.agreementTagLabel("UNKNOWN"))
-        assertEquals("BELİRSİZ", UiLabels.agreementTagLabel(null))
+        assertEquals("UYUMLU", UiLabels.agreementTagLabel("AGREE", TrStrings))
+        assertEquals("KARŞIT", UiLabels.agreementTagLabel("AGAINST", TrStrings))
+        assertEquals("BELİRSİZ", UiLabels.agreementTagLabel("UNKNOWN", TrStrings))
+        assertEquals("BELİRSİZ", UiLabels.agreementTagLabel(null, TrStrings))
+    }
+
+    @Test
+    fun agreementTagLabelMapsEn() {
+        assertEquals("AGREE", UiLabels.agreementTagLabel("AGREE", EnStrings))
+        assertEquals("AGAINST", UiLabels.agreementTagLabel("AGAINST", EnStrings))
+        assertEquals("UNCLEAR", UiLabels.agreementTagLabel(null, EnStrings))
     }
 
     @Test
@@ -75,10 +112,17 @@ class UiLabelsTest {
 
     @Test
     fun windowLabelsMapTr() {
-        assertEquals("7G", UiLabels.windowLabel("7d"))
-        assertEquals("30G", UiLabels.windowLabel("30d"))
-        assertEquals("TÜMÜ", UiLabels.windowLabel("all"))
-        assertEquals("X", UiLabels.windowLabel("x"))
+        assertEquals("7G", UiLabels.windowLabel("7d", TrStrings))
+        assertEquals("30G", UiLabels.windowLabel("30d", TrStrings))
+        assertEquals("TÜMÜ", UiLabels.windowLabel("all", TrStrings))
+        assertEquals("X", UiLabels.windowLabel("x", TrStrings))
+    }
+
+    @Test
+    fun windowLabelsMapEn() {
+        assertEquals("7D", UiLabels.windowLabel("7d", EnStrings))
+        assertEquals("30D", UiLabels.windowLabel("30d", EnStrings))
+        assertEquals("ALL", UiLabels.windowLabel("all", EnStrings))
     }
 
     // ── Wilson hit-rate rendering (Evidence v2) ───────────────────────
@@ -101,9 +145,10 @@ class UiLabelsTest {
 
     @Test
     fun smallSampleNoteOnlyForGatedBuckets() {
-        assertEquals("yetersiz örnek (n<20)", UiLabels.smallSampleNote(7, gated = true))
-        assertEquals(null, UiLabels.smallSampleNote(25, gated = false))
-        assertEquals(null, UiLabels.smallSampleNote(3, gated = true)) // label is already "—"
+        assertEquals("yetersiz örnek (n<20)", UiLabels.smallSampleNote(7, gated = true, s = TrStrings))
+        assertEquals("small sample (n<20)", UiLabels.smallSampleNote(7, gated = true, s = EnStrings))
+        assertEquals(null, UiLabels.smallSampleNote(25, gated = false, s = TrStrings))
+        assertEquals(null, UiLabels.smallSampleNote(3, gated = true, s = TrStrings)) // label is already "—"
     }
 
     // ── Calibration badges ────────────────────────────────────────────
@@ -130,11 +175,27 @@ class UiLabelsTest {
 
     @Test
     fun fundingRegimeBandsAroundNeutral() {
-        assertEquals("POZİTİF", UiLabels.fundingRegimeLabel(0.02))
-        assertEquals("NEGATİF", UiLabels.fundingRegimeLabel(-0.02))
+        assertEquals("POZİTİF", UiLabels.fundingRegimeLabel(0.02, TrStrings))
+        assertEquals("NEGATİF", UiLabels.fundingRegimeLabel(-0.02, TrStrings))
         // The ±0.01%/8h band (inclusive) stays neutral.
-        assertEquals("NÖTR", UiLabels.fundingRegimeLabel(0.01))
-        assertEquals("NÖTR", UiLabels.fundingRegimeLabel(-0.01))
-        assertEquals("NÖTR", UiLabels.fundingRegimeLabel(0.005))
+        assertEquals("NÖTR", UiLabels.fundingRegimeLabel(0.01, TrStrings))
+        assertEquals("NÖTR", UiLabels.fundingRegimeLabel(-0.01, TrStrings))
+        assertEquals("NÖTR", UiLabels.fundingRegimeLabel(0.005, TrStrings))
+    }
+
+    @Test
+    fun fundingRegimeBandsEn() {
+        assertEquals("POSITIVE", UiLabels.fundingRegimeLabel(0.02, EnStrings))
+        assertEquals("NEGATIVE", UiLabels.fundingRegimeLabel(-0.02, EnStrings))
+        assertEquals("NEUTRAL", UiLabels.fundingRegimeLabel(0.005, EnStrings))
+    }
+
+    // ── Cone caption ──────────────────────────────────────────────────
+
+    @Test
+    fun coneCaptionFollowsLanguage() {
+        assertEquals(TrStrings.i18nConeCaption, UiLabels.coneCaption(TrStrings))
+        assertEquals(EnStrings.i18nConeCaption, UiLabels.coneCaption(EnStrings))
+        assertTrue(UiLabels.coneCaption(TrStrings) != UiLabels.coneCaption(EnStrings))
     }
 }

@@ -21,31 +21,16 @@ backend_src = REPO_ROOT / "desktop" / "backend" / "src"
 if str(backend_src) not in sys.path:
     sys.path.insert(0, str(backend_src))
 
-import asyncio
 import time
 import socket
 import threading
-import math
 import httpx
 import pytest
-import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
-# Mock crypcodile and aiolimiter to avoid sandbox violation when importing external libraries
-from unittest.mock import MagicMock
-mock_backfill = MagicMock()
-mock_backfill._live_fetch_klines = MagicMock()
-mock_backfill.parse_klines_page = MagicMock()
-mock_backfill._live_fetch_open_interest_hist = MagicMock()
-mock_backfill.parse_open_interest_hist = MagicMock()
-sys.modules['crypcodile'] = MagicMock()
-sys.modules['crypcodile.exchanges'] = MagicMock()
-sys.modules['crypcodile.exchanges.binance'] = MagicMock()
-sys.modules['crypcodile.exchanges.binance.backfill'] = mock_backfill
-
-mock_limiter = MagicMock()
-mock_limiter.AsyncLimiter = MagicMock()
-sys.modules['aiolimiter'] = mock_limiter
+# crocodile and aiolimiter are real, installed dependencies (uv sync), so they are
+# imported for real: the offline guarantee comes from replacing every network-facing
+# data-layer function in `mock_data_layer` below, not from stubbing whole packages
+# (stubbing them hid import errors from the suite).
 
 # Import modules to patch
 import diveintocrypto_desktop.data.binance_klines as kl
@@ -59,11 +44,11 @@ import diveintocrypto_desktop.data.orderbook as ob
 import diveintocrypto_desktop.data.spot as spot_mod
 import diveintocrypto_desktop.scan.symbol_builder as sb
 from diveintocrypto_desktop.api.app import create_app
+import diveintocrypto_desktop.api.app as app_module
 
 # --- In-Memory Networking Mock ---
 from fastapi.testclient import TestClient
 import websockets
-import httpx
 
 global_app = create_app()
 test_client = TestClient(global_app)
@@ -81,20 +66,36 @@ class MockWebSocket:
         await self.close()
 
     async def send(self, data):
-        if self.open:
-            try:
-                self.starlette_ws.send_text(data)
-            except Exception:
-                pass
-
-    async def recv(self):
+        # Send failures are test failures: never swallow them.
         if not self.open:
-            raise Exception("Connection closed")
-        try:
-            return self.starlette_ws.receive_text()
-        except Exception:
+            raise ConnectionError("websocket closed")
+        self.starlette_ws.send_text(data)
+
+    async def recv(self, timeout: float = 10.0):
+        """Next text frame, or TimeoutError after ``timeout`` seconds.
+
+        Starlette's TestClient blocks forever on receive, so the read runs in a daemon
+        thread that is abandoned on timeout (it cannot keep the interpreter alive).
+        """
+        if not self.open:
+            raise ConnectionError("websocket closed")
+        result: dict = {}
+
+        def _read() -> None:
+            try:
+                result["text"] = self.starlette_ws.receive_text()
+            except BaseException as exc:  # disconnect or session teardown
+                result["error"] = exc
+
+        reader = threading.Thread(target=_read, daemon=True)
+        reader.start()
+        reader.join(timeout)
+        if reader.is_alive():
+            raise TimeoutError(f"no websocket frame within {timeout}s")
+        if "error" in result:
             self.open = False
-            raise Exception("Connection closed")
+            raise ConnectionError("websocket closed") from result["error"]
+        return result["text"]
 
     async def close(self):
         if self.open:
@@ -452,6 +453,16 @@ def mock_data_layer():
     bs.delivery_symbols = _orig_delivery_symbols
     ob.snapshot = _orig_orderbook_snapshot
     spot_mod.snapshot = _orig_spot_snapshot
+
+@pytest.fixture(autouse=True)
+def _isolate_scan_cache():
+    """api/app.py keeps ``_scan_cache`` at module scope, shared by every app instance
+    and every test (keyed by size:universe_limit:depth_top). Clear it around each test
+    so one test's warm cache can never decide another test's outcome.
+    """
+    app_module._scan_cache.clear()
+    yield
+    app_module._scan_cache.clear()
 
 def get_free_port():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:

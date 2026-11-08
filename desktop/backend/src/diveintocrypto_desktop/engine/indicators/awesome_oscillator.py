@@ -1,6 +1,5 @@
 """Awesome Oscillator (AO) indicator."""
 
-from typing import Any
 import pandas as pd
 
 from diveintocrypto_desktop.engine.indicators.base import BaseIndicator, IndicatorResult, Signal
@@ -28,7 +27,11 @@ class AwesomeOscillatorIndicator(BaseIndicator):
         
         if pd.isna(current_ao):
             return self._make_result(Signal.NEUTRAL, "AO data insufficient")
-            
+        # With the slow SMA defined only on the last bar, prev_ao is NaN: every comparison
+        # below is then False and the else branch would mislabel the trend. Warm up instead.
+        if pd.isna(prev_ao):
+            return self._make_result(Signal.NEUTRAL, "AO warming up")
+
         raw = {
             "ao": round(float(current_ao), 4),
             "prev_ao": round(float(prev_ao), 4)

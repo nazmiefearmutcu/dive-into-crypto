@@ -67,7 +67,7 @@ class RangeExpansionIndicator(config: IndicatorConfig) : BaseIndicator(config) {
         if (lastDir != 0 && lastDir == trend) {
             return result(if (lastDir > 0) Signal.BUY else Signal.SELL, "range/trend agree", raw)
         }
-        return result(Signal.NEUTRAL, "no expansion setup", raw)
+        return result(Signal.NEUTRAL, "no range expansion", raw)
     }
 
     private fun roundTo(x: Double, digits: Int): Double {

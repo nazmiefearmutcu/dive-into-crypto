@@ -27,6 +27,8 @@ from typing import Any
 
 import aiohttp
 
+from diveintocrypto_desktop.data.http import describe_failure
+
 logger = logging.getLogger("trading_bot.data.deribit")
 
 DERIBIT_BASE = os.environ.get("DIVE_DERIBIT_BASE", "https://www.deribit.com").rstrip("/")
@@ -41,14 +43,24 @@ _cache: dict[str, tuple[float, dict]] = {}
 _session: aiohttp.ClientSession | None = None
 _fail_streak = 0
 _open_until = 0.0
+_last_failure = "deribit_unreachable"  # the honest reason reported while the breaker is open
+
+# Deribit answers HTTP 403 for a refused (e.g. regional) client: a separate, non-transient
+# state from an unreachable venue, so the UI can explain it. HTTP 451 is a region block.
+_FAILURE_CODES = {"forbidden": "deribit_forbidden", "region_blocked": "deribit_region_blocked"}
 
 
 def reset_state() -> None:
     """Drop cache + breaker state (test hook)."""
-    global _cache, _session, _fail_streak, _open_until
+    global _cache, _session, _fail_streak, _open_until, _last_failure
     _cache = {}
     _fail_streak = 0
     _open_until = 0.0
+    _last_failure = "deribit_unreachable"
+
+
+def _failure_code(exc: BaseException) -> str:
+    return _FAILURE_CODES.get(describe_failure(exc), "deribit_unreachable")
 
 
 async def close_session() -> None:
@@ -71,17 +83,19 @@ async def _get(path: str, params: dict[str, Any]) -> Any:
     return body.get("result") if isinstance(body, dict) else body
 
 
-def _note_failure() -> None:
-    global _fail_streak, _open_until
+def _note_failure(code: str = "deribit_unreachable") -> None:
+    global _fail_streak, _open_until, _last_failure
     _fail_streak += 1
+    _last_failure = code
     if _fail_streak >= BREAKER_THRESHOLD:
         _open_until = time.monotonic() + BREAKER_SECONDS
 
 
 def _note_success() -> None:
-    global _fail_streak, _open_until
+    global _fail_streak, _open_until, _last_failure
     _fail_streak = 0
     _open_until = 0.0
+    _last_failure = "deribit_unreachable"
 
 
 def breaker_open() -> bool:
@@ -89,9 +103,15 @@ def breaker_open() -> bool:
 
 
 # ── pure parsers (fixture-testable) ──────────────────────────────────────────
+def dvol_index_name(currency: str) -> str:
+    """Deribit's documented DVOL index name, e.g. ``btcdvol_usdc`` / ``ethdvol_usdc``."""
+    return f"{currency.lower()}dvol_usdc"
+
+
 def parse_index_price(result: Any) -> float | None:
+    """Index level from ``public/get_index_price`` (``{index_price, estimated_delivery_price}``)."""
     try:
-        return float(result["price"])
+        return float(result["index_price"])
     except (KeyError, TypeError, ValueError):
         return None
 
@@ -124,7 +144,11 @@ def parse_book_summary(rows: list, currency: str, now_ms: int | None = None) -> 
     put_oi = call_oi = 0.0
     underlying = None
     by_expiry: dict[str, list] = {}
-    for r in rows or []:
+    if not isinstance(rows, list):  # a non-list payload is an unusable summary, not a crash
+        return {"unavailable": "no_options_data"}
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
         parsed = _parse_instrument(str(r.get("instrument_name", "")))
         if parsed is None:
             continue
@@ -186,8 +210,10 @@ async def options_overview() -> dict:
 async def options_snapshot(currency: str = "BTC") -> dict:
     """``{dvol_level, put_call_oi_ratio, atm_iv_30d, generated_at}`` for BTC/ETH.
 
-    Circuit-breaker short-circuits to ``{"unavailable": "deribit_unreachable"}``
-    while open; anything else failing reports the same honest block. When DVOL
+    Circuit-breaker short-circuits to ``{"unavailable": <last failure>}`` while open
+    (``deribit_unreachable``, ``deribit_forbidden`` for HTTP 403 or
+    ``deribit_region_blocked`` for HTTP 451); anything else failing reports the same
+    honest block. When DVOL
     succeeds but the book summary fails, the real DVOL level is NOT hidden
     behind an unavailable marker: the block degrades to
     ``{dvol_level, put_call_oi_ratio: null, atm_iv_30d: null, partial: true}``.
@@ -201,20 +227,26 @@ async def options_snapshot(currency: str = "BTC") -> dict:
         return cached[1]
     block: dict
     if breaker_open():
-        return {"unavailable": "deribit_unreachable"}  # never cached
+        return {"unavailable": _last_failure}  # never cached
     dvol_res, summary_res = await asyncio.gather(
-        _get("/get_index_price", {"index_name": f"{currency.lower()}_dvol"}),
+        _get("/get_index_price", {"index_name": dvol_index_name(currency)}),
         _get("/get_book_summary_by_currency", {"currency": currency, "kind": "option"}),
         return_exceptions=True,
     )
     dvol_err = isinstance(dvol_res, BaseException)
-    summary_parsed = None if isinstance(summary_res, BaseException) \
-        else parse_book_summary(summary_res or [], currency)
+    summary_parsed = None
+    if not isinstance(summary_res, BaseException):
+        try:
+            summary_parsed = parse_book_summary(summary_res or [], currency)
+        except Exception as e:  # malformed upstream rows degrade to partial, never a 500
+            logger.warning("deribit: %s summary parse failed — %s", currency, str(e)[:80])
+            summary_parsed = None
     summary_ok = summary_parsed is not None and "unavailable" not in summary_parsed
     if dvol_err:
         logger.warning("deribit: %s fetch failed — %s", currency, str(dvol_res)[:80])
-        _note_failure()
-        block = {"unavailable": "deribit_unreachable"}  # NOT cached
+        code = _failure_code(dvol_res)
+        _note_failure(code)
+        block = {"unavailable": code}  # NOT cached
     elif summary_ok:
         block = {"dvol_level": parse_index_price(dvol_res), **summary_parsed,
                  "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}

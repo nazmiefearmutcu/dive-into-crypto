@@ -13,6 +13,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.diveintocrypto.android.ui.i18n.LocalDiveStrings
 import com.diveintocrypto.android.ui.theme.DiveColors
 import com.diveintocrypto.android.ui.theme.DiveFonts
 
@@ -27,14 +28,15 @@ import com.diveintocrypto.android.ui.theme.DiveFonts
  */
 @Composable
 fun StaleChip(isStale: Boolean, dataAgeMs: Long?, modifier: Modifier = Modifier) {
+    val strings = LocalDiveStrings.current
     when {
         dataAgeMs == null -> ChipPill(
-            text = "BAĞLANIYOR",
+            text = strings.panelConnecting,
             color = DiveColors.TextMuted,
             modifier = modifier,
         )
         isStale -> ChipPill(
-            text = "GECİKME · ${staleAgeLabel(dataAgeMs)}",
+            text = strings.panelDelayed(staleAgeLabel(dataAgeMs, strings::panelAgoSec, strings::panelAgoMin)),
             color = DiveColors.Warn,
             modifier = modifier,
         )
@@ -63,8 +65,15 @@ private fun ChipPill(text: String, color: androidx.compose.ui.graphics.Color, mo
     }
 }
 
-/** Pure (unit-testable) human age label: "12 sn önce" / "3 dk önce". null-safe. */
-fun staleAgeLabel(dataAgeMs: Long?): String {
+/**
+ * Pure (unit-testable) human age label: "12 sn önce" / "3 dk önce" by default; the
+ * formatters are injected so the chip follows the active language. null-safe.
+ */
+fun staleAgeLabel(
+    dataAgeMs: Long?,
+    secAgo: (Long) -> String = { "$it sn önce" },
+    minAgo: (Long) -> String = { "$it dk önce" },
+): String {
     val sec = (dataAgeMs ?: 0L).coerceAtLeast(0L) / 1000
-    return if (sec < 60) "$sec sn önce" else "${sec / 60} dk önce"
+    return if (sec < 60) secAgo(sec) else minAgo(sec / 60)
 }

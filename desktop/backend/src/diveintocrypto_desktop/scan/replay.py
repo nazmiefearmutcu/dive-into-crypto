@@ -34,8 +34,9 @@ logger = logging.getLogger("trading_bot.scan.replay")
 # ── counterfactual grid (bounded, published) ─────────────────────────────────
 BUY_SELL_GRID = [0.3, 0.4, 0.5, 0.6]
 STRONG_GRID = [1.0, 1.2, 1.4]
-CONFLICT_GRID = [0.4, 0.5, 0.6]
-SHIPPED_DEFAULTS = {"buy": 0.4, "strong": 1.2, "conflict": 0.6}
+# minority/active <= 0.5 by construction, so a conflict cell above 0.5 is identical to "never".
+CONFLICT_GRID = [0.3, 0.4, 0.5]
+SHIPPED_DEFAULTS = {"buy": 0.4, "strong": 1.2, "conflict": 0.4}
 
 FOLDS = 4
 BOOTSTRAP_N = 1000
@@ -110,6 +111,21 @@ def _hit_rate(wins: list[bool]) -> float | None:
     return round(sum(1 for w in wins if w) / len(wins), 4) if wins else None
 
 
+def _realized(g: dict) -> float:
+    """Unsigned realized return of a graded event.
+
+    Grades store ``forward`` signed by the ARCHIVED verdict direction (a SHORT
+    record's forward is already flipped), so scoring a replayed verdict against it
+    would invert every SHORT. The unsigned buy-and-hold return is the common frame:
+    a replayed verdict's direction is applied to it instead.
+    """
+    if g.get("bnh_forward") is not None:
+        return float(g["bnh_forward"])
+    f = float(g.get("forward") or 0.0)
+    d = int(g.get("dir") or 0)
+    return f * d if d != 0 else f
+
+
 def replay_grid(
     horizon: str = ev.DEFAULT_HORIZON,
     records: list[dict] | None = None,
@@ -152,16 +168,16 @@ def replay_grid(
     ship_verdicts = [rescore(rec.get("signals") or {}, weights,
                              SHIPPED_DEFAULTS["buy"], SHIPPED_DEFAULTS["strong"],
                              SHIPPED_DEFAULTS["conflict"]) for rec, _ in joined]
-    ship_wins = [dir_of(v) != 0 and dir_of(v) * float(g.get("forward") or 0.0) > 0
-                 for v, (_, g) in zip(ship_verdicts, joined)]
+    ship_wins = [dir_of(v) != 0 and dir_of(v) * _realized(g) > 0
+                 for v, (_, g) in zip(ship_verdicts, joined, strict=True)]
     dir_idx_all = [i for i, v in enumerate(ship_verdicts) if v != 0]
     ship_majority = (sum(1 for i in dir_idx_all if ship_wins[i]) / len(dir_idx_all)
                      if dir_idx_all else None)
 
     def cell_stats(buy: float, strong: float, conflict: float) -> dict:
         verdicts = [rescore(rec.get("signals") or {}, weights, buy, strong, conflict) for rec, _ in joined]
-        wins = [dir_of(v) != 0 and dir_of(v) * float(g.get("forward") or 0.0) > 0
-                for v, (_, g) in zip(verdicts, joined)]
+        wins = [dir_of(v) != 0 and dir_of(v) * _realized(g) > 0
+                for v, (_, g) in zip(verdicts, joined, strict=True)]
         dir_idx = [i for i, v in enumerate(verdicts) if v != 0]
         dir_wins = [wins[i] for i in dir_idx]
 
@@ -174,22 +190,32 @@ def replay_grid(
                 seg_wins = [wins[i] for i in seg]
                 fold_rates.append(_hit_rate(seg_wins))
 
-        # seeded bootstrap: resample directional indices, compare vs the shipped cell
+        # seeded bootstrap: resample the cell's directional rows and compare HIT
+        # RATES on the same resample (shipped scored only where it traded). Counting
+        # hits instead would reward whichever cell trades more rows.
         if dir_idx:
             cell_arr = [1.0 if w else 0.0 for w in wins]
             ship_arr = [1.0 if w else 0.0 for w in ship_wins]
+            ship_traded = [v != 0 for v in ship_verdicts]
             rng = random.Random(BOOTSTRAP_SEED)
             win_count = 0
+            valid = 0
             for _ in range(BOOTSTRAP_N):
-                cw = 0.0
-                sw = 0.0
+                c_hits = 0.0
+                s_hits = 0.0
+                s_n = 0
                 for _i in range(len(dir_idx)):
                     j = dir_idx[rng.randrange(len(dir_idx))]
-                    cw += cell_arr[j]
-                    sw += ship_arr[j]
-                if cw > sw:
+                    c_hits += cell_arr[j]
+                    if ship_traded[j]:
+                        s_n += 1
+                        s_hits += ship_arr[j]
+                if s_n == 0:
+                    continue  # shipped made no call on this resample: no comparison
+                valid += 1
+                if c_hits / len(dir_idx) > s_hits / s_n:
                     win_count += 1
-            boot = round(win_count / BOOTSTRAP_N, 4)
+            boot = round(win_count / valid, 4) if valid else None
         else:
             boot = None
 
@@ -270,7 +296,7 @@ def spearman(a: list[float], b: list[float]) -> float | None:
     vb = sum(x * x for x in db)
     if va <= 0 or vb <= 0:
         return None
-    return sum(x * y for x, y in zip(da, db)) / (va * vb) ** 0.5
+    return sum(x * y for x, y in zip(da, db, strict=True)) / (va * vb) ** 0.5
 
 
 def ic_table(
@@ -285,10 +311,17 @@ def ic_table(
 
     Last ``max_events`` graded events (oldest→newest tail); fewer than
     ``min_n`` → the indicator reports ``ic: "n/a"``; constant signal columns →
-    ``"n/a"`` (a constant carries no information, honestly).
+    ``"n/a"`` (a constant carries no information, honestly). Only archives stamped
+    with the CURRENT weights hash are used (``weights_hash_expected`` defaults to it),
+    so IC never mixes weight regimes. The indicator signals are SIGNED (-2..+2,
+    buy positive, sell negative), and the target is the UNSIGNED realized return:
+    a signed signal against an unsigned return is the intended pairing, so the
+    signal must not be made absolute.
     """
     records = ev.iter_archive() if records is None else records
     grades = ev.load_grades() if grades is None else grades
+    if weights_hash_expected is None:
+        weights_hash_expected = _load_shipped_weights()[1]
     by_key = {(r["symbol"], int(r["ts"])): r for r in records}
     joined = []
     for g in grades:
@@ -297,7 +330,7 @@ def ic_table(
         rec = by_key.get((g["symbol"], int(g["ts"])))
         if rec is None or not rec.get("signals"):
             continue
-        if weights_hash_expected is not None and rec.get("weights_hash") != weights_hash_expected:
+        if rec.get("weights_hash") != weights_hash_expected:
             continue
         joined.append((rec, g))
     joined.sort(key=lambda rg: int(rg[1]["ts"]))
@@ -310,7 +343,7 @@ def ic_table(
     out: dict[str, dict] = {}
     for name in sorted(names):
         xs = [float((rec.get("signals") or {}).get(name) or 0.0) for rec, _ in joined]
-        ys = [float(g.get("forward") or 0.0) for _, g in joined]
+        ys = [_realized(g) for _, g in joined]
         if len(xs) < min_n:
             out[name] = {"ic": "n/a", "ic_ir": None, "n": len(xs)}
             continue

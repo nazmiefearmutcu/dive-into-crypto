@@ -171,8 +171,11 @@ class PortfolioStore(
         /** Persistence key (spec: portfolio_v1). */
         const val KEY = "portfolio_v1"
 
-        /** Ring cap on stored entries (bounds the blob). */
+        /** Cap on stored entries (bounds the blob). Adds beyond it are refused, never evicting. */
         const val MAX_ENTRIES = 100
+
+        /** Copy of an undecodable [KEY] blob, kept so a later persist cannot destroy it. */
+        const val KEY_UNREADABLE_BACKUP = "portfolio_v1_unreadable_backup"
 
         const val AGREE = "AGREE"
         const val AGAINST = "AGAINST"
@@ -213,13 +216,17 @@ class PortfolioStore(
         scope.cancel()
     }
 
-    /** Adds one entry (symbol uppercased; entry goes to the head of the list). */
+    /**
+     * Adds one entry (symbol uppercased; entry goes to the head of the list).
+     * Returns null, and changes nothing, when the store already holds [MAX_ENTRIES]
+     * entries: the oldest stored position is never evicted silently.
+     */
     fun add(
         symbol: String,
         entryPrice: Double,
         size: Double,
         direction: String,
-    ): PortfolioEntry {
+    ): PortfolioEntry? {
         val entry = PortfolioEntry(
             id = randomId(),
             symbol = symbol.uppercase(),
@@ -229,7 +236,8 @@ class PortfolioStore(
             createdTs = clock(),
         )
         synchronized(lock) {
-            _entries.value = (listOf(entry) + _entries.value).take(MAX_ENTRIES)
+            if (_entries.value.size >= MAX_ENTRIES) return null
+            _entries.value = listOf(entry) + _entries.value
             persistEntries(_entries.value)
         }
         recomputePnl()
@@ -285,9 +293,21 @@ class PortfolioStore(
         }
     }
 
-    private fun loadEntries(): List<PortfolioEntry> = runCatching {
-        val raw = settingsStore.getRaw(KEY) ?: return emptyList()
-        if (raw.isBlank()) emptyList()
-        else json.decodeFromString(ListSerializer(PortfolioEntry.serializer()), raw)
-    }.getOrDefault(emptyList())
+    private fun loadEntries(): List<PortfolioEntry> {
+        val raw = runCatching { settingsStore.getRaw(KEY) }.getOrNull()
+        if (raw.isNullOrBlank()) return emptyList()
+        return runCatching {
+            json.decodeFromString(ListSerializer(PortfolioEntry.serializer()), raw)
+        }.getOrElse {
+            // Undecodable blob (corruption or an incompatible schema). The next persist
+            // would overwrite KEY and destroy it, so keep a copy first. The backup is rolling:
+            // the newest unreadable blob replaces an older one, so a second corruption is not lost.
+            runCatching {
+                if (settingsStore.getRaw(KEY_UNREADABLE_BACKUP) != raw) {
+                    settingsStore.putRaw(KEY_UNREADABLE_BACKUP, raw)
+                }
+            }
+            emptyList()
+        }
+    }
 }

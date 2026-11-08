@@ -4,10 +4,27 @@ import com.diveintocrypto.android.engine.schema.OHLCV
 import com.diveintocrypto.android.engine.schema.Side
 import com.diveintocrypto.android.engine.schema.Trade
 
-/** In-memory OHLCV + VWAP resampling — port of `crypcodile/resample/{ohlcv,metrics}.py`. */
+/** In-memory OHLCV + VWAP resampling — port of `crocodile/core/resample/{ohlcv,metrics}.py`. */
 object Resample {
 
-    private fun bucketStart(localTs: Long, intervalNs: Long): Long = (localTs / intervalNs) * intervalNs
+    private const val NS_PER_DAY = 86_400L * 1_000_000_000L
+
+    /** 1970-01-05 was a Monday: weekly bars are anchored on Monday 00:00 UTC, as in the Python path. */
+    private const val MONDAY_ANCHOR_NS = 4L * NS_PER_DAY
+
+    private val WEEK_NS = 7L * NS_PER_DAY
+
+    /**
+     * Start of the bar containing [localTs]. Buckets are epoch-aligned, except weekly bars which
+     * are aligned to Monday (the epoch itself was a Thursday). The remainder is taken with a
+     * non-negative modulus so pre-1970 timestamps floor the same way as later ones.
+     */
+    private fun bucketStart(localTs: Long, intervalNs: Long): Long {
+        val anchor = if (intervalNs == WEEK_NS) MONDAY_ANCHOR_NS else 0L
+        val offset = localTs - anchor
+        val remainder = ((offset % intervalNs) + intervalNs) % intervalNs
+        return localTs - remainder
+    }
 
     /** Resample trades into OHLCV bars (interval in ns). Ordered by bar ascending. */
     fun resampleOhlcv(trades: List<Trade>, intervalNs: Long, interval: String = ""): List<OHLCV> {
@@ -16,15 +33,19 @@ object Resample {
         return byBucket.toSortedMap().map { (bar, rows) ->
             val ordered = rows.sortedBy { it.localTs }
             val first = ordered.first(); val last = ordered.last()
+            val volume = ordered.sumOf { it.amount }
             OHLCV(
                 venue = first.venue, symbol = first.symbol, symbolRaw = first.symbolRaw,
                 exchangeTs = bar, localTs = bar,
                 open = first.price, high = ordered.maxOf { it.price },
                 low = ordered.minOf { it.price }, close = last.price,
-                volume = ordered.sumOf { it.amount },
+                volume = volume,
+                // Trades carry their aggressor, so the split IS measured here
+                // (UNKNOWN-side trades fall in neither: buy + sell <= volume).
                 buyVolume = ordered.filter { it.side == Side.BUY }.sumOf { it.amount },
                 sellVolume = ordered.filter { it.side == Side.SELL }.sumOf { it.amount },
                 numTrades = ordered.size,
+                vwap = if (volume != 0.0) ordered.sumOf { it.price * it.amount } / volume else null,
                 interval = interval,
             )
         }

@@ -1,14 +1,15 @@
-# Canonical engine configuration. Every key here is consumed by the code:
+# Canonical engine configuration. Keys are consumed as listed below:
 # - indicator_thresholds / indicator_weights: keyed by real indicator names
 #   (enforced by tests/test_config_integrity.py)
-# - consensus / no_trade / risk: ConsensusEngine + risk module
-# - microstructure: strategy overlay switch
+# - consensus / no_trade / risk: ConsensusEngine + risk module (engine/consensus)
+# - microstructure.enabled: strategy overlay switch (scan/symbol_builder.py)
 # - regime: Regime-Adaptive Weighting thresholds (matches regime.py defaults)
-# The old bot-service blocks (mode/paper/leverage/cooldown/...) were removed —
+# Keys that no code reads were removed; a new key must ship with its consumer.
+# The old bot-service blocks (mode/paper/leverage/cooldown/...) were removed --
 # nothing in the scanner reads them; this service is a scanner, not a bot.
 consensus:
   buy_threshold: 0.4
-  conflict_ratio_threshold: 0.6
+  conflict_ratio_threshold: 0.4
   min_active_signals: 4
   sell_threshold: -0.4
   strong_buy_threshold: 1.2
@@ -178,10 +179,8 @@ indicator_weights:
   pivot_structure: 1.1
 microstructure:
   enabled: true
-  window: 24
 no_trade:
   adx_min: 15.0
-  atr_high_percentile: 95.0
   min_confidence: 30.0
 # Regime-Adaptive Weighting (engine/consensus/regime.py). These mirror the
 # module's fallback defaults exactly — making them explicit so the overlay is
@@ -192,14 +191,5 @@ regime:
   chop_trend: 38.2
   chop_range: 61.8
 risk:
-  break_even_trigger_pct: 0.025
   confidence_threshold: 25
-  daily_loss_limit_enabled: false
-  daily_loss_limit_pct: 0.05
-  max_open_positions: 10
   max_risk_level: MEDIUM
-  risk_per_trade: 0.35
-  stop_loss_pct: 0.04
-  take_profit_pct: 0.1
-  trailing_stop_activation_pct: 0.04
-  trailing_stop_pct: 0.03

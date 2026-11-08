@@ -47,6 +47,17 @@ const sgn = (x) => x>0?1:x<0?-1:0;
 const pct2 = (v) => (v==null || isNaN(v)) ? null : ((v>=0?"+":"")+(v*100).toFixed(2)+"%");
 const hitPct = (v) => (v==null || isNaN(v)) ? "—" : Math.round(v*100)+"%";
 const betaRho = (b,c) => (b==null && c==null) ? null : `β ${num(b,2)} · ρ ${num(c,2)}`;
+/* 24h change. A missing value (the ticker failed) is UNAVAILABLE: it renders "—" with no
+   sign and no green/red class, never "+—%" or a sign inferred from null. */
+const hasChg = (v) => v!=null && Number.isFinite(Number(v));
+const chgCls = (v) => hasChg(v) ? (Number(v)>=0?"up":"dn") : "";
+const chgTxt = (v) => hasChg(v) ? (Number(v)>=0?"+":"")+num(v,2)+"%" : "—";
+const chgArrow = (v) => hasChg(v) ? (Number(v)>=0?"▲":"▼")+" "+num(Math.abs(v),2)+"%" : "—";
+/* Annotation price: 6 significant digits keeps sub-cent prices (a fixed 1/6 grid
+   zeroed them and shifted 0.1–5 by up to 1/12). */
+const annPrice = (p) => Number(Number(p).toPrecision(6));
+/* Bare ticker → Binance USDT-M symbol (the backend only resolves the suffixed form). */
+const toUsdtSym = (t) => { const s=String(t||"").trim().toUpperCase(); return !s ? "" : (s.endsWith("USDT") ? s : s+"USDT"); };
 
 const ICONS = {
   scan:"M11 4a7 7 0 100 14 7 7 0 000-14zM16 16l5 5",
@@ -86,6 +97,11 @@ function Heat({multiTf}){
 
 function Pill({sig}){const c=cls(sig);return <span className={"pill "+c}><span className="g"/>{shortSig(sig)}</span>;}
 
+/* Scan rows carry a direction-only "action" token: LONG / SHORT / NONE. The legacy
+   AL / SAT / BEKLE values are still mapped while the backend transition lands. */
+const ACTION_LABEL_KEY={LONG:"act_long",SHORT:"act_short",NONE:"act_none",AL:"act_long",SAT:"act_short",BEKLE:"act_none"};
+function actionLabel(tok){ const k=ACTION_LABEL_KEY[String(tok||"").toUpperCase()]; return k?L(k):"—"; }
+
 /* ── demo-mode surfacing ─────────────────────────────────────────────────────
    mock.js fabricates prices/verdicts wholesale. It is manual-only, but if it IS
    on, nothing fabricated may reach the screen unlabelled: a fixed banner spans
@@ -107,7 +123,29 @@ function DemoMark({row}){
   return <span className="demo-mark" title="Fabricated demo value — not live market data">DEMO</span>;
 }
 
+/* ── failure wording ─────────────────────────────────────────────────────────
+   A failed backend call is explained in words. The raw "path → status" text never
+   reaches the screen: a numeric HTTP code may only appear in parentheses at the end
+   of the generic sentence. Only HTTP 451 (or an explicit region_blocked code) is a
+   region block; HTTP 403 is a separate, non-transient "forbidden" state. Both offer
+   a retry. */
+const statusFromText=(t)=>{ const m=/→\s*(\d{3})\b/.exec(String(t||"")); return m?Number(m[1]):null; };
+function failureOf(err){
+  if(err==null) return {status:null,code:null,message:""};
+  if(typeof err==="string") return {status:statusFromText(err),code:null,message:err};
+  const message=String(err.message||"");
+  const st=(err.status!=null&&Number.isFinite(Number(err.status)))?Number(err.status):null;
+  return {status:st||statusFromText(message),code:err.code||null,message};
+}
+function failureText(err){
+  const {status,code}=failureOf(err);
+  if(status===451||code==="region_blocked") return {kind:"region",text:L("err_region")};
+  if(status===403||code==="forbidden") return {kind:"forbidden",text:L("err_forbidden")};
+  return {kind:"generic",text:L("err_generic")+(status?` (HTTP ${status})`:"")};
+}
+
 function DataSourceDown({error,onRetry}){
+  const f=failureText(error);
   return <div className="state src-down" role="alert" data-testid="source-unavailable">
     <div className="sd-title">VERİ KAYNAĞI KULLANILAMIYOR · DATA SOURCE UNAVAILABLE</div>
     <div className="sd-body">
@@ -119,8 +157,16 @@ function DataSourceDown({error,onRetry}){
       Binance market data is geo-restricted in some regions (Türkiye included). That is a network
       condition, not an app bug.
     </div>
-    {error && <div className="sd-err">{String(error)}</div>}
+    {error && <div className="sd-err" data-kind={f.kind}>{f.text}</div>}
     <button className="cta" onClick={onRetry}>TEKRAR DENE · RETRY</button>
+  </div>;
+}
+
+/* A view whose own fetch failed says so, with a retry, instead of spinning forever. */
+function FetchFail({err,onRetry}){
+  return <div className="state" role="alert" data-testid="view-fetch-error">
+    <div>{err.text}</div>
+    <button className="cta" onClick={onRetry}>{L("sp_retry")}</button>
   </div>;
 }
 
@@ -145,7 +191,9 @@ async function bootUniverse(api){
     const top = (u||[]).slice(0,8).map(r=>r.s);
     return { ok:true, symbol: top[0] || null, error:null };
   }catch(e){
-    return { ok:false, symbol:null, error: (e && e.message) ? e.message : String(e) };
+    console.debug("[dive] universe boot failed:", e);   // raw detail for debugging only
+    const f=failureOf(e);
+    return { ok:false, symbol:null, error: f.message||String(e), status:f.status, code:f.code };
   }
 }
 
@@ -264,7 +312,7 @@ function ScanProgressPanel({prog,startErr,resultErr,onRetry,onCancel,onRetryResu
         {failed&&<button className="cta" onClick={onRetry}>{L("sp_retry")}</button>}
         {finished&&resultErr&&<button className="cta" onClick={onRetryResult}>{L("sp_reload")}</button>}
         <button className="cta" style={finished&&!resultErr?{background:"transparent",color:"var(--dim)",border:"1px solid var(--line2)"}:undefined}
-          onClick={onCancel}>{finished&&!resultErr?L("sp_back"):L("sp_cancel")}</button>
+          onClick={onCancel}>{finished?(resultErr?L("sp_cancel"):L("sp_back")):(failed?L("sp_cancel"):L("sp_detach"))}</button>
       </div>
       <div className="pcap">İlerleme 2 sn'de bir /api/scan/progress'tan okunur. Evren: {prog&&prog.meta?prog.meta.universe_limit:"—"} sembol ·
         bittiğinde sonuç /api/scan/result'tan yüklenip normal sonuç tablosunda görünür.</div>
@@ -307,7 +355,7 @@ function savePresets(list){
   try{ localStorage.setItem(PRESETS_KEY,JSON.stringify(list)); return true; }catch(e){ return false; }
 }
 
-function Scanner({onPick,onCompare,job,prog,jobErr,onAsyncStart,onAsyncCancel,onRetryResult}){
+function Scanner({onPick,onCompare,job,prog,jobErr,onAsyncStart,onAsyncCancel,onRetryResult,held,fetchFail,onRetry}){
   const scan = window.SGS_SCAN || {survivors:[]};
   const [uLimit,setULimit]=useState(250);
   const [sort,setSort]=useState(null);   // null = server rank order
@@ -319,6 +367,9 @@ function Scanner({onPick,onCompare,job,prog,jobErr,onAsyncStart,onAsyncCancel,on
   const [presetName,setPresetName]=useState("");
   const [renameIdx,setRenameIdx]=useState(null);
   const busy=!!(job&&!job.done);
+  // SGS_SCAN.scanned is the fully-assembled SYMBOL count (data.js maps it from scannedCount),
+  // the same unit as universeCount — not the 12-per-symbol timeframe-verdict total
+  const scannedSyms=scan.scanned||0;
   const hasCluster=(scan.survivors||[]).some(w=>{const d=w.d||w;return d&&d.cluster_id!=null;});
   useEffect(()=>{if(hasCluster)ensureStructure();},[hasCluster]);  // cluster labels, fetched once + cached
   useEffect(()=>{ensureStability();},[]);                          // pips column (cached global; failures → "—")
@@ -330,7 +381,9 @@ function Scanner({onPick,onCompare,job,prog,jobErr,onAsyncStart,onAsyncCancel,on
     if(!name){ setPresetMsg("ön ayar adı boş — kaydedilmedi"); return; }
     const v=window.sgsValidatePreset?window.sgsValidatePreset({name,universeLimit:uLimit,sort}):{name,universeLimit:uLimit,sort};
     if(!v){ setPresetMsg("geçersiz ön ayar — kaydedilmedi"); return; }
-    const next= renameIdx!=null ? presets.map((p,i)=>i===renameIdx?v:p)
+    /* rename: the renamed entry takes the new name and any OTHER entry already
+       carrying it is dropped — same de-duplication as a fresh save */
+    const next= renameIdx!=null ? presets.flatMap((p,i)=> i===renameIdx ? [v] : (p.name===v.name ? [] : [p]))
                                 : [...presets.filter(p=>p.name!==v.name),v];
     if(savePresets(next)){ setPresets(next); setPresetMsg(null); setPresetName(""); setRenameIdx(null); }
     else setPresetMsg("ön ayar kaydedilemedi (depolama yazılamadı)");
@@ -353,7 +406,9 @@ function Scanner({onPick,onCompare,job,prog,jobErr,onAsyncStart,onAsyncCancel,on
       list.forEach(p=>{ const v=window.sgsValidatePreset?window.sgsValidatePreset(p):null;
         if(v){ ok++; const i=next.findIndex(x=>x.name===v.name); i>=0?next[i]=v:next.push(v); }
         else bad++; });
-      if(savePresets(next)) setPresets(next);
+      /* the import only counts once storage actually accepted the list */
+      if(!savePresets(next)){ setPresetMsg("ön ayar kaydedilemedi (depolama yazılamadı)"); return; }
+      setPresets(next);
       setPresetMsg(bad?`${ok} ön ayar alındı · ${bad} geçersiz JSON reddedildi`:`${ok} ön ayar alındı`);
     }catch(e){ setPresetMsg(`geçersiz JSON — içe aktarma reddedildi (${(e&&e.message)||e})`); }
   };
@@ -378,9 +433,7 @@ function Scanner({onPick,onCompare,job,prog,jobErr,onAsyncStart,onAsyncCancel,on
       <button className={"cta compare"+(sel.size>=2?"":" off")} disabled={sel.size<2}
         onClick={()=>{onCompare&&onCompare([...sel]); setSel(new Set());}}
         title="Seçili sembolleri yan yana senkron karşılaştır">{L("scan_compare")} ({sel.size})</button>
-      <span className="sbcap">{busy
-        ?"arka plan taraması çalışıyor — senkron otomatik tarama duraklatıldı"
-        :"varsayılan: senkron otomatik tarama · 15 sembol / 24 evren"}</span>
+      <span className="sbcap">{held?(busy?L("scan_cap_busy"):L("scan_cap_held")):L("scan_cap_idle")}</span>
     </div>
     <div className="scanbar presets">
       <span className="label">{L("scan_presets")}</span>
@@ -401,13 +454,18 @@ function Scanner({onPick,onCompare,job,prog,jobErr,onAsyncStart,onAsyncCancel,on
           onChange={e=>{presetImport(e.target.files&&e.target.files[0]); e.target.value="";}}/></label>
       {presetMsg&&<span className="sbmsg" role="status">{presetMsg}</span>}
     </div>
-    {job&&<ScanProgressPanel prog={prog} startErr={jobErr} resultErr={job&&job.resultErr}
+    {job&&!job.dismissed&&<ScanProgressPanel prog={prog} startErr={jobErr} resultErr={job&&job.resultErr}
       onRetry={()=>onAsyncStart&&onAsyncStart(uLimit)} onCancel={onAsyncCancel} onRetryResult={onRetryResult}/>}
     <div className="panel"><div className="ph"><span className="tick">▸</span>{L("scan_results")}
-      <span className="rt">{rows.length} {L("scan_survivors")} · {scan.scanned||0}/{scan.universeCount||0} {L("scan_scanned")}</span></div>
+      <span className="rt">{rows.length} {L("scan_survivors")} · {scannedSyms}/{scan.universeCount||0} {L("scan_scanned")}</span></div>
       <div className="pb" style={{padding:0}}>
         {rows.length===0
-          ? <div className="state" style={{height:220}}><div className="spin"/><div>{L("scan_running")}</div></div>
+          ? (scan.universeCount>0
+              /* a finished scan with no survivors is an outcome, not a running scan */
+              ? <div className="state" style={{height:120}}><div>{L("scan_none")}</div></div>
+              : fetchFail
+                ? <FetchFail err={fetchFail} onRetry={onRetry}/>
+                : <div className="state" style={{height:220}}><div className="spin"/><div>{L("scan_running")}</div></div>)
           : <table className="rank"><thead><tr>
               <th scope="col" aria-label="KIYAS seçimi"></th>
               <th scope="col">#</th>
@@ -430,9 +488,9 @@ function Scanner({onPick,onCompare,job,prog,jobErr,onAsyncStart,onAsyncCancel,on
                     onChange={()=>toggleSel(d.s)}/></td>
                 <td className="rk">{String(i+1).padStart(2,"0")}</td>
                 <td><div className="sym">{d.s.replace("USDT","")}<small>{d.name||d.s}</small></div></td>
-                <td><Pill sig={d.finalSignal||"NEUTRAL"}/><DemoMark row={d}/></td>
+                <td title={d.action?actionLabel(d.action):undefined}><Pill sig={d.finalSignal||"NEUTRAL"}/><DemoMark row={d}/></td>
                 <td className="r"><span className="px">${fmt(d.price)}</span><DemoMark row={d}/>
-                  <span className={"chg "+(d.ch>=0?"up":"dn")} style={{display:"block",fontSize:10}}>{d.ch>=0?"+":""}{num(d.ch,2)}%</span></td>
+                  <span className={"chg "+chgCls(d.ch)} style={{display:"block",fontSize:10}}>{chgTxt(d.ch)}</span></td>
                 <td><Vu conf={d.confidence} dir={dir}/></td>
                 <td className="r score">{kfmt(score)}</td>
                 <td className="r beta">{betaRho(d.beta,d.corr_btc)||"—"}
@@ -631,8 +689,10 @@ function IndicatorTable({indicators=[]}){
   ])}</tbody></table>;}
 
 /* ── PANEL depth cards (v0.3) — every block degrades to an honest "—" ──────── */
-const FUNDING_REGIME_TR={long_crowding:"LONG KALABALIK",extreme_long_crowding:"AŞIRI LONG KALABALIK",
-  short_crowding:"SHORT KALABALIK",extreme_short_crowding:"AŞIRI SHORT KALABALIK",balanced:"DENGELİ",unavailable:"—"};
+/* regime keys → catalog; an unknown regime is shown raw */
+const FUNDING_REGIME_KEY={long_crowding:"fr_long",extreme_long_crowding:"fr_ext_long",
+  short_crowding:"fr_short",extreme_short_crowding:"fr_ext_short",balanced:"fr_balanced"};
+const fundingRegimeLabel=(reg)=>FUNDING_REGIME_KEY[reg]?L(FUNDING_REGIME_KEY[reg]):(reg==="unavailable"?"—":reg);
 
 function FundingCard({fl}){
   const base=fl&&fl.seconds_to_funding!=null?fl.seconds_to_funding:null;
@@ -643,41 +703,41 @@ function FundingCard({fl}){
     const id=setInterval(()=>setT(Math.max(0,base-(Date.now()-stamp.current)/1000)),1000);
     return()=>clearInterval(id); },[base]);
   if(!fl||fl.unavailable!=null)
-    return <div className="panel mute"><div className="ph"><span className="tick">▸</span>FONLAMA</div>
-      <div className="pb"><Stat k="FONLAMA" v="—"
-        sub={fl?`kullanılamıyor · ${fl.unavailable}`:"sembol verisinde funding_lens yok"}/></div></div>;
+    return <div className="panel mute"><div className="ph"><span className="tick">▸</span>{L("card_funding")}</div>
+      <div className="pb"><Stat k={L("card_funding")} v="—"
+        sub={fl?L("unav"):L("no_block","funding_lens")}/></div></div>;
   const cd=t==null?"—":`${String(Math.floor(t/3600)).padStart(2,"0")}:${String(Math.floor((t%3600)/60)).padStart(2,"0")}:${String(Math.floor(t%60)).padStart(2,"0")}`;
   const reg=fl.regime||"unavailable";
-  return <div className="panel"><div className="ph"><span className="tick">▸</span>FONLAMA
-    <span className="rt">VEKİL DEĞİL · PREMIUM INDEX</span></div>
+  return <div className="panel"><div className="ph"><span className="tick">▸</span>{L("card_funding")}
+    <span className="rt">{L("fund_rt")}</span></div>
     <div className="pb" style={{padding:0}}>
       <div className="cdrow"><span className="cd">{cd}</span>
-        <span className="cdcap">SONRAKİ FONLAMA</span></div>
-      <Stat k="TAHMİNİ (taşıyor)" v={fPct(fl.predicted_funding)}/>
-      <Stat k="SON SETTLE" v={fPct(fl.last_settled)}/>
-      <Stat k="YILLIK (APR)" v={fl.apr!=null?(fl.apr>=0?"+":"")+(fl.apr*100).toFixed(1)+"%":null}/>
+        <span className="cdcap">{L("fund_next")}</span></div>
+      <Stat k={L("fund_pred")} v={fPct(fl.predicted_funding)}/>
+      <Stat k={L("fund_last")} v={fPct(fl.last_settled)}/>
+      <Stat k={L("fund_apr")} v={fl.apr!=null?(fl.apr>=0?"+":"")+(fl.apr*100).toFixed(1)+"%":null}/>
       <div className="tagrow" style={{paddingTop:9}}>
-        <span className={"tag "+(reg.includes("extreme")?"hot":reg==="unavailable"?"":reg!=="balanced"&&reg!=="DENGELİ"?"good":"")}>
-          REJİM: {FUNDING_REGIME_TR[reg]||reg}</span></div>
+        <span className={"tag "+(reg.includes("extreme")?"hot":reg==="unavailable"?"":reg!=="balanced"?"good":"")}>
+          {L("fund_regime")} {fundingRegimeLabel(reg)}</span></div>
     </div></div>;
 }
 
 function BasisCard({basis}){
   if(!basis||basis.unavailable!=null)
-    return <div className="panel mute"><div className="ph"><span className="tick">▸</span>BASİS</div>
-      <div className="pb"><Stat k="BASİS" v="—"
-        sub={basis?`kullanılamıyor · ${basis.unavailable}`:"sembol verisinde basis yok"}/></div></div>;
+    return <div className="panel mute"><div className="ph"><span className="tick">▸</span>{L("card_basis")}</div>
+      <div className="pb"><Stat k={L("card_basis")} v="—"
+        sub={basis?L("unav"):L("no_block","basis")}/></div></div>;
   const cur=basis.curve||{};
   const vals=[["PERP",cur.perp],["CQ",cur.cq],["NQ",cur.nq]]
     .map(([k,v])=>[k,v==null?null:Math.max(-2000,Math.min(2000,v))]);
-  return <div className="panel"><div className="ph"><span className="tick">▸</span>BASİS
-    <span className="rt">PERP · VADE EĞRİSİ</span></div>
+  return <div className="panel"><div className="ph"><span className="tick">▸</span>{L("card_basis")}
+    <span className="rt">{L("basis_rt")}</span></div>
     <div className="pb" style={{padding:0}}>
       <div className="cdrow"><span className="cd" style={{fontSize:20}}>{basis.basis_bps!=null?(basis.basis_bps>0?"+":"")+num(basis.basis_bps,1):"—"}</span>
-        <span className="cdcap">BPS (PERP−ENDEKS)</span></div>
-      <Stat k="Z-SKOR" v={basis.zscore!=null?num(basis.zscore,2):null}/>
-      <Stat k="YILLIK FONLAMA" v={basis.ann_funding!=null?(basis.ann_funding>0?"+":"")+num(basis.ann_funding,1)+" bps":null}/>
-      <div className="bcurve" role="img" aria-label="basis eğrisi: perp, çeyrek, next çeyrek">
+        <span className="cdcap">{L("basis_bps")}</span></div>
+      <Stat k={L("basis_z")} v={basis.zscore!=null?num(basis.zscore,2):null}/>
+      <Stat k={L("basis_ann")} v={basis.ann_funding!=null?(basis.ann_funding>0?"+":"")+num(basis.ann_funding,1)+" bps":null}/>
+      <div className="bcurve" role="img" aria-label={L("basis_aria")}>
         {vals.map(([k,v])=><div key={k} className="bcol">
           <span className="bv">{v==null?"—":(v>0?"+":"")+Math.round(v)}</span>
           <span className="bbar"><i style={v==null?{}:{height:Math.min(50,Math.abs(v)/2000*50)+"%",
@@ -686,42 +746,42 @@ function BasisCard({basis}){
       </div>
       <div className="tagrow" style={{paddingTop:9}}>
         <span className="tag">{String(basis.label||"—").toUpperCase()}</span>
-        {basis.partial&&<span className="tag hot" title="vade bacakları eksik — perp-only çiftlerde normal">PARSİNEL</span>}
+        {basis.partial&&<span className="tag hot" title={L("basis_partial_t")}>{L("basis_partial")}</span>}
       </div>
     </div></div>;
 }
 
 function CascadeCard({cascade}){
   if(!cascade)
-    return <div className="panel mute"><div className="ph"><span className="tick">▸</span>KASKAD</div>
-      <div className="pb"><Stat k="KASKAD" v="—" sub="OI serisi yok — blok üretilmedi"/></div></div>;
+    return <div className="panel mute"><div className="ph"><span className="tick">▸</span>{L("card_cascade")}</div>
+      <div className="pb"><Stat k={L("card_cascade")} v="—" sub={L("casc_none")}/></div></div>;
   if(cascade.unavailable!=null)
-    return <div className="panel mute"><div className="ph"><span className="tick">▸</span>KASKAD</div>
-      <div className="pb"><Stat k="KASKAD" v="—" sub={cascade.score!=null
-        ?`eşik altı · skor ${cascade.score}`:`kullanılamıyor · ${cascade.unavailable}`}/></div></div>;
+    return <div className="panel mute"><div className="ph"><span className="tick">▸</span>{L("card_cascade")}</div>
+      <div className="pb"><Stat k={L("card_cascade")} v="—" sub={cascade.score!=null
+        ?L("casc_below",cascade.score):L("unav")}/></div></div>;
   const sc=Math.max(0,Math.min(100,cascade.score||0));
-  return <div className="panel"><div className="ph"><span className="tick">▸</span>KASKAD
-    <span className="rt">{cascade.since_min!=null?Math.round(cascade.since_min)+" DK ÖNCE":"—"}</span></div>
+  return <div className="panel"><div className="ph"><span className="tick">▸</span>{L("card_cascade")}
+    <span className="rt">{cascade.since_min!=null?L("min_ago",Math.round(cascade.since_min)):"—"}</span></div>
     <div className="pb" style={{padding:0}}>
-      <Gauge name="KASKAD SKORU" score={sc-(100-sc)} cap={`${cascade.direction==="long_flush"?"LONG FLUSH":cascade.direction==="short_flush"?"SHORT FLUSH":String(cascade.direction||"—").toUpperCase()} · 0–100`}/>
+      <Gauge name={L("casc_gauge")} score={sc-(100-sc)} cap={`${cascade.direction==="long_flush"?"LONG FLUSH":cascade.direction==="short_flush"?"SHORT FLUSH":String(cascade.direction||"—").toUpperCase()} · 0–100`}/>
       <div className="tagrow" style={{paddingTop:9}}>
-        {cascade.proxy&&<span className="tag hot" title=" bileşenler serilerden türetildi — gerçek likidasyon akışı değil">VEKİL/PROXY</span>}
+        {cascade.proxy&&<span className="tag hot" title={L("casc_proxy_t")}>{L("casc_proxy")}</span>}
       </div>
     </div></div>;
 }
 
 function BookCard({book}){
   if(!book||book.unavailable!=null)
-    return <div className="panel mute"><div className="ph"><span className="tick">▸</span>EMİR DEFTERİ</div>
-      <div className="pb"><Stat k="DEFTER" v="—"
-        sub={book?`kullanılamıyor · ${book.unavailable}`:"sembol verisinde book yok"}/></div></div>;
+    return <div className="panel mute"><div className="ph"><span className="tick">▸</span>{L("book_title")}</div>
+      <div className="pb"><Stat k={L("book_k")} v="—"
+        sub={book?L("unav"):L("no_block","book")}/></div></div>;
   const bands=book.imbalance||{};
   const age=book.ts?Math.max(0,Math.round((Date.now()-Number(book.ts))/1000)):null;
-  return <div className="panel"><div className="ph"><span className="tick">▸</span>EMİR DEFTERİ
-    <span className="rt">{age!=null?age+" SN ÖNCE":"TS —"}</span></div>
+  return <div className="panel"><div className="ph"><span className="tick">▸</span>{L("book_title")}
+    <span className="rt">{age!=null?L("sec_ago",age):"TS —"}</span></div>
     <div className="pb" style={{padding:0}}>
       <div className="cdrow"><span className="cd" style={{fontSize:18}}>{window.sgsFmtBig?window.sgsFmtBig(book.notional_1pct||0):"—"}</span>
-        <span className="cdcap">±%1 DEFTER DEĞERİ</span></div>
+        <span className="cdcap">{L("book_notional")}</span></div>
       {Object.entries(bands).map(([band,v])=>
         <div key={band} className="imbrow">
           <span className="ib">±{band}</span>
@@ -730,68 +790,68 @@ function BookCard({book}){
             <i className={v<0?"r":"r off"} style={{width:v<0?Math.abs(v)*50+"%":"0%"}}/></>}</span>
           <span className="iv">{v==null?"—":(v>0?"+":"")+ (v*100).toFixed(1)+"%"}</span>
         </div>)}
-      <div className="gcap">imbalance = (alıcı−satıcı)/(toplam) · bant: mid'den ±uzaklık · MID {fmt(book.mid)}</div>
+      <div className="gcap">{L("book_cap",fmt(book.mid))}</div>
     </div></div>;
 }
 
 function LsTermCard({ls}){
   if(!ls||!ls.periods||!Object.keys(ls.periods).length)
-    return <div className="panel mute"><div className="ph"><span className="tick">▸</span>L/S TERM YAPISI</div>
-      <div className="pb"><Stat k="TERM" v="—" sub={ls?"periyot verisi yok":"sembol verisinde ls_term yok"}/></div></div>;
+    return <div className="panel mute"><div className="ph"><span className="tick">▸</span>{L("ls_title")}</div>
+      <div className="pb"><Stat k="TERM" v="—" sub={ls?L("ls_no_periods"):L("no_block","ls_term")}/></div></div>;
   const periods=Object.keys(ls.periods);
   const fams=["glob","acc","pos","taker"];
-  const FAM_TR={glob:"PERAKENDE HESAP",acc:"ÜST HESAP",pos:"ÜST POZİSYON",taker:"TAKER AL/SAT"};
+  const FAM_KEY={glob:"ls_glob",acc:"ls_acc",pos:"ls_pos",taker:"ls_taker"};
   const cell=(p,v)=> v==null ? <td key={p} className="lc dim">—</td>
     : <td key={p} className={"lc "+(v>1.05?"u":v<0.95?"d":"n")}>{num(v,2)}</td>;
-  return <div className="panel"><div className="ph"><span className="tick">▸</span>L/S TERM YAPISI
-    <span className="rt">{ls.cells_unavailable!=null?ls.cells_unavailable+" HÜCRE YOK":"4 AİLE × "+periods.length+" PERİYOT"}</span></div>
+  return <div className="panel"><div className="ph"><span className="tick">▸</span>{L("ls_title")}
+    <span className="rt">{ls.cells_unavailable!=null?L("ls_cells",ls.cells_unavailable):L("ls_grid",periods.length)}</span></div>
     <div className="pb" style={{padding:0}}>
       <table className="lstable"><thead><tr><th/> {periods.map(p=><th key={p}>{p.toUpperCase()}</th>)}</tr></thead>
-      <tbody>{fams.map(f=><tr key={f}><td className="lf">{FAM_TR[f]||f}</td>
+      <tbody>{fams.map(f=><tr key={f}><td className="lf">{L(FAM_KEY[f])}</td>
         {periods.map(p=>cell(p,(ls.periods[p]||{})[f]))}</tr>)}</tbody></table>
-      <div className="gcap">≥1 long baskın · ≤1 short baskın · kalabalık ucu tersine okunur (fade)</div>
+      <div className="gcap">{L("ls_cap")}</div>
     </div></div>;
 }
 
 function SpotPerpCard({sp}){
-  const LEAD_TR={spot:"SPOT ÖNDE",perp:"PERP ÖNDE",mixed:"KARIŞIK"};
+  const LEAD_KEY={spot:"spp_lead_spot",perp:"spp_lead_perp",mixed:"spp_lead_mixed"};
   if(!sp||sp.unavailable!=null)
     return <div className="panel mute"><div className="ph"><span className="tick">▸</span>SPOT–PERP</div>
       <div className="pb"><Stat k="SPOT–PERP" v="—" sub={sp
-        ?(sp.unavailable==="no_spot_market"?"perp-only çift · spot piyasası yok":`kullanılamıyor · ${sp.unavailable}`)
-        :"sembol verisinde spot_perp yok"}/></div></div>;
+        ?(sp.unavailable==="no_spot_market"?L("spp_perp_only"):L("unav"))
+        :L("no_block","spot_perp")}/></div></div>;
   return <div className="panel"><div className="ph"><span className="tick">▸</span>SPOT–PERP
-    <span className="rt">48S PENCERE</span></div>
+    <span className="rt">{L("spp_window")}</span></div>
     <div className="pb" style={{padding:0}}>
-      <Stat k="PREMİUM" v={sp.premium_pct!=null?(sp.premium_pct>0?"+":"")+num(sp.premium_pct,3)+"%":null}/>
-      <Stat k="GETİRİ FARKI 48S" v={sp.ret_spread_48h!=null?(sp.ret_spread_48h>0?"+":"")+(sp.ret_spread_48h*100).toFixed(2)+"%":null}/>
+      <Stat k={L("spp_premium")} v={sp.premium_pct!=null?(sp.premium_pct>0?"+":"")+num(sp.premium_pct,3)+"%":null}/>
+      <Stat k={L("spp_ret")} v={sp.ret_spread_48h!=null?(sp.ret_spread_48h>0?"+":"")+(sp.ret_spread_48h*100).toFixed(2)+"%":null}/>
       <div className="tagrow" style={{paddingTop:9}}>
-        <span className={"tag "+(sp.lead==="spot"?"good":sp.lead==="perp"?"hot":"")}>{LEAD_TR[sp.lead]||"LİDER —"}</span>
+        <span className={"tag "+(sp.lead==="spot"?"good":sp.lead==="perp"?"hot":"")}>{LEAD_KEY[sp.lead]?L(LEAD_KEY[sp.lead]):L("spp_lead_none")}</span>
       </div>
-      <div className="gcap">lag-1 çapraz-korelasyon asimetrisinden; ≥10 çift getiri gerekir</div>
+      <div className="gcap">{L("spp_cap")}</div>
     </div></div>;
 }
 
 function PlanningStrip({planning}){
   if(!planning||planning.unavailable!=null)
-    return <div className="panel mute"><div className="ph"><span className="tick">▸</span>PLANLAMA</div>
-      <div className="pb"><div className="stat"><span className="k">PLAN</span>
-        <span className="v">— {planning?`kullanılamıyor · ${planning.unavailable}`:"sembol verisinde planning yok"}</span></div></div></div>;
+    return <div className="panel mute"><div className="ph"><span className="tick">▸</span>{L("plan_title")}</div>
+      <div className="pb"><div className="stat"><span className="k">{L("plan_k")}</span>
+        <span className="v">— {planning?L("unav"):L("no_block","planning")}</span></div></div></div>;
   const env=planning.envelope||{};
   const cell=(k,v,cls="")=><div key={k} className={"plcell "+cls}>
     <span className="k">{k}</span><span className="v">{v==null?"—":"±"+num(v,2)+"%"}</span></div>;
-  return <div className="panel"><div className="ph"><span className="tick">▸</span>PLANLAMA · ATR GEOMETRİSİ
-    <span className="rt">SL 1.5·ATR</span></div>
+  return <div className="panel"><div className="ph"><span className="tick">▸</span>{L("plan_title_geo")}
+    <span className="rt">{L("plan_rt")}</span></div>
     <div className="plstrip">
-      {cell("SL MESAFESİ",planning.sl_distance_pct)}
-      {cell("TP 1R",planning.tp_1r_pct)}
-      {cell("TP 2R",planning.tp_2r_pct)}
-      {cell("TP 3R",planning.tp_3r_pct)}
-      {cell("ZARF 1S",env.h1)}
-      {cell("ZARF 4S",env.h4)}
-      {cell("ZARF 24S",env.h24)}
+      {cell(L("plan_sl"),planning.sl_distance_pct)}
+      {cell(L("plan_tp1r"),planning.tp_1r_pct)}
+      {cell(L("plan_tp2r"),planning.tp_2r_pct)}
+      {cell(L("plan_tp3r"),planning.tp_3r_pct)}
+      {cell(L("plan_env1"),env.h1)}
+      {cell(L("plan_env4"),env.h4)}
+      {cell(L("plan_env24"),env.h24)}
     </div>
-    <div className="gcap">{planning.note||"sadece bilgi — emir semantiği yok · girilen değerler ATR%'den türetilir"}</div>
+    <div className="gcap">{L("plan_note")}</div>
   </div>;
 }
 
@@ -801,29 +861,36 @@ function PlanningStrip({planning}){
 function OpposingEvidence({d,evHorizon}){
   useEffect(()=>{ ensureEvidence(evHorizon); },[evHorizon]);
   const dir=sgn(d.finalSignal?.includes("BUY")?1:d.finalSignal?.includes("SELL")?-1:0);
-  const rows=(d.indicators||[]).map(x=>{
+  /* rank key = |weighted_score| (score×weight from the engine); |score| when only the raw
+     score ships; 0 when neither is present (those rows keep table order). */
+  const absOr0=(v)=>(v!=null&&Number.isFinite(Number(v)))?Math.abs(Number(v)):0;
+  const cands=(d.indicators||[]).map(x=>{
     const xd=x.signal?.includes("BUY")?1:x.signal?.includes("SELL")?-1:0;
-    const wsc=x.weighted_score!=null?Math.abs(x.weighted_score):Math.abs((x.score||0)*(x.weight||0));
-    return {name:x.name,signal:x.signal,value:x.value,wsc,xd};
-  }).filter(x=>dir!==0&&x.xd!==0&&x.xd!==dir)
-    .sort((a,b)=>b.wsc-a.wsc).slice(0,3);
+    const hasScore=x.weighted_score!=null||x.score!=null;
+    const wsc=x.weighted_score!=null?absOr0(x.weighted_score):absOr0(x.score);
+    return {name:x.name,signal:x.signal,value:x.value,wsc,xd,hasScore};
+  }).filter(x=>dir!==0&&x.xd!==0&&x.xd!==dir);
+  const rows=cands.slice().sort((a,b)=>b.wsc-a.wsc).slice(0,3);
   const byInd=(window.SGS_EVIDENCE&&window.SGS_EVIDENCE.by_indicator)||null;
+  // the ranking header is shown only when the candidate rows carry score fields; without
+  // them there is no |score| to rank by and the header must not claim a ranking
+  const scored=cands.some(x=>x.hasScore);
   if(!rows.length)
-    return <div className="oppose"><div className="op-h">KARŞIT KANIT</div>
-      <div className="stat"><span className="k">KARŞIT İNDİKATÖR</span><span className="v">— yönü tersine bakan indikatör yok</span></div></div>;
+    return <div className="oppose"><div className="op-h">{L("op_title")}</div>
+      <div className="stat"><span className="k">{L("op_none_k")}</span><span className="v">{L("op_none_v")}</span></div></div>;
   return <div className="oppose">
-    <div className="op-h">KARŞIT KANIT <span className="rt">|SKOR×AĞIRLIK| · İLK 3</span></div>
+    <div className="op-h">{L("op_title")} <span className="rt">{scored?L("op_scored"):L("op_unscored")}</span></div>
     {rows.map(x=>{
       const hist=byInd&&byInd[x.name]&&byInd[x.name].disagree;
       return <div key={x.name} className="op-row">
         <span className="op-name">{String(x.name).replace(/_/g," ")}</span>
         <span className={"mini "+mcls(x.signal)}>{shortSig(x.signal)}</span>
         <span className="op-val">{x.value!=null?num(x.value,x.value>100?1:3):"—"}</span>
-        <span className="op-hist" title="bu indikatörün geçmişte karşit durduğu kararların isabeti">
-          {hist?<HitLabel stats={hist}/>:<span className="hitlabel none" title="arşiv ilişkisi yok">ilişki —</span>}</span>
+        <span className="op-hist" title={L("op_hist_t")}>
+          {hist?<HitLabel stats={hist}/>:<span className="hitlabel none" title={L("op_no_arch")}>{L("op_rel_dash")}</span>}</span>
       </div>;})}
-    <div className="gcap">karşıt isabet = indikatörün karara ters döndüğü geçmiş kararların isabet oranı ·
-      ilişki, nedensellik değildir · report-only</div>
+    <div className="gcap">{L("op_caption")}
+    </div>
   </div>;
 }
 
@@ -853,54 +920,67 @@ function TfMatrix({multiTf,activeTf,onPickTf}){
   </div>;
 }
 
-/* Replay scrub — ghost verdict card at T + chart truncation via ?end_ms=.
-   Archive gaps are honest: no records → "bu aralıkta kayıt yok", and the scrub
-   never interpolates between records. */
-function ReplayScrub({sym,tf}){
+/* Replay scrub — ghost verdict card at T. Archive gaps are honest: no records →
+   an explicit empty state, and the scrub never interpolates between records.
+   /api/evidence/decisions returns the NEWEST `limit` records of a symbol in ascending
+   order, so a single request anchors the scrub on the newest record. A shorter result
+   just gives a shorter scrub. The main chart is not touched (no per-step rebuild). */
+const REPLAY_MAX=500;
+function ReplayScrub({sym}){
   const [rows,setRows]=useState(null);
   const [err,setErr]=useState(null);
   const [idx,setIdx]=useState(0);
-  const [histObj,setHistObj]=useState(null);
-  const seq=useRef(0);
   useEffect(()=>{ let live=true;
-    window.DIVE.decisions({symbol:sym,limit:500})
-      .then(r=>{ if(!live)return; const arr=Array.isArray(r)?r:[]; setRows(arr); setIdx(Math.max(0,arr.length-1)); })
-      .catch(e=>{ if(live){ setErr((e&&e.message)||String(e)); setRows([]); } });
+    setRows(null); setErr(null);   // a symbol change must not show the previous symbol's records
+    (async()=>{
+      try{
+        const page=await window.DIVE.decisions({symbol:sym,limit:REPLAY_MAX});
+        if(!live)return;
+        const arr=(Array.isArray(page)?page:[]).filter(r=>r&&Number.isFinite(Number(r.ts)))
+          .sort((a,b)=>Number(a.ts)-Number(b.ts)).slice(-REPLAY_MAX);   // ascending: last = newest
+        setRows(arr); setIdx(Math.max(0,arr.length-1));                // anchor on the newest record
+      }catch(e){ if(live){ setErr((e&&e.message)||String(e)); setRows([]); } }
+    })();
     return()=>{live=false;};
   },[sym]);
   const rec=rows&&rows[idx];
-  useEffect(()=>{ if(!rec)return;   // truncate the chart to T (real historical payload)
-    const s=++seq.current;
-    window.DIVE.symbol(sym,{endMs:rec.ts,commit:false})
-      .then(o=>{ if(s===seq.current) setHistObj(o&&o.candles&&o.candles.length?o:null); })
-      .catch(()=>{ if(s===seq.current) setHistObj(null); });
-  },[rec&&rec.ts,sym]);
-  if(err) return <div className="panel mute"><div className="pb"><div className="perr">ARŞİV OKUNAMADI · {err}</div></div></div>;
+  if(err) return <div className="panel mute"><div className="pb"><div className="perr">{L("rs_err",err)}</div></div></div>;
   if(!rows) return <div className="panel mute"><div className="pb"><div className="state" style={{height:80}}><div className="spin"/></div></div></div>;
   if(!rows.length)
-    return <div className="panel mute"><div className="ph"><span className="tick">▸</span>ZAMAN MAKİNESİ</div>
-      <div className="pb"><div className="stat"><span className="k">ARŞİV</span>
-        <span className="v">bu aralıkta kayıt yok · {String(sym||"").replace("USDT","")} için arşivlenmiş karar bulunamadı</span></div></div></div>;
+    return <div className="panel mute"><div className="ph"><span className="tick">▸</span>{L("rs_chip")}</div>
+      <div className="pb"><div className="stat"><span className="k">{L("rs_k")}</span>
+        <span className="v">{L("rs_empty",String(sym||"").replace("USDT",""))}</span></div></div></div>;
   return <div className="panel replay">
-    <div className="ph"><span className="tick">▸</span>ZAMAN MAKİNESİ · "O ZAMAN NE SÖYLEDİ"
-      <span className="rt">{rows.length} KAYIT · GEÇMİŞ GÖRÜNÜM</span></div>
+    <div className="ph"><span className="tick">▸</span>{L("rs_title")}
+      <span className="rt">{L("rs_rt",rows.length,REPLAY_MAX)}</span></div>
     <div className="pb">
       <input type="range" className="scrub" min={0} max={rows.length-1} value={idx}
-        aria-label="arşiv kaydı seç" onChange={e=>setIdx(Number(e.target.value))}/>
+        aria-label={L("rs_aria")} onChange={e=>setIdx(Number(e.target.value))}/>
       {rec?<div className="ghost">
         <div className="g-when">{new Date(Number(rec.ts)).toLocaleString()} <span className="g-gap">T</span></div>
         <div className="g-verdict"><Pill sig={rec.verdict||"NEUTRAL"}/>
-          <span className="g-conf">güven %{rec.confidence!=null?rec.confidence:"—"}</span>
+          <span className="g-conf">{L("rs_conf",rec.confidence!=null?rec.confidence:"—")}</span>
           <span className="g-price">${fmt(rec.price)}</span></div>
-        <div className="g-meta">puan {rec.net_score!=null?num(rec.net_score,1):"—"} · TF uyum {rec.tf_agreement!=null?Math.round(rec.tf_agreement*100)+"%":"—"} ·
-          {rec.divergence_tier?" diverjans "+rec.divergence_tier:""} · grafik {tf} kesildi (end_ms)</div>
+        <div className="g-meta">{[L("rs_score",rec.net_score!=null?num(rec.net_score,1):"—"),
+          L("rs_tfagree",rec.tf_agreement!=null?Math.round(rec.tf_agreement*100)+"%":"—"),
+          rec.divergence_tier?L("rs_div",rec.divergence_tier):null,
+          L("rs_static")].filter(Boolean).join(" · ")}</div>
       </div>:null}
-      <div className="gcap">karar arşivi kayıtlar arası yorum yapmaz — boşluklar boş kalır · ghost kart rapor amaçlıdır</div>
+      <div className="gcap">{L("rs_gap_cap")}</div>
     </div></div>;
 }
 
 /* ── PANEL ───────────────────────────────────────────────────────────────── */
-function Panel({sym,evHorizon}){
+/* A symbol with no payload yet: its own fetch failure (with retry), the demo fixture's
+   limit (a symbol outside the fixture never loads in demo mode), or a spinner while the
+   request is still in flight. */
+function SymbolLoading({sym,fetchFail,onRetry}){
+  if(fetchFail) return <FetchFail err={fetchFail} onRetry={onRetry}/>;
+  if(isDemo()) return <div className="state"><div>{L("demo_no_symbol")}</div></div>;
+  return <div className="state"><div className="spin"/><div>{String(sym||"").replace("USDT","")} verisi çekiliyor…</div></div>;
+}
+
+function Panel({sym,evHorizon,fetchFail,onRetry}){
   const d = (window.SGS_DATA_MAP||{})[sym];
   const [chartTf,setChartTf]=useState("1h");
   const [tfObj,setTfObj]=useState(null);       // chart-only payload (commit:false)
@@ -908,28 +988,34 @@ function Panel({sym,evHorizon}){
   const [annOn,setAnnOn]=useState(false);
   const [anns,setAnns]=useState(()=>(sym&&window.sgsAnnotationsLoad)?window.sgsAnnotationsLoad(sym):[]);
   const [rpOn,setRpOn]=useState(false);        // replay scrub toggle
+  const [annMsg,setAnnMsg]=useState(null);     // storage failure on annotation save
   const reqSeq=useRef(0);
   useEffect(()=>{  // reset chart-local state when the symbol changes
+    ++reqSeq.current;   // an in-flight TF response belongs to the previous symbol: drop it
     setChartTf("1h"); setTfObj(null); setTfErr(null);
     setAnns((sym&&window.sgsAnnotationsLoad)?window.sgsAnnotationsLoad(sym):[]);
-    setAnnOn(false); setRpOn(false);
+    setAnnOn(false); setRpOn(false); setAnnMsg(null);
   },[sym]);
   const pickTf=async(tf)=>{
     setChartTf(tf); setTfErr(null);
-    if(tf==="1h"){ setTfObj(null); return; }
+    if(tf==="1h"){ ++reqSeq.current; setTfObj(null); return; }   // also drops any in-flight non-1h response
     const s=++reqSeq.current;
     try{ const obj=await window.DIVE.symbol(sym,{tf,commit:false});
       if(s===reqSeq.current) setTfObj(obj&&obj.candles&&obj.candles.length?obj:null); }
-    catch(e){ if(s===reqSeq.current){ setTfObj(null); setTfErr((e&&e.message)||String(e)); } }
+    catch(e){ if(s===reqSeq.current){ setTfObj(null); setTfErr(failureText(e).text); } }
   };
-  const addAnn=(price)=>{ const next=[...anns,{price:Math.round(price*6)/6,note:"",ts:Date.now()}];
-    setAnns(next); window.sgsAnnotationsSave(sym,next); };
-  const updAnn=(i,note)=>{ const next=anns.map((a,j)=>j===i?{...a,note}:a);
-    setAnns(next); window.sgsAnnotationsSave(sym,next); };
-  const delAnn=(i)=>{ const next=anns.filter((_,j)=>j!==i);
-    setAnns(next); window.sgsAnnotationsSave(sym,next); };
-  if(!d || !d.multiTf || !d.multiTf.length)
-    return <div className="state"><div className="spin"/><div>{String(sym||"").replace("USDT","")} verisi çekiliyor…</div></div>;
+  /* annotations: local state follows the store only when the store accepted the write */
+  const commitAnns=(next)=>{
+    /* every caller (chart click, note edit, delete) lands here: the store's boolean decides
+       whether the local list follows, and a refusal is shown as a localized message */
+    const saved=!!(window.sgsAnnotationsSave&&window.sgsAnnotationsSave(sym,next));
+    if(!saved){ setAnnMsg(L("ann_save_fail")); return; }
+    setAnns(next); setAnnMsg(null);
+  };
+  const addAnn=(price)=>{ commitAnns([...anns,{price:annPrice(price),note:"",ts:Date.now()}]); };
+  const updAnn=(i,note)=>{ commitAnns(anns.map((a,j)=>j===i?{...a,note}:a)); };
+  const delAnn=(i)=>{ commitAnns(anns.filter((_,j)=>j!==i)); };
+  if(!d || !d.multiTf || !d.multiTf.length) return <SymbolLoading sym={sym} fetchFail={fetchFail} onRetry={onRetry}/>;
   const c=cls(d.finalSignal); const dir=sgn(d.finalSignal?.includes("BUY")?1:d.finalSignal?.includes("SELL")?-1:0);
   const score=d.netNss||d.quantBias||0;
   const wr=d.whaleRegime; const ms=d.microstructure||{signals:[]}; const rg=d.regime||{}; const mtf=d.mtfConfluence||{};
@@ -947,9 +1033,10 @@ function Panel({sym,evHorizon}){
       <button className={"chip"+(annOn?" on":"")} aria-pressed={annOn}
         onClick={()=>setAnnOn(o=>!o)} title="grafikte tıkla → yatay S/R çizgisi ekler">ÇİZİM</button>
       <button className={"chip"+(rpOn?" on":"")} aria-pressed={rpOn}
-        onClick={()=>setRpOn(o=>!o)} title="karar arşivi üzerinde zaman yolculuğu">ZAMAN MAKİNESİ</button>
+        onClick={()=>setRpOn(o=>!o)} title={L("rs_chip_t")}>{L("rs_chip")}</button>
       <span className="sbcap">{annOn?"grafikte tıkla → çizgi eklenir (cihazında saklanır · motorla ilgisiz)":""}</span>
     </div>
+    {annMsg&&<div className="perr" role="status">{annMsg}</div>}
     {annOn&&<div className="panel mute"><div className="ph"><span className="tick">▸</span>ÇİZİMLER
         <span className="rt">{anns.length} ÇİZGİ · CİHAZDA SAKLANIR</span></div>
       <div className="pb" style={{padding:0}}>
@@ -964,13 +1051,13 @@ function Panel({sym,evHorizon}){
         </div>)}
         <div className="gcap">kullanıcı çizimi · motorla ilgisiz · yalnız bu cihazın deposunda (localStorage)</div>
       </div></div>}
-    {rpOn&&<ReplayScrub sym={sym} tf={chartTfLabel}/>}
+    {rpOn&&<ReplayScrub sym={sym}/>}
     <PlanningStrip planning={d.planning}/>
     <div className="grid2">
       <div>
         <div className="panel"><div className="ph"><span className="tick">▸</span>{L("panel_consensus")}</div>
           <div className="price-row"><span className="p">${fmt(d.price)}</span><DemoMark row={d}/>
-            <span className={"c "+(d.ch>=0?"up":"dn")}>{d.ch>=0?"▲":"▼"} {num(Math.abs(d.ch||0),2)}%</span>
+            <span className={"c "+chgCls(d.ch)}>{chgArrow(d.ch)}</span>
             <span style={{marginLeft:"auto"}}><Heat multiTf={d.multiTf}/></span></div>
           <div className="verdict">
             <div className="big"><div className="vlabel">NİHAİ SİNYAL <DemoMark row={d}/></div>
@@ -1054,7 +1141,7 @@ function LeadersRail({onSelect}){
       : rows.map(r=><button key={r.s} className="leader" onClick={()=>onSelect(r.s)} title={r.s}>
         <span className="lsym">{String(r.s||"").replace("USDT","")}</span>
         <span className="lpx">${fmt(r.price)}</span>
-        <span className={"chg "+(r.ch>=0?"up":"dn")}>{r.ch>=0?"+":""}{num(r.ch,2)}%</span>
+        <span className={"chg "+chgCls(r.ch)}>{chgTxt(r.ch)}</span>
       </button>)}
   </div>;
   return <div className="panel mute"><div className="ph"><span className="tick">▸</span>24S LİDERLERİ
@@ -1063,12 +1150,13 @@ function LeadersRail({onSelect}){
 }
 
 /* CVD card — rolling cumulative volume delta from the symbol payload's `cvd`
-   field (public aggTrades). {unavailable} renders an honest "—", never a zero. */
+   field (public aggTrades). An unavailable window shows the localized "unavailable" label and
+   never a zero; the backend's raw reason string is not rendered. */
 function CvdCard({cvd}){
   if(!cvd||cvd.unavailable!=null)
-    return <div className="panel mute"><div className="ph"><span className="tick">▸</span>CVD · KÜMÜLATİF HACİM DELTASI</div>
+    return <div className="panel mute"><div className="ph"><span className="tick">▸</span>{L("cvd_title")}</div>
       <div className="pb"><Stat k="CVD" v="—"
-        sub={cvd?`kullanılamıyor · ${cvd.unavailable}`:"sembol verisinde cvd alanı yok"}/></div></div>;
+        sub={cvd?L("unav"):L("no_cvd")}/></div></div>;
   const total=(cvd.buy_vol||0)+(cvd.sell_vol||0);
   const bp=total>0?(cvd.buy_vol||0)/total*100:50;
   const series=cvd.delta_series||[];
@@ -1076,36 +1164,34 @@ function CvdCard({cvd}){
   const maxD=diffs.reduce((m,v)=>Math.max(m,Math.abs(v)),0)||1;
   const big=window.sgsFmtBig||String;
   const col=cvd.cvd>0?"var(--up)":cvd.cvd<0?"var(--down)":"var(--neutral)";
-  return <div className="panel cvd"><div className="ph"><span className="tick">▸</span>CVD · KÜMÜLATİF HACİM DELTASI
-    <span className="rt">{cvd.window_trades!=null?cvd.window_trades+" İŞLEM · ":""}
-      {cvd.window_seconds!=null?Math.round(cvd.window_seconds/60)+" DK PENCERE":"PENCERE —"}</span></div>
+  const cvdWin=cvd.window_seconds!=null?L("cvd_window",Math.round(cvd.window_seconds/60)):L("cvd_window_none");
+  return <div className="panel cvd"><div className="ph"><span className="tick">▸</span>{L("cvd_title")}
+    <span className="rt">{cvd.window_trades!=null?L("cvd_trades",cvd.window_trades)+" · ":""}{cvdWin}</span></div>
     <div className="pb" style={{padding:0}}>
       <div className="cvd-big" style={{color:col}}>
         {cvd.cvd>0?"+":cvd.cvd<0?"-":""}{big(Math.abs(cvd.cvd||0))}<small> CVD</small></div>
       <div className="split">
-        <div className="splitbar" role="img" aria-label={`alım %${bp.toFixed(1)} · satım %${(100-bp).toFixed(1)}`}>
+        <div className="splitbar" role="img" aria-label={L("cvd_aria",bp.toFixed(1),(100-bp).toFixed(1))}>
           <span className="b" style={{width:bp+"%"}}/><span className="s" style={{width:(100-bp)+"%"}}/></div>
         <div className="splitlab">
-          <span style={{color:"var(--up)"}}>AL {big(cvd.buy_vol||0)} · %{bp.toFixed(1)}</span>
-          <span style={{color:"var(--down)"}}>%{(100-bp).toFixed(1)} SAT {big(cvd.sell_vol||0)}</span></div>
+          <span style={{color:"var(--up)"}}>{L("cvd_buy",big(cvd.buy_vol||0),bp.toFixed(1))}</span>
+          <span style={{color:"var(--down)"}}>{L("cvd_sell",(100-bp).toFixed(1),big(cvd.sell_vol||0))}</span></div>
       </div>
       {diffs.length
-        ? <div className="cvdh" title="örnek başına delta (delta_series farkı); ≤60 örnek">
+        ? <div className="cvdh" title={L("cvd_bars_t")}>
             {diffs.map((v,i)=><i key={i} className={v>=0?"u":"d"} style={{height:Math.max(8,Math.abs(v)/maxD*100)+"%"}}/>)}</div>
-        : <div className="stat"><span className="k">DELTA SERİSİ</span><span className="v">—</span></div>}
-      <div className="gcap">CVD = Σ(alıcı-başlatan − satıcı-başlatan hacim) · son ≤1000 public aggTrade ·
-        {" "}{cvd.window_seconds!=null?Math.round(cvd.window_seconds/60):"—"} dk pencere · {series.length} örnek</div>
+        : <div className="stat"><span className="k">{L("cvd_series")}</span><span className="v">—</span></div>}
+      <div className="gcap">{L("cvd_cap",cvd.window_seconds!=null?Math.round(cvd.window_seconds/60):"—",series.length)}</div>
     </div></div>;
 }
 
 /* ── OI · L/S — positioning & futures microstructure for the selected symbol ──
    Data: GET /api/symbol → microstructure{score,label,active,signals[{name,score,
    reason,weight}]}, series{oi,funding,taker,glob,pos,acc}, divergence, cvd. */
-function Flow({sym,onSelect}){
+function Flow({sym,onSelect,fetchFail,onRetry}){
   useEffect(()=>{ensureStructure();},[]);   // BTC beta/corr lookup (fetched once, cached)
   const d=(window.SGS_DATA_MAP||{})[sym];
-  if(!d || !d.multiTf || !d.multiTf.length)
-    return <div className="state"><div className="spin"/><div>{String(sym||"").replace("USDT","")} verisi çekiliyor…</div></div>;
+  if(!d || !d.multiTf || !d.multiTf.length) return <SymbolLoading sym={sym} fetchFail={fetchFail} onRetry={onRetry}/>;
   const ms=d.microstructure||{signals:[]}; const ser=d.series||{};
   const sm=structureFind(d.s);
   const hasBr=sm&&(sm.beta!=null||sm.corr_btc!=null);
@@ -1144,7 +1230,7 @@ function Flow({sym,onSelect}){
             <Stat k="PERAKENDE HESAP L/S" v={sLast(gl)==null?null:num(sLast(gl),3)} sub={sMean(gl)!=null?("ort "+num(sMean(gl),3)):null}/>
             <Stat k="ÜST-TRADER POZİSYON L/S" v={sLast(ps)==null?null:num(sLast(ps),3)} sub={sMean(ps)!=null?("ort "+num(sMean(ps),3)):null}/>
             <Stat k="ÜST-TRADER HESAP L/S" v={sLast(ac)==null?null:num(sLast(ac),3)}/>
-            <div className="gcap">≥1 long baskın · ≤1 short baskın · kalabalık ucu tersine okunur (fade)</div>
+            <div className="gcap">{L("ls_cap")}</div>
           </div></div>
         <div className="panel mute"><div className="ph"><span className="tick">▸</span>BALİNA UYUMSUZLUĞU</div>
           <div className="pb" style={{padding:0}}>
@@ -1163,7 +1249,9 @@ function Signal({onPick}){
   return <>
     <div className="vhead"><span className="kicker">SİNYAL KARTLARI</span><h1>Kısa Liste</h1>
       <div className="meta">TARAMADAN SAĞ KALANLAR<br/>KART → PANELE GİDER</div></div>
-    {rows.length===0
+    {rows.length===0&&scan.universeCount>0
+      ? <div className="state"><div>{L("scan_none")}</div></div>
+      : rows.length===0
       ? <div className="state src-down">
           <div className="sd-title">HENÜZ TARAMA YOK · NO SCAN YET</div>
           <div className="sd-body">Bu görünüm /api/scan sonucunu gösterir. TARA görünümü ilk taramayı
@@ -1180,7 +1268,7 @@ function Signal({onPick}){
               <span className="sym">{d.s.replace("USDT","")}</span>
               <Pill sig={d.finalSignal||"NEUTRAL"}/><DemoMark row={d}/></span>
             <span className="sc-price"><span className="px">${fmt(d.price)}</span><DemoMark row={d}/>
-              <span className={"chg "+(d.ch>=0?"up":"dn")}>{d.ch>=0?"▲":"▼"} {num(Math.abs(d.ch||0),2)}%</span>
+              <span className={"chg "+chgCls(d.ch)}>{chgArrow(d.ch)}</span>
               <span className="sc-score" title="netNss">{kfmt(w.score||d.netNss||d.quantBias||0)}</span></span>
             <span className="sc-conf"><Vu conf={d.confidence} dir={dir}/> %{d.confidence||0}</span>
             <Heat multiTf={d.multiTf}/>
@@ -1208,14 +1296,14 @@ function EvCard({label,cls,dir,stats}){
   const gate=window.sgsGateState?window.sgsGateState(s):"ok";
   return <div className="evcard">
     <div className="evh"><span className={"pill "+cls}><span className="g"/>{label}</span>
-      <span className="evn">{s.n||0} karar</span></div>
+      <span className="evn">{L("ev_karar",s.n||0)}</span></div>
     <Vu conf={Math.round((s.hit_rate||0)*100)} dir={dir}/>
-    <div className="evrow"><span>İSABET</span><b><HitLabel stats={s}/></b></div>
-    <div className="evrow"><span>ORT. İLERİ GETİRİ</span>
+    <div className="evrow"><span>{L("ev_hit")}</span><b><HitLabel stats={s}/></b></div>
+    <div className="evrow"><span>{L("ev_avg_fwd")}</span>
       <b className={sgn(s.avg_forward)>0?"up":sgn(s.avg_forward)<0?"dn":""}>{pct2(s.avg_forward)||"—"}</b></div>
-    <div className="evrow"><span>MEDYAN İLERİ</span>
+    <div className="evrow"><span>{L("ev_med_fwd")}</span>
       <b className={sgn(s.median_forward)>0?"up":sgn(s.median_forward)<0?"dn":""}>{pct2(s.median_forward)||"—"}</b></div>
-    {gate==="gated"&&<div className="gcap" style={{padding:0}}>örneklem küçük — oran gürültülü, kapıya takıldı</div>}
+    {gate==="gated"&&<div className="gcap" style={{padding:0}}>{L("ev_gated")}</div>}
   </div>;
 }
 
@@ -1312,13 +1400,13 @@ function BaselinesPanel({baselines}){
 
 /* KAYITLI İDDİALAR — pre-registered claims with equal-weight status pills. */
 const CLAIM_STATUS_CLS={PENDING:"",CONFIRMED:"good",REFUTED:"bad"};
-const CLAIM_STATUS_TR={PENDING:"BEKLİYOR",CONFIRMED:"DOĞRULANDI",REFUTED:"YALANLANDI"};
+const CLAIM_STATUS_KEY={PENDING:"claim_pending",CONFIRMED:"claim_confirmed",REFUTED:"claim_refuted"};
 function ClaimsPanel({horizon}){
   const claims=((window.SGS_CLAIMS&&window.SGS_CLAIMS.claims)||[]);
   useEffect(()=>{ if(window.DIVE&&typeof window.DIVE.claims==="function") window.DIVE.claims().catch(()=>{}); },[]);
   const [txt,setTxt]=useState("");
   const [metric,setMetric]=useState("hit_rate");
-  const [verdict,setVerdict]=useState("TÜMÜ");
+  const [verdict,setVerdict]=useState("ALL");   // "ALL" = no verdict filter (internal sentinel)
   const [ch,setCh]=useState(horizon);
   const [minN,setMinN]=useState("20");
   const [op,setOp]=useState(">=");
@@ -1332,18 +1420,21 @@ function ClaimsPanel({horizon}){
   const submit=async(e)=>{
     e.preventDefault(); if(busy)return;
     const claimText=txt.trim();
-    if(!claimText){ setMsg({ok:false,text:"iddia metni boş — kayıt yapılmadı"}); return; }
+    if(!claimText){ setMsg({ok:false,text:L("claim_empty")}); return; }
     const mn=parseInt(minN,10);
     const tv=parseFloat(thr);
-    if(!isFinite(mn)||mn<1){ setMsg({ok:false,text:"min_n pozitif tamsayı olmalı — kayıt yapılmadı"}); return; }
-    if(!isFinite(tv)){ setMsg({ok:false,text:"eşik sayı olmalı — kayıt yapılmadı"}); return; }
+    if(!isFinite(mn)||mn<1){ setMsg({ok:false,text:L("claim_minn")}); return; }
+    if(!isFinite(tv)){ setMsg({ok:false,text:L("claim_thr_num")}); return; }
+    /* hit_rate is a FRACTION (fmtVal shows it ×100): 55 would register hit_rate ≥ 55, which can
+       never be met, and the registry is immutable */
+    if(metric==="hit_rate"&&(tv<0||tv>1)){ setMsg({ok:false,text:L("claim_thr_range")}); return; }
     const now=new Date();
     const stamp=now.toISOString().replace(/[-:]/g,"").replace(/\..+$/,"");
     const claim={
       claim_id:`ui-${slug(claimText)}-${stamp}`,
       claim:claimText,
       metric,
-      filter: verdict==="TÜMÜ"?{}:{verdict},
+      filter: verdict==="ALL"?{}:{verdict},
       horizon:ch,
       min_n:mn,
       threshold:{op,value:tv},
@@ -1353,52 +1444,52 @@ function ClaimsPanel({horizon}){
     setBusy(true); setMsg(null);
     try{
       await window.DIVE.registerClaim(claim);
-      setMsg({ok:true,text:`İDDİA KAYDEDİLDİ · ${claim.claim_id.slice(0,40)} — değerlendirme yalnız tescil sonrası notalarla`});
+      setMsg({ok:true,text:L("claim_saved",claim.claim_id.slice(0,40))});
       setTxt("");
-    }catch(err){ setMsg({ok:false,text:"KAYIT REDDEDİLDİ · "+((err&&err.message)||err)}); }
+    }catch(err){ setMsg({ok:false,text:L("claim_rejected",(err&&err.message)||err)}); }
     finally{ setBusy(false); }
   };
   const fmtVal=(c)=> c.value==null?"—":(c.metric==="hit_rate"?Math.round(c.value*100)+"%":pct2(c.value)||"—");
-  return <div className="panel"><div className="ph"><span className="tick">▸</span>KAYITLI İDDİALAR
-    <span className="rt">{claims.length} KAYIT · TESCİL SONRASI NOTALARLA DEĞERLENDİRİLİR</span></div>
+  return <div className="panel"><div className="ph"><span className="tick">▸</span>{L("claim_title")}
+    <span className="rt">{L("claim_rt",claims.length)}</span></div>
     <div className="pb" style={{padding:0}}>
-      {claims.length===0&&<div className="stat"><span className="k">İDDİA</span>
-        <span className="v">— kayıtlı iddia yok · aşağıdaki formla ön-kayıt bırak</span></div>}
+      {claims.length===0&&<div className="stat"><span className="k">{L("claim_k")}</span>
+        <span className="v">{L("claim_none")}</span></div>}
       <table className="rank evtab claims">{claims.length>0&&<thead><tr>
-        <th scope="col">DURUM</th><th scope="col">İDDİA</th><th scope="col" className="r">N</th>
-        <th scope="col" className="r">DEĞER</th><th scope="col" className="r">EŞİK</th><th scope="col" className="r">TESCİL</th>
+        <th scope="col">{L("claim_h_status")}</th><th scope="col">{L("claim_h_claim")}</th><th scope="col" className="r">N</th>
+        <th scope="col" className="r">{L("claim_h_value")}</th><th scope="col" className="r">{L("claim_h_thr")}</th><th scope="col" className="r">{L("claim_h_reg")}</th>
       </tr></thead>}
       <tbody>{claims.map(cl=><tr key={cl.claim_id}>
-        <td><span className={"tag "+(CLAIM_STATUS_CLS[cl.status]||"")}>{CLAIM_STATUS_TR[cl.status]||cl.status}</span></td>
+        <td><span className={"tag "+(CLAIM_STATUS_CLS[cl.status]||"")}>{CLAIM_STATUS_KEY[cl.status]?L(CLAIM_STATUS_KEY[cl.status]):cl.status}</span></td>
         <td className="l ctxt" title={cl.claim_id}>{cl.claim}
-          <small>{cl.metric} · {cl.horizon} · {(cl.filter&&Object.entries(cl.filter).map(([k,v])=>`${k}:${v}`).join(", "))||"filtre yok"}</small></td>
+          <small>{cl.metric} · {cl.horizon} · {(cl.filter&&Object.entries(cl.filter).map(([k,v])=>`${k}:${v}`).join(", "))||L("claim_nofilter")}</small></td>
         <td className="r">{cl.n}</td>
         <td className="r">{fmtVal(cl)}</td>
         <td className="r">{cl.threshold?`${cl.threshold.op} ${cl.threshold.value}`:"—"}</td>
         <td className="r">{isoDay(cl.registered_at)}</td>
       </tr>)}</tbody></table>
       <form className="claimform" onSubmit={submit}>
-        <span className="label">İDDİA KAYDET</span>
-        <input className="wide" value={txt} maxLength={200} placeholder="iddia metni (örn. STRONG_BUY kararlar 4h'te %55 üstü isabet eder)…"
+        <span className="label">{L("claim_form")}</span>
+        <input className="wide" value={txt} maxLength={200} placeholder={L("claim_ph")}
           onChange={e=>setTxt(e.target.value)}/>
-        <select value={metric} onChange={e=>setMetric(e.target.value)} aria-label="metrik">
+        <select value={metric} onChange={e=>setMetric(e.target.value)} aria-label={L("claim_a_metric")}>
           <option value="hit_rate">hit_rate</option><option value="avg_forward">avg_forward</option></select>
-        <select value={verdict} onChange={e=>setVerdict(e.target.value)} aria-label="filtre">
-          <option value="TÜMÜ">tüm kararlar</option><option value="LONG">LONG</option>
-          <option value="SHORT">SHORT</option><option value="NEUTRAL">NÖTR</option></select>
-        <select value={ch} onChange={e=>setCh(e.target.value)} aria-label="ufuk">
+        <select value={verdict} onChange={e=>setVerdict(e.target.value)} aria-label={L("claim_a_filter")}>
+          <option value="ALL">{L("claim_all")}</option><option value="LONG">LONG</option>
+          <option value="SHORT">SHORT</option><option value="NEUTRAL">{L("ev_neutral")}</option></select>
+        <select value={ch} onChange={e=>setCh(e.target.value)} aria-label={L("claim_a_horizon")}>
           {EV_HORIZONS.map(h=><option key={h} value={h}>{h}</option>)}</select>
-        <input className="num" type="number" min="1" step="1" value={minN} aria-label="min n"
-          title="minimum örnek — altında PENDING" onChange={e=>setMinN(e.target.value)}/>
-        <select value={op} onChange={e=>setOp(e.target.value)} aria-label="eşik operatörü">
+        <input className="num" type="number" min="1" step="1" value={minN} aria-label={L("claim_a_minn")}
+          title={L("claim_minn_t")} onChange={e=>setMinN(e.target.value)}/>
+        <select value={op} onChange={e=>setOp(e.target.value)} aria-label={L("claim_a_op")}>
           <option value=">=">≥</option><option value="<=">≤</option></select>
-        <input className="num" type="number" step="0.01" value={thr} aria-label="eşik değeri"
-          title="eşik değeri" onChange={e=>setThr(e.target.value)}/>
-        <button className="cta" disabled={busy}>{busy?"KAYDEDİLİYOR…":"İDDİA KAYDET"}</button>
+        <input className="num" type="number" step="0.01" value={thr} aria-label={L("claim_a_thr")}
+          min={metric==="hit_rate"?0:undefined} max={metric==="hit_rate"?1:undefined}
+          title={L("claim_a_thr")} onChange={e=>setThr(e.target.value)}/>
+        <button className="cta" disabled={busy}>{busy?L("claim_busy"):L("claim_form")}</button>
         {msg&&<span className={"sbmsg"+(msg.ok?"":" bad")} role="status">{msg.text}</span>}
       </form>
-      <div className="gcap">iddialar ön-kayıt disiplinidir: değerlendirme yalnızca tescil zamanından SONRAKI notalanmış
-        kararlar üzerinden yapılır · kayıt dosyası değiştirilemez (immutable)</div>
+      <div className="gcap">{L("claim_cap")}</div>
     </div></div>;
 }
 
@@ -1428,21 +1519,23 @@ function IcPanel({horizon}){
   useEffect(()=>{ if(window.DIVE&&typeof window.DIVE.ic==="function") window.DIVE.ic(horizon).catch(()=>{}); },[horizon]);
   const ic=window.SGS_IC;
   const [busy,setBusy]=useState(false);
-  const [sug,setSug]=useState(null);
+  const [sug,setSug]=useState(null);     // {h, out}: tagged with the horizon it was generated for
   const [err,setErr]=useState(null);
   const gen=async()=>{
     if(busy)return; setBusy(true); setErr(null);
-    try{ setSug(await window.DIVE.suggestWeights(horizon)); }
+    try{ const out=await window.DIVE.suggestWeights(horizon); setSug({h:horizon,out}); }
     catch(e){ setErr((e&&e.message)||String(e)); }
     finally{ setBusy(false); }
   };
+  // a suggestion table never sits beside another horizon's IC table
+  const sugOut=(sug&&sug.h===horizon)?sug.out:null;
   const rows=ic?Object.entries(ic.indicators||{})
     .map(([name,v])=>({name,ic:v&&v.ic,ir:v&&v.ic_ir,n:(v&&v.n)||0,
       rank:(v&&typeof v.ic==="number")?Math.abs(v.ic)*((v&&v.n)||0):0}))
     .sort((a,b)=>b.rank-a.rank).slice(0,15):null;
-  const sugRows=sug?Object.entries(sug.suggestions||{})
+  const sugRows=sugOut?Object.entries(sugOut.suggestions||{})
     .map(([name,v])=>({name,...v,capped: v.suggested!=null&&v.shipped!=null
-      && v.suggested>=v.shipped*(sug.cap_multiple||3)-1e-9}))
+      && v.suggested>=v.shipped*(sugOut.cap_multiple||3)-1e-9}))
     .sort((a,b)=>Math.abs(b.suggested-b.shipped)-Math.abs(a.suggested-a.shipped)):null;
   return <div className="panel"><div className="ph"><span className="tick">▸</span>İNDİKATÖR IC · SPEARMAN
     <span className="rt">{ic?`${ic.n} OLAY · |IC|·N İLK 15`:"OKUNUYOR…"}</span></div>
@@ -1471,7 +1564,7 @@ function IcPanel({horizon}){
           <td className="r" style={{color:r.suggested>r.shipped?"var(--up)":r.suggested<r.shipped?"var(--down)":undefined}}>{r.suggested}</td>
           <td className="r">{r.ic==="n/a"?"n/a":r.ic==null?"—":r.ic}</td>
           <td className="r">{r.capped?<span className="tag hot">3× TAVAN</span>:""}</td></tr>)}</tbody></table>}
-      <div className="gcap">DISCLAIMER: rapor-only · asla otomatik uygulanmaz · {sug?sug.disclaimer||"öneriler runtime/weight_suggestions.json'a yazılır; motor asla okumaz":""}</div>
+      <div className="gcap">DISCLAIMER: rapor-only · asla otomatik uygulanmaz · {sugOut?sugOut.disclaimer||"öneriler runtime/weight_suggestions.json'a yazılır; motor asla okumaz":""}</div>
     </div></div>;
 }
 
@@ -1491,27 +1584,27 @@ function ReplayPanel({horizon}){
   const isShipped=(c)=>rp&&rp.shipped_cell&&c.buy===rp.shipped_cell.buy
     &&c.strong===rp.shipped_cell.strong&&c.conflict===rp.shipped_cell.conflict;
   const deltaCol=(d)=> d==null?"var(--dim)":d>0.02?"var(--up)":d<-0.02?"var(--down)":"var(--ink)";
-  return <div className="panel"><div className="ph"><span className="tick">▸</span>REPLAY · TERSİNE-EŞİK IZGARASI
-    <span className="rt">{rp?`${rp.events.replayable} TEKRARLANABİLİR · ${rp.folds} KAT · BOOTSTRAP n=${rp.bootstrap.n}/seed ${rp.bootstrap.seed}`:"REPORT-ONLY"}</span></div>
+  return <div className="panel"><div className="ph"><span className="tick">▸</span>{L("rp_title")}
+    <span className="rt">{rp?L("rp_rt",rp.events.replayable,rp.folds,rp.bootstrap.n,rp.bootstrap.seed):"REPORT-ONLY"}</span></div>
     <div className="pb" style={{padding:0}}>
-      {!rp&&<div className="stat"><span className="k">IZGARA</span>
-        <span className="v">{busy?"hesaplanıyor…":"— henüz çalıştırılmadı · arşiv×notalar üzerinde eşik karşı-factual'ı"}</span></div>}
+      {!rp&&<div className="stat"><span className="k">{L("rp_k")}</span>
+        <span className="v">{busy?L("rp_busy"):L("rp_empty")}</span></div>}
       <div className="pbtns" style={{padding:"10px 13px"}}>
-        <button className="cta" disabled={busy} onClick={run}>{busy?"ÇALIŞTIRILIYOR…":"ÇALIŞTIR"}</button>
-        {err&&<span className="sbmsg bad">REPLAY BAŞARISIZ · {err}</span>}
+        <button className="cta" disabled={busy} onClick={run}>{busy?L("rp_running"):L("rp_run")}</button>
+        {err&&<span className="sbmsg bad">{L("rp_fail",err)}</span>}
       </div>
       {rp&&<>
         <div className="scanbar" style={{margin:"0 13px 10px"}}>
           <span className="sbcap" style={{marginLeft:0, textAlign:"left"}}>
-            atlanan: {rp.events.skipped_weights_hash} ağırlık-hash uyuşmaz · {rp.events.skipped_no_signals} sinyalsiz ·
-            {" "}gönderilen hücre: buy {rp.shipped_cell.buy} / strong {rp.shipped_cell.strong} / conflict {rp.shipped_cell.conflict}</span>
+            {L("rp_skipped",rp.events.skipped_weights_hash,rp.events.skipped_no_signals,
+              rp.shipped_cell.buy,rp.shipped_cell.strong,rp.shipped_cell.conflict)}</span>
         </div>
         <div style={{maxHeight:340,overflow:"auto"}}>
         <table className="rank evtab replaygrid"><thead><tr>
           <th scope="col">BUY</th><th scope="col">STRONG</th><th scope="col">CONFLICT</th>
-          <th scope="col" className="r">N YÖNLÜ</th><th scope="col" className="r">İSABET</th>
+          <th scope="col" className="r">{L("rp_h_n")}</th><th scope="col" className="r">{L("rp_h_hit")}</th>
           <th scope="col" className="r">Δ SHIPPED</th><th scope="col" className="r">BOOT WIN%</th>
-          <th scope="col" className="r">KAT YAYILIMI</th></tr></thead>
+          <th scope="col" className="r">{L("rp_h_fold")}</th></tr></thead>
         <tbody>{grid.map((cell,i)=>{
           const ship=isShipped(cell);
           const bg=cell.delta_vs_shipped==null?"transparent"
@@ -1525,8 +1618,7 @@ function ReplayPanel({horizon}){
             <td className="r">{cell.bootstrap_win_vs_shipped!=null?Math.round(cell.bootstrap_win_vs_shipped*100)+"%":"—"}</td>
             <td className="r">{cell.fold_spread!=null?(cell.fold_spread*100).toFixed(1)+"%":"—"}</td>
           </tr>;})}</tbody></table></div>
-        <div className="gcap">REPORT-ONLY · hiçbir eşik motoru değiştirmez · hücre rengi shipped'e göre deltadan ·
-          boot win% = bootstrap'ta shipped'i yenme payı · kat yayılımı = {rp.folds} kat isabet max−min</div>
+        <div className="gcap">{L("rp_cap",rp.folds)}</div>
       </>}
     </div></div>;
 }
@@ -1574,8 +1666,11 @@ function SliceTabs({ev}){
     </div></div>;
 }
 
-function Evidence({horizon,setHorizon}){
-  const ev=window.SGS_EVIDENCE;
+function Evidence({horizon,setHorizon,fetchFail,onRetry}){
+  const evAny=window.SGS_EVIDENCE;
+  /* only a summary for the SELECTED horizon may render (mirror of the replay guard): the
+     previous horizon's numbers must never sit under the new chip */
+  const ev=(evAny&&evAny.horizon===horizon)?evAny:null;
   const [gradingH,setGradingH]=useState(null);   // per-horizon busy flag
   const [winKey,setWinKey]=useState("30d");
   const [msg,setMsg]=useState(null);             // {ok, text} grade result summary
@@ -1590,12 +1685,14 @@ function Evidence({horizon,setHorizon}){
     }catch(e){setMsg({ok:false,text:"NOTALAMA BAŞARISIZ · "+((e&&e.message)||e)});}
     finally{setGradingH(null);}
   },[gradingH,horizon]);
-  if(!ev)
-    return <div className="state"><div className="spin"/><div>Kanıt arşivi okunuyor…</div></div>;
-  const rem=Math.max((ev.gradable_count||0)-(ev.graded_count||0),0);
   const chips=EV_HORIZONS.map(h=><button key={h} className={"chip"+(h===horizon?" on":"")}
     aria-pressed={h===horizon} disabled={!!gradingH} onClick={()=>setHorizon(h)}
     title={`${h} ufku için öz-derecelendirme`}>{h.toUpperCase()}</button>);
+  // while the selected horizon's summary is not loaded the chips stay usable
+  if(!ev)
+    return <><div className="scanbar">{chips}</div>
+      {fetchFail?<FetchFail err={fetchFail} onRetry={onRetry}/>:<div className="state"><div className="spin"/><div>{L("ev_loading")}</div></div>}</>;
+  const rem=Math.max((ev.gradable_count||0)-(ev.graded_count||0),0);
   const winStats=(ev.windows&&(ev.windows[winKey]&&ev.windows[winKey]))||ev.by_verdict;
   const winFallback=!(ev.windows&&ev.windows[winKey]);
   const cal=ev.calibration;
@@ -1765,11 +1862,15 @@ function Compare({symbols,onPick}){
       if(cols[s]||cols[s]===null)return;   // null = in-flight
       setCols(c=>({...c,[s]:null}));
       window.DIVE.symbol(s,{commit:false})
-        .then(obj=>setCols(c=>({...c,[s]:obj&&obj.s?obj:{err:"geçersiz yanıt"}})))
+        .then(obj=>setCols(c=>({...c,[s]:obj&&obj.s?{...obj,_at:Date.now()}:{err:L("cmp_invalid")}})))
         .catch(e=>setCols(c=>({...c,[s]:{err:(e&&e.message)||String(e)}})));
     });
   },[list.join("|")]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(()=>{ ensureStructure(); },[]);   // β/ρ lookups
+  /* freshness: a KIYAS column is a one-time snapshot per symbol (not polled); the caption
+     shows the age of the OLDEST loaded column, like MAP and STRUCTURE */
+  const fetchedAts=list.map(s=>cols[s]&&cols[s]._at).filter(Boolean);
+  const oldestAt=fetchedAts.length?Math.min(...fetchedAts):null;
   const addSym=(e)=>{ e.preventDefault();
     let s=add.trim().toUpperCase(); if(!s)return; if(!s.endsWith("USDT"))s+="USDT";
     if(list.includes(s)){ setAdd(""); return; }
@@ -1782,6 +1883,7 @@ function Compare({symbols,onPick}){
       <span className="label">{L("cmp_add")}</span>
       <input className="pname wide" value={add} onChange={e=>setAdd(e.target.value)} placeholder="örn. SOL…" aria-label="kıyas için sembol ekle"/>
       <span className="sbcap">imleç bir kolonda gezinirken hepsinde aynı bar vurgulanır</span>
+      <span className="sbcap">{oldestAt==null?L("map_age_none"):L("map_age",Math.max(0,Math.round((Date.now()-oldestAt)/60000)))}</span>
     </form>
     {list.length===0
       ? <div className="state"><div>— kıyas listesi boş · TARA tablosundaki onay kutularıyla ya da yukarıdan sembol ekle</div></div>
@@ -1802,7 +1904,7 @@ function Compare({symbols,onPick}){
               {!d&&!err&&<div className="stat"><span className="k">VERİ</span><span className="v">çekiliyor…</span></div>}
               {d&&<>
                 <div className="cmp-px"><span className="px">${fmt(d.price)}</span>
-                  <span className={"chg "+(d.ch>=0?"up":"dn")}>{d.ch>=0?"+":""}{num(d.ch,2)}%</span>
+                  <span className={"chg "+chgCls(d.ch)}>{chgTxt(d.ch)}</span>
                   <span style={{marginLeft:"auto"}}><Vu conf={d.confidence} dir={dir}/></span></div>
                 <MiniCandles candles={d.candles} hoverIdx={hov} onHover={setHov}/>
                 <div className="cmp-row"><span className="k">12 TF</span><Heat multiTf={d.multiTf}/></div>
@@ -1820,7 +1922,7 @@ function Compare({symbols,onPick}){
 }
 
 /* ── HARİTA (#/map) — verdict tile mosaic ──────────────────────────────────── */
-function MapView({onPick}){
+function MapView({onPick,snapAgeMin}){
   const [mode,setMode]=useState("TARAMA");
   const [clusterMode,setClusterMode]=useState(false);
   const scan=window.SGS_SCAN||{survivors:[]};
@@ -1844,6 +1946,7 @@ function MapView({onPick}){
       <span className="sbcap">{mode==="TARAMA"
         ?"karo = taramadan sağ kalan · tıkla → panel"
         :"karar yok · tarama gerekli — evren karoları nötr gridir"}</span>
+      {mode==="TARAMA"&&<span className="sbcap">{snapAgeMin==null?L("map_age_none"):L("map_age",snapAgeMin)}</span>}
     </div>
     {tiles.length===0
       ? <div className="state"><div>{mode==="TARAMA"?"— tarama sonucu yok · TARA görünümü ilk taramayı çalıştırır":"— evren yükleniyor…"}</div></div>
@@ -1965,7 +2068,7 @@ function StructureView({onPick}){
     return bs.length?bs.reduce((a,b)=>a+b,0)/bs.length:null; };
   return <>
     <div className="vhead"><span className="kicker">{L("st_kicker")}</span><h1>{L("st_h1")}</h1>
-      <div className="meta">{L("st_meta")}<br/>{st?`${st.count} SEMBOL · ${clusters.length} KÜME`:"okunuyor…"}</div></div>
+      <div className="meta">{L("st_meta")}<br/>{st?`${st.count} SEMBOL · ${clusters.length} KÜME`:"okunuyor…"}<br/>{L("st_snapshot")}</div></div>
     {err&&<div className="panel mute"><div className="pb"><div className="perr">YAPI YÜKLENEMEDİ · {err}</div>
       <div className="pbtns"><button className="cta" onClick={load}>TEKRAR DENE</button></div></div></div>}
     {!st&&!err&&<div className="state"><div className="spin"/><div>küme yapısı hesaplanıyor…</div></div>}
@@ -2040,8 +2143,7 @@ function PulseStrip({sym,onPick}){
           onClick={()=>onPick&&onPick(r.s)} title={`${r.s} · klik → panel`}>
           <b>{String(r.s).replace("USDT","")}</b>
           <span>{p&&p.price!=null?"$"+fmt(p.price):"$"+fmt(r.price)}</span>
-          <span className={"chg "+(((p&&p.ch!=null)?p.ch:r.ch)>=0?"up":"dn")}>
-            {(((p&&p.ch!=null)?p.ch:r.ch)>=0?"+":"")+num((p&&p.ch!=null)?p.ch:r.ch,2)}%</span>
+          <span className={"chg "+chgCls((p&&p.ch!=null)?p.ch:r.ch)}>{chgTxt((p&&p.ch!=null)?p.ch:r.ch)}</span>
         </button>;})}</div>
     </div>
   </div>;
@@ -2111,7 +2213,8 @@ function CommandPalette({open,onClose,onGo,onPickSymbol,onScan,onEvidence,onComp
   const m2=q.match(/^kan[ıi]t\s+(\d{1,2}\s*h)\s*$/i);
   if(m2)verbs.push({label:`→ kanıt · ufuk ${m2[1].replace(/\s/g,"")}`,run:()=>onEvidence(m2[1].replace(/\s/g,""))});
   const m3=q.match(/^kiyas\s+(.{1,60})$/i);
-  if(m3)verbs.push({label:`→ kıyas · ${m3[1].toUpperCase()}`,run:()=>onCompare(m3[1].toUpperCase().split(/[\s,]+/).slice(0,4))});
+  if(m3){ const toks=m3[1].split(/[\s,]+/).map(toUsdtSym).filter(Boolean).slice(0,4);   // bare tickers → XUSDT
+    verbs.push({label:`→ kıyas · ${toks.join(" ")}`,run:()=>onCompare(toks)}); }
   const items=[
     ...verbs.map(v=>({kind:"verb",text:v.label,run:v.run})),
     ...VIEWS.map(([id,key])=>({kind:"view",text:L(key),run:()=>onGo(id)})),
@@ -2138,7 +2241,7 @@ function CommandPalette({open,onClose,onGo,onPickSymbol,onScan,onEvidence,onComp
         {items.length===0&&<div className="pempty">— eşleşme yok</div>}
         {items.map((it,i)=><button key={it.kind+it.text} role="option" aria-selected={i===sel}
           className={"pitem"+(i===sel?" on":"")}
-          onMouseEnter={()=>setSel(i)} onClick={exec(it)}>
+          onMouseEnter={()=>setSel(i)} onClick={()=>exec(it)}>
           <span className={"pk k-"+it.kind}>{it.kind==="verb"?"EYLEM":it.kind==="view"?"GÖRÜNÜM":it.kind==="sym"?"SEMBOL":it.kind==="lang"?L("pal_kind_lang"):"TEMA"}</span>
           <span className="pt">{it.text}</span>
         </button>)}
@@ -2152,11 +2255,11 @@ function CommandPalette({open,onClose,onGo,onPickSymbol,onScan,onEvidence,onComp
 function Logs(){
   const logs=window.SGS_LOGS||[];
   return <>
-    <div className="vhead"><span className="kicker">AĞ GÜNLÜĞÜ</span><h1>Bağlantı</h1>
+    <div className="vhead"><span className="kicker">{L("log_kicker")}</span><h1>{L("log_h1")}</h1>
       <div className="meta">BINANCE USDT-M · PUBLIC REST/WS</div></div>
-    <div className="panel mute"><div className="ph"><span className="tick">▸</span>SON İSTEKLER</div>
+    <div className="panel mute"><div className="ph"><span className="tick">▸</span>{L("log_recent")}</div>
       <div className="pb" style={{padding:0}}>
-        {logs.length===0 ? <div className="reason">Günlük boş.</div> :
+        {logs.length===0 ? <div className="reason">{L("log_empty")}</div> :
          <table className="itbl"><tbody>{logs.slice(0,60).map((l,i)=>
            <tr key={i}><td className="nm" style={{color:"var(--dim)"}}>{l.t||l.time||""}</td>
              <td className="rv" style={{textAlign:"left"}}>{l.msg||l.m||l.message||JSON.stringify(l)}</td></tr>)}</tbody></table>}
@@ -2180,8 +2283,7 @@ function Settings({theme,setTheme,lang,setLang}){
           onClick={()=>setTheme(id)}>{label}</button>)}
       </div></div>
     <div className="panel mute"><div className="ph"><span className="tick">▸</span>{L("set_engine")}</div>
-      <div className="pb reason">60 indikatör · 12 zaman dilimi · konsensüs + balina-uyumsuzluk filtresi + 3 overlay
-        (futures-mikroyapı, rejim-adaptif ağırlık, çoklu-TF konfluens). Yalnızca public Binance verisi.</div></div>
+      <div className="pb reason">{L("set_engine_desc")}</div></div>
   </>;}
 
 /* ── shell + data orchestration ──────────────────────────────────────────── */
@@ -2204,17 +2306,27 @@ const viewFromHash=()=>{const h=(location.hash||"").replace(/^#\/?/,"").split("/
 const KEY_VIEWS=["scan","panel","flow","sig","evidence","logs","settings"];
 
 const STALE_MS=90000;  // data older than this = honest "stale" banner
+/* Views whose own market request feeds the freshness clock (and whose Retry
+   can refresh them). MAP / STRUCTURE / COMPARE show snapshots instead: they get an
+   age caption, not a banner they could never clear. */
+const MARKET_VIEWS=new Set(["scan","evidence","panel","flow","sig"]);
+/* Theme persistence: storage can be blocked (private mode, site data disabled).
+   A blocked read must fall back, never blank the whole app during first render. */
+const readTheme=()=>{ try{ return localStorage.getItem("dive_theme")||"phosphor"; }catch(e){ return "phosphor"; } };
+const saveTheme=(t)=>{ try{ localStorage.setItem("dive_theme",t); }catch(e){} };
 function App(){
   const [view,setView]=useState(()=>viewFromHash()||"scan");
   const [sym,setSym]=useState(null);
-  const [theme,setThemeState]=useState(()=>localStorage.getItem("dive_theme")||"phosphor");
+  const [theme,setThemeState]=useState(()=>readTheme());
   const [lang,setLangState]=useState(()=>(typeof diveLang==="function")?diveLang():"tr");
   const [q,setQ]=useState("");
   const [clock,setClock]=useState("");
   const [bootErr,setBootErr]=useState(null);
   const [stale,setStale]=useState(null);   // {reason,hidden?} — live-feed honesty only
+  const [viewErr,setViewErr]=useState(null); // {view,text}: the current view's own market request failed
   const [evHorizon,setEvHorizon]=useState("4h");
-  const [job,setJob]=useState(null);       // tracked async scan {scanId, done, resultErr?}
+  const [job,setJob]=useState(null);       // tracked async scan {scanId, done, resultErr?, dismissed?}
+  const jobRef=useRef(null); jobRef.current=job;   // latest job for callbacks with stable identity
   const [jobProg,setJobProg]=useState(null);
   const [jobErr,setJobErr]=useState(null); // async start failure
   const [cmpSyms,setCmpSyms]=useState([]); // KIYAS selection (2-4)
@@ -2222,10 +2334,11 @@ function App(){
   const [macroOpen,setMacroOpen]=useState(false);
   const searchRef=useRef(null);
   const holdRef=useRef(false);             // async owns the TARA table while true
+  const pollInFlight=useRef(false);        // a poll tick is skipped while the previous poll() still runs
   const lastOk=useRef(0);
   const [,force]=useState(0);
   const demo=isDemo();
-  const setTheme=(t)=>{setThemeState(t);localStorage.setItem("dive_theme",t);document.documentElement.setAttribute("data-theme",t);};
+  const setTheme=(t)=>{setThemeState(t);saveTheme(t);document.documentElement.setAttribute("data-theme",t);};
   /* TR/EN language: persist via i18n.js setDiveLang (localStorage "dive_lang")
      and keep local state in sync so every L() call re-renders. */
   const setLang=(code)=>{ setLangState(code); if(typeof setDiveLang==="function") setDiveLang(code); };
@@ -2279,7 +2392,7 @@ function App(){
     setBootErr(null);
     const r=await bootUniverse(window.DIVE);
     if(r.ok){ setSym(s=>s||r.symbol||"BTCUSDT"); lastOk.current=Date.now(); setStale(null); }
-    else{ setBootErr(r.error||"unknown error"); }
+    else{ setBootErr({message:r.error||"unknown error",status:r.status,code:r.code}); }
     force(v=>v+1);
   },[]);
   useEffect(()=>{ boot(); },[boot]);
@@ -2289,38 +2402,59 @@ function App(){
   // ── async deep-scan orchestration (survives view switches; the sync path stays
   // the default until "DERİN TARAMA" is pressed) ────────────────────────────────
   const startAsync=useCallback(async(uLimit)=>{
+    const cur=jobRef.current;
+    if(cur&&!cur.done) return;   // one full-universe run at a time (palette "tara" included)
     setJobErr(null);setJobProg(null);
     holdRef.current=true;
     try{
       const r=await window.DIVE.scanAsync({size:15,universeLimit:uLimit||250});
       setJob({scanId:r.scan_id,done:false});
-    }catch(e){ holdRef.current=false; setJobErr((e&&e.message)||String(e)); }
+    }catch(e){   // a failed start is a finished, errored run: the panel shows it and the Scanner unlocks
+      holdRef.current=false; setJobErr(failureText(e).text); setJob({scanId:null,done:true});
+    }
   },[]);
-  const clearJob=useCallback(()=>{  // back to the default sync auto-scan
-    holdRef.current=false;setJob(null);setJobProg(null);
+  /* VAZGEC / back. The server has no cancel route: while the async run is still alive
+     we only stop WATCHING (panel hidden, table stays held, no parallel sync scan).
+     Once it finishes, the dismissed run releases the table below. */
+  const clearJob=useCallback(()=>{
+    const cur=jobRef.current;
+    if(cur&&!cur.done){ setJob(j=>j?{...j,dismissed:true}:j); return; }
+    holdRef.current=false;setJob(null);setJobProg(null);   // back to the default sync auto-scan
     window.DIVE.scan(15,24).catch(()=>{});
   },[]);
+  useEffect(()=>{ if(job&&job.dismissed&&job.done) clearJob(); },[job,clearJob]);
   const retryResult=useCallback(async()=>{
     if(!job||!job.scanId)return;
     setJob(j=>j?{...j,resultErr:null}:j);
     try{ await window.DIVE.scanResult(job.scanId); setJob(j=>j?{...j,resultErr:null}:j); }
-    catch(e){ setJob(j=>j?{...j,resultErr:(e&&e.message)||String(e)}:j); }
+    catch(e){ setJob(j=>j?{...j,resultErr:failureText(e).text}:j); }
   },[job&&job.scanId]);
   const jobId=job&&job.scanId,jobDone=job&&job.done;
   useEffect(()=>{  // 2 s progress poll; done → load the full result into SGS_SCAN
     if(!jobId||jobDone)return;
-    let live=true;
+    let live=true, misses=0;
+    // the poll gave up: say so, and end the run so the Scanner unlocks (Retry / VAZGEC work)
+    const giveUp=(msg)=>{ setJobProg(p=>({...(p||{}),status:"error",error:msg})); setJob(j=>j?{...j,done:true}:j); };
     const tick=async()=>{
       try{
         const p=await window.DIVE.scanProgress(jobId);
         if(!live)return;
+        misses=0;
         setJobProg(p);
         if(p.status==="done"){
           try{ await window.DIVE.scanResult(jobId); }
-          catch(e){ setJob(j=>j?{...j,resultErr:(e&&e.message)||String(e)}:j); }
+          catch(e){ setJob(j=>j?{...j,resultErr:failureText(e).text}:j); }
           setJob(j=>j?{...j,done:true}:j);
         }else if(p.status==="error"){ setJob(j=>j?{...j,done:true}:j); }
-      }catch(e){ /* transient poll failure: keep the last honest snapshot */ }
+      }catch(e){
+        if(!live)return;
+        const msg=failureText(e).text;
+        misses++;
+        // 404 = the in-memory scan registry no longer holds this id (backend restarted):
+        // definitive. Other failures get a few polls before the run is declared lost.
+        if(/→ 404$/.test(msg)) giveUp(L("sp_gone"));
+        else if(misses>=3) giveUp(`${L("sp_lost")} · ${msg}`);
+      }
     };
     tick();
     const id=setInterval(tick,2000);
@@ -2333,31 +2467,44 @@ function App(){
   // One poll loop per view. Every outcome is honest: success stamps freshness and
   // clears the stale banner; any throw names the failing endpoint in the banner.
   const poll=useCallback(async()=>{
-    let fail=null;
+    let fail=null, ok=false, mktErr=null;   // ok = the view's OWN market request succeeded (only that stamps freshness)
     try{
-      if(view==="scan"){ if(!holdRef.current) await window.DIVE.scan(15,24); }
-      else if(view==="evidence"){ if(evHorizon) await window.DIVE.evidence(evHorizon); }
-      else if(SYMBOL_VIEWS.has(view)&&sym) await window.DIVE.symbol(sym);
+      if(view==="scan"){ if(!holdRef.current){ await window.DIVE.scan(15,24); ok=true; } }
+      else if(view==="evidence"){ if(evHorizon){ await window.DIVE.evidence(evHorizon); ok=true; } }
+      else if(SYMBOL_VIEWS.has(view)&&sym){ await window.DIVE.symbol(sym); ok=true; }
     }catch(e){
       const what=view==="scan"?"tarama":view==="evidence"?"kanıt":(sym||"sembol")+" verisi";
-      fail=what+": "+((e&&e.message)||e);
+      console.debug("[dive] poll failed:", e);   // raw detail for debugging only
+      mktErr=failureText(e).text;
+      fail=what+": "+mktErr;
     }
     if(view==="flow"){ try{ await window.DIVE.leaders?.(); }
-      catch(e){ fail=fail||"liderler: "+((e&&e.message)||e); } }
-    try{ await window.DIVE.logs?.(); }catch(e){ fail=fail||"günlük: "+((e&&e.message)||e); }
+      catch(e){ fail=fail||"liderler: "+failureText(e).text; } }
+    // the connection log is not market data: its success says nothing about freshness
+    try{ await window.DIVE.logs?.(); }catch(e){ fail=fail||"günlük: "+failureText(e).text; }
+    if(mktErr) setViewErr({view,text:mktErr});
+    else if(ok) setViewErr(null);
     if(fail) setStale(s=> s ? (s.reason===fail?s:{reason:fail,hidden:false}) : {reason:fail});
-    else { lastOk.current=Date.now(); setStale(null); }
+    else if(ok){ lastOk.current=Date.now(); setStale(null); setBootErr(null); }
   },[view,sym,evHorizon]);
-  useEffect(()=>{ let live=true; const run=async()=>{ if(live) await poll(); };
+  useEffect(()=>{ let live=true;
+    const run=async()=>{
+      if(!live||pollInFlight.current) return;   // previous poll still in flight → skip this tick
+      pollInFlight.current=true;
+      try{ await poll(); } finally{ pollInFlight.current=false; }
+    };
     run(); const id=setInterval(run,view==="scan"?20000:15000);
     return()=>{live=false;clearInterval(id);}; },[poll]);
-  // age watchdog: even without a thrown error, silence > 90s is staleness.
-  useEffect(()=>{ const id=setInterval(()=>{ if(!lastOk.current) return;
+  // age watchdog: silence > 90s on a view that refreshes its own data is staleness.
+  // While an async run owns the TARA table its progress is not a sync feed, so skip it.
+  useEffect(()=>{ const id=setInterval(()=>{ if(!lastOk.current||!MARKET_VIEWS.has(view)) return;
+    if(view==="scan"&&holdRef.current) return;
     if(Date.now()-lastOk.current>STALE_MS)
       setStale(s=> s||{reason:`${Math.round(STALE_MS/1000)} sn'dir başarılı veri çekimi yok · no successful fetch for ${STALE_MS/1000}s`});
-  },5000); return()=>clearInterval(id); },[]);
+  },5000); return()=>clearInterval(id); },[view]);
 
-  const retry=()=>poll();
+  // Retry while the universe never loaded re-runs the boot (the only thing that can fix it)
+  const retry=()=>{ if(bootErr) boot(); else poll(); };
   const dismissStale=()=>setStale(s=>s?{...s,hidden:true}:s);
   const submit=(e)=>{e.preventDefault();let s=q.trim().toUpperCase();if(!s)return;if(!s.endsWith("USDT"))s+="USDT";
     setSym(s); if(!SYMBOL_VIEWS.has(view)) setRoute("panel"); setQ("");};
@@ -2367,16 +2514,21 @@ function App(){
   // fabricated market. Settings stays reachable so the app is not a dead end.
   const noData=!!bootErr && !demo && !(window.SGS_DATA||[]).length;
 
+  // the stale banner is a market-feed notice: snapshot views (MAP, KIYAS, ...) cannot clear it, so it
+  // is held back there and reappears when a market view is opened again
+  const bannerOn=!!stale && !stale.hidden && MARKET_VIEWS.has(view);
+  const viewFail=viewErr&&viewErr.view===view?viewErr:null;
   let body;
   if(noData && view!=="settings") body=<DataSourceDown error={bootErr} onRetry={boot}/>;
   else if(view==="scan") body=<Scanner onPick={pick} onCompare={startCompare} job={job} prog={jobProg} jobErr={jobErr}
-    onAsyncStart={startAsync} onAsyncCancel={clearJob} onRetryResult={retryResult}/>;
-  else if(view==="panel") body=<Panel sym={sym} evHorizon={evHorizon}/>;
-  else if(view==="flow") body=<Flow sym={sym} onSelect={setSym}/>;
+    onAsyncStart={startAsync} onAsyncCancel={clearJob} onRetryResult={retryResult}
+    held={holdRef.current} fetchFail={viewFail} onRetry={poll}/>;
+  else if(view==="panel") body=<Panel key={sym} sym={sym} evHorizon={evHorizon} fetchFail={viewFail} onRetry={poll}/>;   // per-symbol state resets with the symbol
+  else if(view==="flow") body=<Flow sym={sym} onSelect={setSym} fetchFail={viewFail} onRetry={poll}/>;
   else if(view==="sig") body=<Signal onPick={pick}/>;
-  else if(view==="evidence") body=<Evidence horizon={evHorizon} setHorizon={setEvHorizon}/>;
+  else if(view==="evidence") body=<Evidence horizon={evHorizon} setHorizon={setEvHorizon} fetchFail={viewFail} onRetry={poll}/>;
   else if(view==="compare") body=<Compare symbols={cmpSyms} onPick={pick}/>;
-  else if(view==="map") body=<MapView onPick={pick}/>;
+  else if(view==="map") body=<MapView onPick={pick} snapAgeMin={lastOk.current?Math.max(0,Math.round((Date.now()-lastOk.current)/60000)):null}/>;
   else if(view==="portfolio") body=<Portfolio/>;
   else if(view==="structure") body=<StructureView onPick={pick}/>;
   else if(view==="logs") body=<Logs/>;
@@ -2385,9 +2537,9 @@ function App(){
   const fng=window.SGS_MACRO&&window.SGS_MACRO.fng;
   const fngLive=fng&&fng.unavailable==null&&fng.value!=null;
 
-  return <div className={"app"+(demo?" is-demo":"")+(stale&&!stale.hidden?" has-stale":"")}>
+  return <div className={"app"+(demo?" is-demo":"")+(bannerOn?" has-stale":"")}>
     <DemoBanner/>
-    <StaleBanner stale={stale} onRetry={retry} onDismiss={dismissStale}/>
+    <StaleBanner stale={bannerOn?stale:null} onRetry={retry} onDismiss={dismissStale}/>
     <div className="strip">
       {demo
         ? <span className="live demo"><span className="dot"/>DEMO</span>
@@ -2416,7 +2568,7 @@ function App(){
       <button className={"rail-btn"+(view==="settings"?" on":"")} aria-current={view==="settings"?"page":undefined}
         onClick={()=>setRoute("settings")}><Svg d={ICONS.gear}/>{L("nav_settings")}</button>
     </nav>
-    <main className="stage" key={view+"|"+sym}>{body}</main>
+    <main className="stage" key={view}>{body}</main>
     <CommandPalette open={palOpen} onClose={()=>setPalOpen(false)}
       onGo={(v)=>setRoute(v)} onPickSymbol={pick}
       onScan={(limit)=>{setRoute("scan"); startAsync(limit);}}
@@ -2434,4 +2586,7 @@ globalThis.DIVE_APP = { App, DemoBanner, DemoMark, DataSourceDown, StaleBanner, 
   /* v0.3 surfaces + route map (hash-route registration is pinned by tests) */
   Panel, Compare, MapView, Portfolio, StructureView, PulseStrip, FngChip, DvolChip,
   CommandPalette, HitLabel, ReliabilityDiagram, ReplayPanel, TfMatrix, OpposingEvidence,
-  viewFromHash, VIEW_HASH, HASH_VIEW, KEY_VIEWS, fzScore };
+  viewFromHash, VIEW_HASH, HASH_VIEW, KEY_VIEWS, fzScore,
+  /* fix-wave helpers + screens (pinned by desktop-app-fixes.test.mjs) */
+  annPrice, toUsdtSym, readTheme, saveTheme, Logs, Settings,
+  failureOf, failureText, FetchFail, SymbolLoading, actionLabel, PlanningStrip };

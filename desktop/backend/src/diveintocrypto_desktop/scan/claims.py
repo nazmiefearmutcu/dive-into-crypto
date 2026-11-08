@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -40,6 +41,8 @@ REQUIRED_FIELDS = {
     "metric", "filter", "horizon", "min_n", "threshold",
 }
 ALLOWED_METRICS = {"hit_rate", "avg_forward"}
+# Proportion metrics: their threshold is a probability and must lie in [0, 1].
+RATE_METRICS = {"hit_rate"}
 ALLOWED_FILTER_KEYS = {"verdict", "regime", "divergence_tier", "session", "funding_proximity"}
 ALLOWED_OPS = {">=", "<="}
 CLAIM_ID_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
@@ -49,12 +52,48 @@ _VERDICT_BUCKETS = ("LONG", "SHORT", "NEUTRAL")
 
 
 def claims_dir() -> Path:
-    """Registry directory (env ``DIVE_CLAIMS_DIR`` overrides; defaults to the
-    repo's ``docs/claims``)."""
+    """WRITABLE registry directory — where newly registered claims are written
+    (env ``DIVE_CLAIMS_DIR`` overrides; defaults to the repo's ``docs/claims``).
+
+    In a frozen (PyInstaller onedir) build the module sits inside ``_internal``,
+    so ``parents[5]`` lands above ``dist/`` and new claims would be written outside
+    the app folder. The frozen default is the writable runtime folder instead.
+    """
     env = os.environ.get("DIVE_CLAIMS_DIR")
     if env:
         return Path(env)
+    if getattr(sys, "frozen", False):
+        return ev._default_dir() / "claims"
     return Path(__file__).resolve().parents[5] / "docs" / "claims"
+
+
+def bundled_dir() -> Path:
+    """READ-ONLY built-in registry shipped with the app (CL-001 and friends).
+
+    A frozen build carries ``docs/claims`` under ``sys._MEIPASS`` (see dive.spec
+    ``datas``); a checkout reads the repo's ``docs/claims``.
+    """
+    base = getattr(sys, "_MEIPASS", None)
+    if getattr(sys, "frozen", False) and base:
+        return Path(base) / "docs" / "claims"
+    return Path(__file__).resolve().parents[5] / "docs" / "claims"
+
+
+def _frozen_default() -> bool:
+    """True for a frozen build without an explicit ``DIVE_CLAIMS_DIR`` override —
+    the case where built-in claims live in the bundle and new ones in the runtime."""
+    return bool(getattr(sys, "frozen", False)) and not os.environ.get("DIVE_CLAIMS_DIR")
+
+
+def registry_dirs() -> list[Path]:
+    """Every directory that holds registered claims, read-only bundle first.
+
+    Frozen (no override): the shipped ``bundled_dir()`` plus the writable
+    ``claims_dir()``. Otherwise the single registry directory."""
+    if _frozen_default():
+        bundled, writable = bundled_dir(), claims_dir()
+        return [bundled] if bundled == writable else [bundled, writable]
+    return [claims_dir()]
 
 
 def status_path() -> Path:
@@ -127,38 +166,65 @@ def validate_claim(claim: dict) -> dict:
     if (not isinstance(thr, dict) or thr.get("op") not in ALLOWED_OPS
             or not isinstance(thr.get("value"), (int, float))):
         raise ClaimError('threshold must be {"op": ">=" | "<=", "value": number}')
+    if claim["metric"] in RATE_METRICS and not 0.0 <= float(thr["value"]) <= 1.0:
+        # NaN fails the chained comparison too, so it is rejected here as well.
+        raise ClaimError(f"threshold for metric {claim['metric']} must be within [0, 1]")
     if not isinstance(claim.get("claim"), str) or not claim["claim"].strip():
         raise ClaimError("claim text must be a non-empty string")
     return claim
 
 
 def register(claim: dict, claims_dir_path: Path | None = None) -> Path:
-    """Write a validated claim to a NEW registry file (immutable by convention)."""
+    """Write a validated claim to a NEW registry file (immutable by convention).
+
+    The id is refused when ANY registry directory already holds it — including the
+    read-only built-in bundle of a frozen build, so a shipped id can never be
+    shadowed by a runtime file."""
     claim = validate_claim(claim)
+    name = f"{claim['claim_id']}.yaml"
     directory = claims_dir_path or claims_dir()
-    path = directory / f"{claim['claim_id']}.yaml"
-    if path.exists():
+    taken_in = [directory] if claims_dir_path else registry_dirs()
+    if any((d / name).exists() for d in taken_in):
         raise ClaimExistsError(f"claim_id {claim['claim_id']} already registered")
+    path = directory / name
     directory.mkdir(parents=True, exist_ok=True)
-    path.write_text(yaml.safe_dump(claim, sort_keys=False, allow_unicode=True), encoding="utf-8")
+    text = yaml.safe_dump(claim, sort_keys=False, allow_unicode=True)
+    # exclusive create: two concurrent POSTs for one id cannot both succeed (an
+    # exists()-then-write check let the second silently overwrite the first)
+    try:
+        with open(path, "x", encoding="utf-8") as f:
+            f.write(text)
+    except FileExistsError:
+        raise ClaimExistsError(f"claim_id {claim['claim_id']} already registered") from None
     return path
 
 
 def load_claims(directory: Path | None = None) -> list[dict]:
-    """All registered claims (unparseable files are skipped, never fatal)."""
-    directory = directory or claims_dir()
+    """All registered claims (unparseable files are skipped, never fatal).
+
+    With no explicit ``directory`` every registry directory is read (see
+    :func:`registry_dirs`); when one claim id appears twice the first (bundled)
+    copy wins."""
+    dirs = [directory] if directory is not None else registry_dirs()
     out: list[dict] = []
-    try:
-        paths = sorted(directory.glob("*.yaml"))
-    except OSError:
-        return []
-    for p in paths:
+    seen: set[str] = set()
+    for d in dirs:
         try:
-            data = yaml.safe_load(p.read_text(encoding="utf-8"))
-        except Exception as e:
-            logger.warning("claims: read %s failed — %s", p.name, str(e)[:80])
+            paths = sorted(d.glob("*.yaml"))
+        except OSError:
             continue
-        if isinstance(data, dict) and data.get("claim_id"):
+        for p in paths:
+            try:
+                data = yaml.safe_load(p.read_text(encoding="utf-8"))
+            except Exception as e:
+                logger.warning("claims: read %s failed — %s", p.name, str(e)[:80])
+                continue
+            if not (isinstance(data, dict) and data.get("claim_id")):
+                continue
+            if str(data["claim_id"]) in seen:
+                logger.warning("claims: duplicate id %s in %s ignored", data["claim_id"], p.name)
+                continue
+            seen.add(str(data["claim_id"]))
             data["_file"] = p.name
             out.append(data)
     return out
@@ -241,9 +307,16 @@ def evaluate(claim: dict, records: list[dict] | None = None,
     by_key = {(r["symbol"], int(r["ts"])): r for r in records}
 
     reg_ms = _registered_ms(claim)
+    # A hand-edited registry file that fails the schema is never evaluated (a missing
+    # threshold, a misspelled metric or an unknown op would otherwise be guessed at).
+    try:
+        validate_claim(claim)
+        schema_problem = None
+    except (ClaimError, TypeError, ValueError) as e:
+        schema_problem = str(e)[:160]
     values: list[float] = []
     n = 0
-    if horizon in ev.HORIZONS and reg_ms is not None:
+    if horizon in ev.HORIZONS and reg_ms is not None and schema_problem is None:
         for g in grades:
             if g.get("horizon") != horizon:
                 continue
@@ -262,20 +335,31 @@ def evaluate(claim: dict, records: list[dict] | None = None,
                     values.append(0.0)
 
     value = round(sum(values) / len(values), 4) if values else None
-    min_n = int(claim.get("min_n") or 1)
-    if n < min_n:
+    try:
+        min_n = int(claim.get("min_n") or 1)
+    except (TypeError, ValueError):
+        min_n = 1
+    if reg_ms is None:
+        # the date gate cannot be applied: safe PENDING, never CONFIRMED/REFUTED
+        status, n, value = "PENDING", 0, None
+        note = ("invalid registered_at — the date gate cannot be applied; "
+                "claim skipped from evaluation (safe PENDING)")
+    elif schema_problem is not None:
+        status, n, value = "PENDING", 0, None
+        note = f"invalid claim — {schema_problem}; claim skipped from evaluation (safe PENDING)"
+    elif n < min_n:
         status = "PENDING"
+        note = "evaluated only on grades with ts > registered_at"
     else:
         thr = claim["threshold"]
-        ok = value >= thr["value"] if thr["op"] == ">=" else value <= thr["value"]
-        status = "CONFIRMED" if ok else "REFUTED"
-
-    note = (
-        "invalid registered_at — the date gate cannot be applied; "
-        "claim skipped from evaluation (safe PENDING)"
-        if reg_ms is None else
-        "evaluated only on grades with ts > registered_at"
-    )
+        note = "evaluated only on grades with ts > registered_at"
+        if thr["op"] == ">=":
+            status = "CONFIRMED" if value >= thr["value"] else "REFUTED"
+        elif thr["op"] == "<=":
+            status = "CONFIRMED" if value <= thr["value"] else "REFUTED"
+        else:  # unreachable after validation: never guess a comparison
+            status = "PENDING"
+            note = f"invalid threshold op {thr.get('op')!r}; claim skipped from evaluation (safe PENDING)"
     now_dt = datetime.fromtimestamp((now_ms or time.time() * 1000) / 1000, tz=timezone.utc)
     return {
         "claim_id": claim["claim_id"],
@@ -295,9 +379,37 @@ def evaluate(claim: dict, records: list[dict] | None = None,
     }
 
 
+def _failed_evaluation(claim: dict, reason: str) -> dict:
+    """Safe PENDING record for a claim whose evaluation raised — one bad file must
+    not fail the whole listing."""
+    now = time.gmtime()
+    return {
+        "claim_id": str(claim.get("claim_id", "?")),
+        "claim": claim.get("claim"),
+        "metric": claim.get("metric"),
+        "filter": claim.get("filter"),
+        "horizon": claim.get("horizon"),
+        "min_n": claim.get("min_n"),
+        "threshold": claim.get("threshold"),
+        "registered_at": claim.get("registered_at"),
+        "engine_version": claim.get("engine_version"),
+        "status": "PENDING",
+        "n": 0,
+        "value": None,
+        "evaluated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", now),
+        "note": f"evaluation failed — {reason[:120]}; claim shown as PENDING",
+    }
+
+
 def list_evaluations() -> list[dict]:
     """All claims + their current evaluation; persists the sidecar status file."""
-    out = [evaluate(c) for c in load_claims()]
+    out: list[dict] = []
+    for c in load_claims():
+        try:
+            out.append(evaluate(c))
+        except Exception as e:  # per-claim guard: a malformed file is shown, not fatal
+            logger.warning("claims: evaluate %s failed — %s", c.get("claim_id"), str(e)[:80])
+            out.append(_failed_evaluation(c, f"{type(e).__name__}: {e}"))
     try:
         status_file = status_path()
         status_file.parent.mkdir(parents=True, exist_ok=True)

@@ -1,6 +1,7 @@
 package com.diveintocrypto.android.engine.schema
 
-/** Trading venue. `wire` matches Crypcodile's exchange key (`schema/enums.py`). */
+/** Trading venue. `wire` matches the venue/source key Crocodile's crypto connectors
+ * stamp on records (e.g. `binance-usdm`; originally Crypcodile's exchange key). */
 enum class Venue(val wire: String) {
     DERIBIT("deribit"),
     BINANCE_SPOT("binance-spot"),
@@ -33,7 +34,7 @@ enum class OptType(val wire: String) {
     }
 }
 
-/** Canonical channel keys — match Crypcodile's tagged record channels. */
+/** Canonical channel keys — match Crocodile's tagged record channels (`crocodile/core/schema/enums.py`). */
 enum class Channel(val wire: String) {
     TRADE("trade"),
     BOOK_SNAPSHOT("book_snapshot"),

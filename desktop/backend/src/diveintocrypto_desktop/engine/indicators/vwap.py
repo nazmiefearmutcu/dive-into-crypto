@@ -1,6 +1,5 @@
 """Rolling Volume Weighted Average Price (VWAP) indicator."""
 
-from typing import Any
 import pandas as pd
 
 from diveintocrypto_desktop.engine.indicators.base import BaseIndicator, IndicatorResult, Signal
@@ -26,7 +25,9 @@ class VWAPIndicator(BaseIndicator):
         rolling_tp_v = tp_v.rolling(window=period).sum()
         rolling_v = volume.rolling(window=period).sum()
         
-        vwap = rolling_tp_v / (rolling_v + 1e-10)
+        # A zero-volume window has no VWAP: mask the denominator to NaN instead of
+        # dividing by an epsilon (which yields vwap=0 and a divide-by-zero distance).
+        vwap = rolling_tp_v / rolling_v.where(rolling_v > 0)
         
         current_vwap = vwap.iloc[-1]
         current_close = close.iloc[-1]

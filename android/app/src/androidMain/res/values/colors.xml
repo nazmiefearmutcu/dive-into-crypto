@@ -1,7 +1,4 @@
 <resources>
-    <color name="black">#FF000000</color>
-    <color name="white">#FFFFFFFF</color>
     <!-- Dive Into Crypto — "Depth Terminal · Phosphor" window palette (matches DiveColors default). -->
     <color name="dive_bg">#FF05070A</color>
-    <color name="dive_bg_card">#FF0A0E14</color>
 </resources>

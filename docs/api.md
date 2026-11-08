@@ -9,10 +9,28 @@ serving **127.0.0.1:8780**). Source of truth:
 `scan/progress.py` (scan progress) and the `data/` adapters (`cvd`, `basis`,
 `funding`, `orderbook`, `sentiment`, `spot`, `deribit`, `index_info`, `ratios`).
 
+- **Binding**: `uv run dive-desktop` serves `127.0.0.1:8780` (`--port` changes the port,
+  `--no-open` skips the browser). The API has no authentication, so a non-loopback
+  `--host` (anything other than `127.0.0.1`, `localhost` or `::1`) is refused unless
+  `--allow-remote` is passed explicitly; that flag exposes the unauthenticated API to the
+  network and is never the default.
 - **CORS**: `GET` and `POST` (the latter for `POST /api/evidence/grade`,
   `POST /api/evidence/replay`, `POST /api/evidence/suggest-weights` and
   `POST /api/claims`), restricted to `http://127.0.0.1`, `http://localhost` and
   their sub-ports. There are no authenticated endpoints and no other write methods.
+- **Cross-origin refusal**: a state-changing request (any non-`GET`/`HEAD`/`OPTIONS`
+  method) or a WebSocket handshake that carries an `Origin` header outside loopback
+  (`http://127.0.0.1`, `http://localhost`, `http://[::1]`, with any port) is answered
+  **403** `cross-origin request refused` (a WebSocket is closed with code 1008) before any
+  route runs. The one non-loopback exception is same-origin traffic from the UI of a
+  `--allow-remote` service on this machine's own address: the `Origin` authority must equal
+  the request's `Host` header AND that `Host` must name one of this machine's addresses
+  (its hostname, the addresses it resolves to, or the concrete `--host`). Any other host
+  (for example `evil.example` resolving to the LAN address) is refused. Requests without an
+  `Origin` header (curl, scripts) pass through as local tools.
+- **Cross-site reads**: a `GET` under `/api/` that the browser marks `Sec-Fetch-Site: cross-site`
+  is answered **403** `cross-site request refused`, so a foreign page cannot trigger the
+  scan route's archive writes or scan starts through an `<img>` or a navigation.
 - **Static UI**: when `desktop/ui/dist/` exists it is mounted at `/` (that bundle is committed
   on purpose; see [Contributing](../CONTRIBUTING.md)). Frozen builds (PyInstaller) resolve the
   bundle against `sys._MEIPASS` first.
@@ -21,6 +39,10 @@ serving **127.0.0.1:8780**). Source of truth:
   (`symbol_fetch_failed`, `live_fetch_failed`, `macro_unavailable`) or a per-block
   `{"unavailable": <reason>}` — it never substitutes plausible-looking numbers or zeros
   dressed as data. Derived values are transforms of real data, not fabrications.
+  Upstream failures carry stable, user-safe codes instead of raw upstream text:
+  `region_blocked` (HTTP 451), `forbidden` (HTTP 403: refused for this client, possibly a
+  regional restriction; retryable) and `upstream_unavailable` (the HTTP status in parentheses
+  when there is one). The raw message is written to the server log only.
 - **Gates (v0.3)**: every stats object in the evidence surfaces is gated —
   `n < 5` → the object is `{"n": n}` only; `n < 20` → values present with
   `"gated": true`; proportions additionally carry a Wilson 95% interval
@@ -51,7 +73,7 @@ stablecoin/fiat bases excluded, ranked by 24h quote volume (descending).
 
 | Param | Default | Meaning |
 |---|---|---|
-| `limit` | `60` | max rows returned (omit for the full ranked list) |
+| `limit` | `60` | max rows returned, 1–200 (outside that range → 422). Omitting it returns the top 60 by 24h quote volume. |
 
 Row shape (list of):
 
@@ -76,7 +98,7 @@ rows only.
 
 | Param | Default | Meaning |
 |---|---|---|
-| `size` | `10` | max survivors returned (1–100) |
+| `size` | `10` | max survivors returned. Accepted 1–100, but the **effective** size is `min(size, candidatesCap)`: survivors are drawn only from the rows whose whale divergence was computed, so a larger request is clamped (currently to `13`). `meta.size` and the cache key carry the effective value. |
 | `universe_limit` | `30` | how many top-volume symbols to scan (**1–500**; values outside are rejected with 422) |
 | `depth_top` | `50` | top-N rows that get the full 12-TF depth pass (1–200) |
 | `async` | `false` | `async=1` enqueues the scan and returns a `scan_id` immediately instead of blocking |
@@ -93,6 +115,7 @@ Response:
 | `droppedCount` | int | symbols whose data fetch failed (coarse or depth phase), logged with reason |
 | `coarseCount` | int | symbols that completed the phase-1 coarse sweep |
 | `depthTop` | int | the effective depth cap applied |
+| `candidatesCap` | int | max rows that receive whale divergence (currently `13`, a rate-limit budget); `survivors` and `eliminated` together never exceed it, and `size` is clamped to it |
 
 Each row is the full [symbol object](#the-symbol-object) (same shape as `GET
 /api/symbol/{symbol}`, minus the panel-only `book` / `ls_term` blocks) plus these
@@ -112,9 +135,10 @@ ranking/structure fields:
 | `divergence_tier` | string | fixed tier of `divergence.score`: `NONE` / `WEAK` (5–25) / `MODERATE` (25–55) / `STRONG` (55+) on \|score\| — annotation only, elimination logic unchanged |
 | `basis` | object | [basis block](#basis-block) (from ONE batch premiumIndex call + per-symbol premium history) |
 | `funding_lens` | object | [funding lens](#funding-lens) |
-| `spot_perp` | object | [spot lead/lag](#spot-perp); `{"unavailable": "no_spot_market"}` for perp-only listings (normal state) |
+| `spot_perp` | object | [spot lead/lag](#spot-leadlag); `{"unavailable": "no_spot_market"}` for perp-only listings (normal state) |
 | `planning` | object | [planning strip](#planning-strip) (informational geometry from the primary-TF ATR) |
 | `weights_hash` | string | sha256 prefix of the shipped weights map — replay keystone |
+| `indicators` | list | each entry carries `score` and `weighted_score` as described under [the symbol object](#the-symbol-object) |
 
 The panel-only `book` (order-book) block is **not** attached to scan rows; `cascade`
 is attached to `/api/symbol` only (scan rows do not fetch OI/taker series).
@@ -122,8 +146,13 @@ is attached to `/api/symbol` only (scan rows do not fetch OI/taker series).
 Rows are ranked by `netNss` + 0.35 · divergence aligned to the dominant direction.
 
 **Caching**: synchronous results are cached in memory for **20 seconds** keyed on
-`size:universe_limit:depth_top`; concurrent identical requests share one computation
-(single-flight lock). A refresh within the TTL returns the cached response unchanged.
+`size:universe_limit:depth_top` (with `size` already clamped to `candidatesCap`); concurrent
+identical requests share one computation (single-flight lock). A refresh within the TTL returns
+the cached response unchanged.
+
+**Failure and cancellation**: a sync scan that raises, or whose request is cancelled, marks
+its progress record `status: "error"` (cancellation reports `error: "scan cancelled"`); a
+progress record is never left `running` after its request ends.
 
 **Honest cost note**: a 500-symbol scan makes ~2000+ public kline requests (500 × 3
 coarse + top-N × 9 detail) and takes **minutes** — use `async=1` + the progress
@@ -330,15 +359,17 @@ Thin archive reader — archived verdicts for one symbol in a time window.
 |---|---|---|
 | `symbol` | *(all)* | filter by symbol (case-insensitive) |
 | `from_ms` / `to_ms` | *(unbounded)* | inclusive ts window (ms) |
-| `limit` | `500` | max rows (1–2000), oldest first |
+| `limit` | `500` | max rows (1–2000): the newest `limit` records of the window, returned oldest first |
 
 Rows are the raw archive records (see [archive record](#archive-record-v2)).
+Selection is newest-first: when the window holds more than `limit` records, the **newest**
+`limit` are returned. The rows are then ordered oldest first (ascending `ts`).
 
 ## POST /api/evidence/replay
 
 Counterfactual threshold grid over the archive. STRICTLY REPORT-ONLY: nothing writes
 to engine configuration; the response carries `"report_only": true`. Bounded grid:
-buy/sell ∈ {0.3, 0.4, 0.5, 0.6} × strong ∈ {1.0, 1.2, 1.4} × conflict ∈ {0.4, 0.5, 0.6}
+buy/sell ∈ {0.3, 0.4, 0.5, 0.6} × strong ∈ {1.0, 1.2, 1.4} × conflict ∈ {0.3, 0.4, 0.5}
 = 36 cells, computed in a worker thread.
 
 | Param | Default | Meaning |
@@ -355,7 +386,7 @@ Response (heatmap-shaped):
 | `events` | object | `{replayable, skipped_weights_hash, skipped_no_signals}` — only archives stamped with the CURRENT weights hash are replayable |
 | `grid` | list | one cell per threshold combination: `{buy, strong, conflict, n_directional, hit_rate, delta_vs_shipped, shipped_hit_rate, bootstrap_win_vs_shipped, fold_hit_rates, fold_spread}` |
 | `axes` | object | `{buy: […], strong: […], conflict: […], metric: "hit_rate"}` for heatmap rendering |
-| `shipped_cell` | object | `{buy: 0.4, strong: 1.2, conflict: 0.6}` (engine defaults) |
+| `shipped_cell` | object | `{buy: 0.4, strong: 1.2, conflict: 0.4}` (engine defaults) |
 | `bootstrap` | object | `{n: 1000, seed: 42}` — win-rate of each cell vs the shipped cell on identical resamples |
 | `folds` | int | 4 contiguous time folds used for OOS stability |
 | `generated_at` | string | ISO-8601 UTC |
@@ -404,6 +435,12 @@ invalid payload returns **422** `{"error": "invalid_claim", "detail": …}`. Sch
 `{claim_id, registered_at, engine_version, claim, metric ∈ {hit_rate, avg_forward},
 filter ⊆ {verdict, regime, divergence_tier, session, funding_proximity},
 horizon ∈ {1h,4h,24h}, min_n ≥ 1, threshold: {op ∈ {">=","<="}, value}}`.
+A `hit_rate` threshold is a probability and must lie in **[0, 1]** (e.g. `0.5`; `55` or
+`NaN` → 422). `avg_forward` is a return and is not range-bounded.
+
+Built-in claims (CL-001) ship with the app; a frozen build reads them from its bundle and
+writes new registrations to the writable runtime folder. An id that exists in either place
+is refused with 409.
 
 ## GET /api/structure
 
@@ -438,7 +475,7 @@ ratio series, funding history, the 24h ticker, and the whale-divergence inputs.
 | Param | Default | Meaning |
 |---|---|---|
 | `tf` | `1h` | primary timeframe for the verdict + indicator table + `candles` (any of the 12 TFs; invalid → 422) |
-| `end_ms` | *(now)* | HISTORICAL view: all klines are fetched with this instant as `endTime`, so verdicts describe the market *as of* `end_ms`; live current-state extras (order book, settlement countdown, term structure) are skipped for historical views |
+| `end_ms` | *(now)* | HISTORICAL view: all klines are fetched with this instant as `endTime`, so verdicts describe the market *as of* `end_ms`; live current-state extras (order book, settlement countdown, term structure) are skipped for historical views. Integer **≥ 1** (`0` and negatives → 422; the epoch is not a meaningful view) |
 
 **Errors** — if any underlying fetch fails, the endpoint returns **HTTP 502** with:
 
@@ -454,15 +491,15 @@ ratio series, funding history, the 24h ticker, and the whale-divergence inputs.
 |---|---|---|
 | `s` | string | symbol |
 | `name` | string | base asset (symbol minus `USDT`) |
-| `price` | float | last price (24h ticker; falls back to the latest 5m close) |
+| `price` | float \| null | last price (24h ticker; falls back to the latest closed 5m candle). `null` when neither exists (never `0.0`) |
 | `ch` | float | 24h price change, percent |
-| `candles` | list | last ≤120 candles of the chosen TF — raw rows `{t, o, h, l, c, v}` |
+| `candles` | list | last ≤120 candles of the chosen TF — raw rows `{t, o, h, l, c, v}`. `t` is the candle time in **nanoseconds** since the Unix epoch (divide by 1,000,000 for milliseconds; the other timestamps in this document are milliseconds) |
 | `multiTf` | list | one entry per timeframe (12): `{tf, signal, confidence}`; a TF with <60 candles is `{tf, "NEUTRAL", 0}` |
 | `buy` / `sell` / `neutral` | int | counts of `multiTf` entries whose signal contains BUY / SELL / neither |
-| `indicators` | list | the primary-TF indicator table: `{name, signal, weight, value}` per indicator |
+| `indicators` | list | the primary-TF indicator table: `{name, signal, weight, score, weighted_score, value}` per indicator. `score` is the signal's vote (`STRONG_BUY` +2, `BUY` +1, `NEUTRAL` 0, `SELL` −1, `STRONG_SELL` −2); `weighted_score` = `score × weight` (the configured `indicator_weights` entry, `1.0` when absent), rounded to 4 dp — the contribution the consensus sums and the UI's "opposing evidence" ranking reads. `weight` `0` (ATR filter) gives `weighted_score` `0` |
 | `finalSignal` | string | consensus verdict (`BUY`/`SELL`/`NEUTRAL`) |
 | `confidence` | int | 0–100 consensus confidence |
-| `action` | string | `"AL"` / `"SAT"` / `"BEKLE"` (derived verbatim from `finalSignal`) |
+| `action` | string | direction-only token: `"LONG"` (`finalSignal` is a BUY), `"SHORT"` (a SELL) or `"NONE"` (no clear lean). Describes the lean; it is not an instruction |
 | `reason` | string | human-readable consensus rationale |
 | `risk` | string | `LOW` / `MEDIUM` / `HIGH` |
 | `series` | object | real data series (5m window, last 48 points): `oi`, `glob`/`acc`/`pos`, `taker`, `funding`, `price`, `bias` |
@@ -478,12 +515,12 @@ ratio series, funding history, the 24h ticker, and the whale-divergence inputs.
 | `vol` | object | [vol term structure](#vol-term-structure) (from the symbol's own 1h candles) |
 | `cone` | object | [vol cone](#vol-cone); **omitted** when returns are insufficient |
 | `cascade` | object | [cascade proxy](#cascade-proxy); **omitted** when no OI series was fetched |
-| `cvd` | object | rolling **cumulative volume delta** over the last ≤1000 public aggTrades (15-minute window); on failure `{unavailable: reason}` — never zeros |
+| `cvd` | object | rolling **cumulative volume delta** over the last ≤1000 public aggTrades (15-minute window); on failure `{unavailable: <code>}` — `region_blocked` (HTTP 451), `forbidden` (HTTP 403), or `upstream_unavailable` (with the HTTP status in parentheses when there is one) — never zeros |
 | `basis` | object | [basis block](#basis-block) — panel-only |
 | `funding_lens` | object | [funding lens](#funding-lens) — panel-only |
 | `book` | object | [order-book panel](#order-book-panel) — panel-only, 10s TTL |
 | `ls_term` | object | [L/S term structure](#ls-term-structure) — panel-only (16 rate-limited calls) |
-| `spot_perp` | object | [spot lead/lag](#spot-perp) — panel-only |
+| `spot_perp` | object | [spot lead/lag](#spot-leadlag) — panel-only |
 
 ### Basis block
 
@@ -493,7 +530,10 @@ ratio series, funding history, the 24h ticker, and the whale-divergence inputs.
 ```
 
 `basis_bps` = perp mark vs index (bps). `zscore` is vs the symbol's own trailing
-`premiumIndexKlines` history (null below 30 points). `curve` carries the annualized
+`premiumIndexKlines` history (null below 30 points). Both sides are in **percent units**:
+the current premium is `(mark − index) / index × 100` and the trailing history is Binance's
+premium fraction × 100, so the z-score compares like with like (the history's last point is
+excluded from its own mean/σ; σ is population σ, and `zscore` is null when σ is zero). `curve` carries the annualized
 premium of each quarterly delivery contract vs the same index; a pair without delivery
 contracts keeps its perp leg and flags `partial: true`. `label` ∈ `deep_discount` /
 `discount` / `balanced` / `premium` / `deep_premium` (half-open bands at ±10/±50 bps,
@@ -551,13 +591,14 @@ insufficient.
 ### Planning strip
 
 ```json
-{ "sl_distance_pct": 3.0, "tp_1r_pct": 2.0, "tp_2r_pct": 4.0, "tp_3r_pct": 6.0,
+{ "sl_distance_pct": 3.0, "tp_1r_pct": 3.0, "tp_2r_pct": 6.0, "tp_3r_pct": 9.0,
   "envelope": { "h1": 2.0, "h4": 4.0, "h24": 9.798 }, "atr_pct": 2.0,
   "atr_tf_hours": 1.0, "note": "informational geometry only — no order semantics" }
 ```
 
-1.5×ATR stop distance, the 1R/2R/3R ladder, and the ±1σ expected-move envelope
-(ATR%·√hours). Missing ATR → `{"unavailable": "atr_missing"}`.
+1.5×ATR stop distance (`sl_distance_pct`), the 1R/2R/3R ladder, and the ±1σ expected-move
+envelope (ATR%·√hours). 1R equals the stop distance (1.5 × ATR), so the sample above (ATR 2.0)
+gives 1R = 3.0, 2R = 6.0, 3R = 9.0. Missing ATR → `{"unavailable": "atr_missing"}`.
 
 ### Order-book panel
 
@@ -630,7 +671,7 @@ circuit-breaker; it never blocks other data. NO skew interpolation (phase 2 late
 
 | Field | Type | Meaning |
 |---|---|---|
-| `BTC` / `ETH` | object | `{dvol_level, put_call_oi_ratio, atm_iv_30d, generated_at}` or `{"unavailable": "deribit_unreachable"}` |
+| `BTC` / `ETH` | object | `{dvol_level, put_call_oi_ratio, atm_iv_30d, generated_at}` or `{"unavailable": <code>}` where `<code>` is `deribit_unreachable`, `deribit_forbidden` (HTTP 403: refused for this client, possibly a regional restriction; retryable) or `deribit_region_blocked` (HTTP 451) |
 | `generated_at` | string | ISO-8601 UTC |
 
 `atm_iv_30d` = mean mark_iv of the strikes nearest the underlying on the expiry
@@ -643,7 +684,7 @@ Top movers from the top-200 universe, by 24h % change.
 
 | Param | Default | Meaning |
 |---|---|---|
-| `limit` | `8` | rows per side |
+| `limit` | `8` | rows per side, 1–200 (outside that range → 422) |
 
 Response: `{ "gainers": [row…], "losers": [row…] }` — each row has the same shape as
 `GET /api/universe` rows, `gainers` sorted by `ch` descending, `losers` ascending.

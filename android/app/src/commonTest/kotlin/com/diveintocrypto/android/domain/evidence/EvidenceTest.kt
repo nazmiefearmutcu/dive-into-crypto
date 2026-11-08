@@ -40,6 +40,23 @@ class EvidenceStoreTest {
     }
 
     @Test
+    fun `coverage is optional - pre-coverage lines decode as null and partial runs keep their stamp`() {
+        val kv = InMemoryKeyValueStore()
+        val store = EvidenceStore(kv)
+        // A line written before the field existed (no "coverage" key) still decodes.
+        val legacyLine = """{"ts":1,"symbol":"BTCUSDT","verdict":"BUY","confidence":60,"risk":"N/A","price":100.0,"dominantDir":1}"""
+        kv.putString(EvidenceStore.KEY, legacyLine)
+        store.append(record(ts = 2L).copy(coverage = VerdictRecord.COVERAGE_ATTEMPTED))
+        store.append(record(ts = 3L).copy(coverage = VerdictRecord.COVERAGE_OK))
+
+        val all = store.readAll()
+        assertEquals(3, all.size)
+        assertNull(all[0].coverage)
+        assertEquals(VerdictRecord.COVERAGE_ATTEMPTED, all[1].coverage)
+        assertEquals(VerdictRecord.COVERAGE_OK, all[2].coverage)
+    }
+
+    @Test
     fun `appendAll respects the 2000-line ring cap keeping the newest`() {
         val store = EvidenceStore(InMemoryKeyValueStore())
         val total = EvidenceStore.RING_CAP + 50
@@ -173,16 +190,101 @@ class EvidenceGraderTest {
         assertEquals(1.0, grade.byConfidence.getValue("76-100").hitRate!!, 1e-9)
     }
 
+    private val h1 = 3_600_000L
+
+    /** A "now" far past every candle in these fixtures, so every horizon candle is closed. */
+    private val allClosed = 1_000L * 3_600_000L
+
     @Test
-    fun `forwardReturnPct uses the candle covering the record and rejects non-covering data`() {
-        val opens = listOf(0L, 3_600_000L, 7_200_000L)
+    fun `forwardReturnPct runs from the verdict price to the horizon candle close`() {
+        val opens = listOf(0L, h1, 2 * h1)
         val closes = listOf(100.0, 110.0, 121.0)
-        // Record inside candle 0 → base 100, last 121 → +21%.
-        assertEquals(21.0, EvidenceGrader.forwardReturnPct(opens, closes, 1_000L)!!, 1e-9)
-        // Record inside candle 1 → base 110 → +10%.
-        assertEquals(10.0, EvidenceGrader.forwardReturnPct(opens, closes, 3_600_001L)!!, 1e-9)
-        // Record before the first candle → honestly ungradable.
-        assertNull(EvidenceGrader.forwardReturnPct(opens, closes, -5L))
-        assertNull(EvidenceGrader.forwardReturnPct(emptyList(), emptyList(), 1L))
+        // Record at 1s, base = verdict price 100, horizon 1h → target 1h+1s sits in candle 1 → close 110 → +10%.
+        assertEquals(10.0, EvidenceGrader.forwardReturnPct(opens, closes, 1_000L, 100.0, h1, allClosed)!!, 1e-9)
+        // Same record, 2h horizon → target 2h+1s sits in candle 2 → close 121 → +21%.
+        assertEquals(21.0, EvidenceGrader.forwardReturnPct(opens, closes, 1_000L, 100.0, 2 * h1, allClosed)!!, 1e-9)
+    }
+
+    @Test
+    fun `forwardReturnPct never uses a candle close before the record as the base`() {
+        // Candle 0 closes at 105 (after the record) — the old base would have been 105.
+        val opens = listOf(0L, h1)
+        val closes = listOf(105.0, 103.0)
+        // Verdict price 100 at ts 1000, horizon 1h → candle 1 close 103 → +3% (not -1.9%).
+        assertEquals(3.0, EvidenceGrader.forwardReturnPct(opens, closes, 1_000L, 100.0, h1, allClosed)!!, 1e-9)
+    }
+
+    @Test
+    fun `forwardReturnPct is pending until the horizon candle exists and rejects bad base`() {
+        val opens = listOf(0L, h1, 2 * h1)
+        val closes = listOf(100.0, 110.0, 121.0)
+        // Horizon 3h → target 3h+1s is past the newest candle's window → not gradable yet.
+        assertNull(EvidenceGrader.forwardReturnPct(opens, closes, 1_000L, 100.0, 3 * h1, allClosed))
+        // Target before the first candle → not gradable.
+        assertNull(EvidenceGrader.forwardReturnPct(opens, closes, -10 * h1, 100.0, h1, allClosed))
+        // Degenerate base or empty / mismatched inputs → null.
+        assertNull(EvidenceGrader.forwardReturnPct(opens, closes, 1_000L, 0.0, h1, allClosed))
+        assertNull(EvidenceGrader.forwardReturnPct(opens, closes, 1_000L, Double.NaN, h1, allClosed))
+        assertNull(EvidenceGrader.forwardReturnPct(emptyList(), emptyList(), 1L, 100.0, h1, allClosed))
+        assertNull(EvidenceGrader.forwardReturnPct(opens, closes.dropLast(1), 1_000L, 100.0, h1, allClosed))
+    }
+
+    @Test
+    fun `a horizon candle that is still forming is pending, not a final close`() {
+        val opens = listOf(0L, h1)
+        val closes = listOf(100.0, 110.0)
+        // Target h1+1s sits in candle 1, which opens at h1 and closes at 2h1. At now = h1+10s the
+        // candle is still open, so its provisional close (110) must not be graded.
+        assertNull(EvidenceGrader.forwardReturnPct(opens, closes, 1_000L, 100.0, h1, h1 + 10_000L))
+        // Once the candle has closed (now = 2h1) the same record grades to +10%.
+        assertEquals(10.0, EvidenceGrader.forwardReturnPct(opens, closes, 1_000L, 100.0, h1, 2 * h1)!!, 1e-9)
+    }
+
+    @Test
+    fun `the candle containing the verdict timestamp is never the horizon candle`() {
+        val opens = listOf(0L, h1, 2 * h1)
+        val closes = listOf(500.0, 110.0, 121.0)
+        // Verdict at 1h+5min sits in candle 1 (open h1). A short horizon of 10 min targets 1h+15min,
+        // which is still inside that same candle. Its close (110) is partly before the verdict,
+        // so it must not be used; the record stays pending instead.
+        assertNull(EvidenceGrader.forwardReturnPct(opens, closes, h1 + 300_000L, 100.0, 600_000L, allClosed))
+    }
+
+    @Test
+    fun `a NEUTRAL-only bucket has no hit rate instead of a structural zero`() {
+        val neutral = (0 until 6).map { EvidenceGrader.GradedSample("NEUTRAL", 40, 0, 1.0) }
+        val stats = EvidenceGrader.stats(neutral)
+        assertEquals(6, stats.samples)
+        assertNull(stats.hitRate, "NEUTRAL makes no directional claim")
+        assertNull(stats.hitRateLo)
+        assertNull(stats.hitRateHi)
+        assertEquals(1.0, stats.medianReturnPct, 1e-9)
+    }
+
+    @Test
+    fun `NEUTRAL samples are left out of the directional hit rate, not counted as misses`() {
+        // 6 directional (4 hits, 2 misses) + 4 NEUTRAL: the rate is 4 of 6, not 4 of 10.
+        val mixed = listOf(
+            EvidenceGrader.GradedSample("BUY", 80, 1, 1.0),
+            EvidenceGrader.GradedSample("BUY", 80, 1, 1.0),
+            EvidenceGrader.GradedSample("BUY", 80, 1, 1.0),
+            EvidenceGrader.GradedSample("BUY", 80, 1, 1.0),
+            EvidenceGrader.GradedSample("BUY", 80, 1, -1.0),
+            EvidenceGrader.GradedSample("BUY", 80, 1, -1.0),
+        ) + (0 until 4).map { EvidenceGrader.GradedSample("NEUTRAL", 80, 0, 1.0) }
+        val stats = EvidenceGrader.stats(mixed)
+        assertEquals(10, stats.samples)
+        assertEquals(4.0 / 6.0, stats.hitRate!!, 1e-9)
+        assertTrue(stats.gated, "6 directional samples is below the ungated floor of 20")
+    }
+
+    @Test
+    fun `a mixed bucket with too few directional samples shows no rate`() {
+        // 3 directional + 5 NEUTRAL: below MIN_BUCKET_N directional samples, so no rate.
+        val mixed = (0 until 3).map { EvidenceGrader.GradedSample("BUY", 80, 1, 1.0) } +
+            (0 until 5).map { EvidenceGrader.GradedSample("NEUTRAL", 80, 0, 1.0) }
+        val stats = EvidenceGrader.stats(mixed)
+        assertEquals(8, stats.samples)
+        assertNull(stats.hitRate)
     }
 }

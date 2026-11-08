@@ -1,8 +1,6 @@
 """TTM Squeeze indicator."""
 
-from typing import Any
 import pandas as pd
-import numpy as np
 
 from diveintocrypto_desktop.engine.indicators.base import BaseIndicator, IndicatorResult, Signal
 
@@ -39,18 +37,22 @@ class TTMSqueezeIndicator(BaseIndicator):
         kc_upper = sma + kc_mult * atr
         kc_lower = sma - kc_mult * atr
         
-        # Squeeze On: BB is completely inside KC
-        squeeze_on = (bb_upper < kc_upper) & (bb_lower > kc_lower)
-        
+        # Squeeze On: BB is completely inside KC. Mask warm-up bars to NaN: a NaN
+        # comparison evaluates to False, which would otherwise read as "no squeeze".
+        bands_valid = sma.notna() & std.notna() & atr.notna()
+        squeeze_on = ((bb_upper < kc_upper) & (bb_lower > kc_lower)).where(bands_valid)
+
         # Momentum proxy
         momentum = close - sma
-        
+
         current_sq = squeeze_on.iloc[-1]
-        prev_sq = squeeze_on.iloc[-2] if len(squeeze_on) >= 2 else current_sq
+        prev_raw = squeeze_on.iloc[-2] if len(squeeze_on) >= 2 else current_sq
+        prev_sq = bool(prev_raw) if pd.notna(prev_raw) else False
         current_mom = momentum.iloc[-1]
-        
-        if pd.isna(current_sq):
+
+        if pd.isna(current_sq) or pd.isna(current_mom):
              return self._make_result(Signal.NEUTRAL, "Squeeze data insufficient")
+        current_sq = bool(current_sq)
              
         raw = {
             "squeeze_on": bool(current_sq),

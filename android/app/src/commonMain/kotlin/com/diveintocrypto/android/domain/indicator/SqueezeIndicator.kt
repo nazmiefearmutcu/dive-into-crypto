@@ -17,7 +17,9 @@ class SqueezeIndicator(config: IndicatorConfig) : BaseIndicator(config) {
         val bbMult = config.getDouble("bb_mult", 2.0)
         val kcMult = config.getDouble("kc_mult", 1.5)
 
-        if (candles.isEmpty()) {
+        // period < 2: sample std is undefined and Series.rollingStd requires a window >= 2
+        // (squeeze.py gets NaN bands and reports insufficient data).
+        if (period < 2 || candles.isEmpty()) {
             return result(Signal.NEUTRAL, "Squeeze data insufficient")
         }
 

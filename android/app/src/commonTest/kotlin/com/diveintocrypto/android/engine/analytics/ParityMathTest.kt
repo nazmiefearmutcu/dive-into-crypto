@@ -38,7 +38,7 @@ class ParityMathTest {
             nowMs = now,
         )!!
         assertEquals(0.01, lens.predictedRatePct, 1e-12)
-        assertEquals(0.02, lens.lastSettledRatePct, 1e-12)
+        assertEquals(0.02, lens.lastSettledRatePct!!, 1e-12)
         // Simple annualisation: 0.0001 × (8760/8) × 100 = 10.95%/yr.
         assertEquals(10.95, lens.aprPct, 1e-9)
         assertEquals(600L, lens.secondsToFunding)
@@ -51,9 +51,19 @@ class ParityMathTest {
     }
 
     @Test
-    fun `fundingLens rejects non-finite rates`() {
+    fun `fundingLens rejects a non-finite predicted rate`() {
         assertNull(FundingAnalytics.fundingLens(Double.NaN, 0.0, 1, 0))
-        assertNull(FundingAnalytics.fundingLens(0.0, Double.POSITIVE_INFINITY, 1, 0))
+        assertNull(FundingAnalytics.fundingLens(Double.POSITIVE_INFINITY, 0.0, 1, 0))
+    }
+
+    @Test
+    fun `fundingLens keeps the predicted side when only the settled rate is missing`() {
+        val missing = FundingAnalytics.fundingLens(0.0001, null, nextFundingMs = 0, nowMs = 0)!!
+        assertEquals(0.01, missing.predictedRatePct, 1e-12)
+        assertNull(missing.lastSettledRatePct)
+        assertEquals(10.95, missing.aprPct, 1e-9)
+        val nonFinite = FundingAnalytics.fundingLens(0.0001, Double.NaN, nextFundingMs = 0, nowMs = 0)!!
+        assertNull(nonFinite.lastSettledRatePct)
     }
 
     // ── Vol cone (desktop structure.py::vol_cone parity — log-normal envelope) ──

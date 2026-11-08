@@ -1,4 +1,3 @@
-import pytest
 from pathlib import Path
 
 # Resolved from this file so the check runs from any checkout.

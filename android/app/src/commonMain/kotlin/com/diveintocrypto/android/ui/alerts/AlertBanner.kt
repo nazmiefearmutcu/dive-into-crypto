@@ -16,11 +16,16 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -39,6 +44,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.diveintocrypto.android.AppContainer
 import com.diveintocrypto.android.domain.alerts.AlertKind
 import com.diveintocrypto.android.domain.alerts.FiredAlert
+import com.diveintocrypto.android.ui.i18n.LocalDiveStrings
 import com.diveintocrypto.android.ui.theme.DiveColors
 import com.diveintocrypto.android.ui.theme.DiveDims
 import com.diveintocrypto.android.ui.theme.DiveFonts
@@ -54,6 +60,12 @@ import com.diveintocrypto.android.ui.theme.DiveFonts
 @Composable
 fun AlertBannerHost(container: AppContainer, modifier: Modifier = Modifier) {
     val banner by container.alertBanner.collectAsStateWithLifecycle()
+    val rules by container.rules.collectAsStateWithLifecycle()
+    // Last shown alert, so the exit animation keeps its content instead of collapsing to nothing.
+    var lastShown by remember { mutableStateOf<FiredAlert?>(null) }
+    LaunchedEffect(banner) {
+        banner?.let { lastShown = it }
+    }
 
     AnimatedVisibility(
         visible = banner != null,
@@ -61,10 +73,10 @@ fun AlertBannerHost(container: AppContainer, modifier: Modifier = Modifier) {
         exit = fadeOut() + slideOutVertically(targetOffsetY = { -it }),
         modifier = modifier,
     ) {
-        val fired = banner ?: return@AnimatedVisibility
-        val rule = container.rules.value.firstOrNull { it.id == fired.ruleId }
+        val fired = banner ?: lastShown ?: return@AnimatedVisibility
+        val rule = rules.firstOrNull { it.id == fired.ruleId }
         val accent = bannerColor(fired)
-        val strings = com.diveintocrypto.android.ui.i18n.LocalDiveStrings.current
+        val strings = LocalDiveStrings.current
 
         Row(
             modifier = Modifier
@@ -95,7 +107,7 @@ fun AlertBannerHost(container: AppContainer, modifier: Modifier = Modifier) {
                     fontFamily = DiveFonts.body,
                 )
                 Text(
-                    text = AlertLabels.ruleLineLabel(rule),
+                    text = AlertLabels.ruleLineLabel(rule, strings),
                     color = DiveColors.Text,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -103,15 +115,17 @@ fun AlertBannerHost(container: AppContainer, modifier: Modifier = Modifier) {
                 )
             }
             // Dismiss
+            // 48dp touch target around the glyph (PS-30).
             Box(
                 modifier = Modifier
+                    .size(48.dp)
                     .clip(RoundedCornerShape(6.dp))
                     .clickable { container.dismissAlertBanner() }
                     .semantics {
                         role = Role.Button
                         contentDescription = strings.a11yDismissBanner
-                    }
-                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                    },
+                contentAlignment = Alignment.Center,
             ) {
                 Text(
                     text = "×",

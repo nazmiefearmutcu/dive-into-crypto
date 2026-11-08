@@ -2,9 +2,9 @@
 jittered exponential backoff honoring Retry-After; other errors propagate at once.
 """
 
-import asyncio
 from unittest.mock import patch
 
+import aiohttp
 import pytest
 
 from diveintocrypto_desktop.data import http
@@ -92,7 +92,7 @@ async def test_get_json_honors_retry_after_header():
 async def test_get_json_does_not_retry_client_errors():
     session = _FakeSession([_FakeResponse(400, None)])
     with patch.object(http, "get_session", return_value=session):
-        with pytest.raises(Exception):
+        with pytest.raises(aiohttp.ClientResponseError):
             await http.get_json("https://fapi.example/fapi/v1/x")
     assert session.calls == 1  # 4xx (bad symbol etc.) must not be retried
 

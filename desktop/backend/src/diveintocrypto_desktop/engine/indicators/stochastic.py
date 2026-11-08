@@ -1,6 +1,5 @@
 """Stochastic Oscillator indicator."""
 
-from typing import Any
 import pandas as pd
 
 from diveintocrypto_desktop.engine.indicators.base import BaseIndicator, IndicatorResult, Signal
@@ -34,7 +33,6 @@ class StochasticIndicator(BaseIndicator):
         current_k = k_line.iloc[-1]
         current_d = d_line.iloc[-1]
         prev_k = k_line.iloc[-2] if len(k_line) >= 2 else current_k
-        prev_d = d_line.iloc[-2] if len(d_line) >= 2 else current_d
 
         if pd.isna(current_k) or pd.isna(current_d):
             return self._make_result(Signal.NEUTRAL, "Stochastic data insufficient")

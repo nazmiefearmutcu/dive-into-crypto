@@ -6,7 +6,7 @@ import com.diveintocrypto.android.engine.schema.Venue
 import kotlinx.coroutines.flow.Flow
 
 /**
- * A venue connector — Kotlin analogue of Crypcodile's `exchanges/base.py`.
+ * A venue connector — Kotlin analogue of Crocodile's `crocodile/core/connector.py`.
  * Implementations stream canonical [Record]s live and optionally backfill
  * history via REST. Each connector owns exactly one [Venue].
  */

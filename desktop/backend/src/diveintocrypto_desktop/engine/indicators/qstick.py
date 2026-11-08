@@ -5,7 +5,6 @@ by price so the threshold is scale-free. Positive = bodies close above their ope
 (accumulation). Causal (uses only the closed window).
 """
 
-import numpy as np
 import pandas as pd
 
 from diveintocrypto_desktop.engine.indicators.base import BaseIndicator, IndicatorResult, Signal

@@ -73,9 +73,10 @@ class MiniTickerTest {
     }
 
     @Test
-    fun `mergeRest supplies changePercent but never clobbers a fresher WS price`() {
+    fun `mergeRest supplies changePercent and keeps a FRESH WS price`() {
+        // WS tick at t=60s, REST snapshot at t=61s → the WS price is fresh (1s old).
         val wsMerged = mapOf(
-            "BTCUSDT" to LiveTickerEngine.LiveTicker("BTCUSDT", 65_100.0, null, 2_000L, "WS"),
+            "BTCUSDT" to LiveTickerEngine.LiveTicker("BTCUSDT", 65_100.0, null, 60_000L, "WS"),
         )
         val rest = listOf(
             Ticker24h("BTCUSDT", 64_900.0, 1.7, 9_000_000.0, 66_000.0, 63_500.0),
@@ -83,9 +84,9 @@ class MiniTickerTest {
         )
         val out = LiveTickerEngine.mergeRest(wsMerged, rest, nowMs = 61_000L)
 
-        // WS price is fresher → survives; change% updated from REST.
+        // WS price is fresh → survives; change% updated from REST.
         val btc = out.getValue("BTCUSDT")
-        assertEquals(65_100.0, btc.price, 1e-9, "REST must not clobber the fresher WS price")
+        assertEquals(65_100.0, btc.price, 1e-9, "REST must not clobber a fresh WS price")
         assertEquals(1.7, btc.changePercent!!, 1e-9)
         assertEquals("WS", btc.source)
 
@@ -95,6 +96,22 @@ class MiniTickerTest {
         assertEquals(-0.5, eth.changePercent!!, 1e-9)
         assertEquals("REST", eth.source)
         assertTrue(eth.ts == 61_000L)
+    }
+
+    @Test
+    fun `mergeRest replaces a STALE WS price once the socket has been silent`() {
+        // Last WS tick at t=2s; the socket dropped. REST at t=61s is the newest real price.
+        val wsMerged = mapOf(
+            "BTCUSDT" to LiveTickerEngine.LiveTicker("BTCUSDT", 65_100.0, null, 2_000L, "WS"),
+        )
+        val rest = listOf(Ticker24h("BTCUSDT", 64_900.0, 1.7, 9_000_000.0, 66_000.0, 63_500.0))
+        val out = LiveTickerEngine.mergeRest(wsMerged, rest, nowMs = 61_000L)
+
+        val btc = out.getValue("BTCUSDT")
+        assertEquals(64_900.0, btc.price, 1e-9, "a stale WS price must not stand in for the current one")
+        assertEquals(1.7, btc.changePercent!!, 1e-9)
+        assertEquals("REST", btc.source)
+        assertEquals(61_000L, btc.ts)
     }
 
     @Test

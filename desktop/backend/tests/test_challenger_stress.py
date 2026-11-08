@@ -28,7 +28,7 @@ def test_choppiness_insufficient_data():
     
     # 1. Empty DataFrame (handling error)
     df_empty = pd.DataFrame(columns=["high", "low", "close"])
-    with pytest.raises(Exception):
+    with pytest.raises(IndexError):  # the indicator indexes the last bar of an empty frame
         chop_ind.calculate(df_empty)
         
     # 2. Length < period

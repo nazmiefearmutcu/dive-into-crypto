@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
@@ -77,5 +78,98 @@ class WsReconnectTest {
         // Clean close after a successful frame → backoff resets → single 1000ms wait.
         assertEquals(listOf(1_000L), delays)
         assertEquals(2, calls)
+    }
+
+    @Test
+    fun `downstream exception propagates instead of triggering a reconnect`() = runTest {
+        var calls = 0
+        val upstream: () -> kotlinx.coroutines.flow.Flow<Int> = {
+            calls++
+            flow { emit(1); emit(2) }
+        }
+        val delays = mutableListOf<Long>()
+
+        val failure = assertFailsWith<IllegalStateException> {
+            reconnectingFlow(upstream, delayFn = { delays.add(it) }).collect {
+                throw IllegalStateException("collector failed")
+            }
+        }
+
+        assertEquals("collector failed", failure.message)
+        // The collector's exception must NOT be treated as a socket drop:
+        // no re-subscribe, no backoff delay.
+        assertEquals(1, calls)
+        assertTrue(delays.isEmpty(), "unexpected reconnect delays: $delays")
+    }
+
+    @Test
+    fun `regional block is surfaced once and never retried`() = runTest {
+        var calls = 0
+        val upstream: () -> kotlinx.coroutines.flow.Flow<Int> = {
+            calls++
+            flow { throw UpstreamHttpException("klines", 451) }
+        }
+        val delays = mutableListOf<Long>()
+
+        val failure = assertFailsWith<UpstreamHttpException> {
+            reconnectingFlow(upstream, delayFn = { delays.add(it) }).collect { }
+        }
+
+        assertEquals(451, failure.status)
+        assertEquals(1, calls)
+        assertTrue(delays.isEmpty(), "a regional block must not be retried: $delays")
+    }
+
+    @Test
+    fun `a 403 refusal is retried with backoff so the feed resumes once it clears`() = runTest {
+        var calls = 0
+        val upstream: () -> kotlinx.coroutines.flow.Flow<Int> = {
+            calls++
+            when (calls) {
+                1 -> flow { throw UpstreamHttpException("klines", 403) } // temporary WAF refusal
+                else -> flow { emit(7) }
+            }
+        }
+        val delays = mutableListOf<Long>()
+
+        val result = reconnectingFlow(upstream, delayFn = { delays.add(it) }).take(1).toList()
+
+        assertEquals(listOf(7), result)
+        assertEquals(listOf(1_000L), delays, "one backed-off retry, then the stream resumes")
+        assertEquals(2, calls)
+    }
+
+    @Test
+    fun `a 403 handshake is not classified as a region block`() {
+        val refused = IllegalStateException("Handshake exception, expected status code 101 but was 403")
+        val mapped = refused.asUpstreamIfHandshake("wss://fstream.binance.com/ws")
+        assertTrue(!mapped.isRegionBlocked())
+        assertTrue(mapped.isForbidden())
+    }
+
+    @Test
+    fun `a refused WebSocket upgrade keeps its HTTP status so a region block is recognised`() {
+        val refused = IllegalStateException("Handshake exception, expected status code 101 but was 451")
+        val mapped = refused.asUpstreamIfHandshake("wss://fstream.binance.com/ws")
+        assertTrue(mapped.isRegionBlocked())
+        // Unrelated failures are returned untouched.
+        val other = IllegalStateException("socket reset")
+        assertTrue(other.asUpstreamIfHandshake("x") === other)
+    }
+
+    @Test
+    fun `take after many frames ends the flow without reconnecting`() = runTest {
+        var calls = 0
+        val upstream: () -> kotlinx.coroutines.flow.Flow<Int> = {
+            calls++
+            flow { var i = 0; while (true) emit(i++) }
+        }
+        val delays = mutableListOf<Long>()
+
+        val result = reconnectingFlow(upstream, delayFn = { delays.add(it) }).take(5).toList()
+
+        assertEquals(listOf(0, 1, 2, 3, 4), result)
+        assertEquals(1, calls)
+        assertTrue(delays.isEmpty())
     }
 }

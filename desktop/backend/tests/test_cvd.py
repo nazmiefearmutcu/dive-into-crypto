@@ -2,7 +2,6 @@
 aggTrades payloads, snapshot cache, honest unavailability. Fully offline.
 """
 
-import asyncio
 
 import pytest
 
@@ -125,10 +124,25 @@ async def test_snapshot_unavailable_on_failure():
     async def boom(symbol, limit=cvd.AGG_TRADES_LIMIT):
         raise RuntimeError("binance 451 unreachable")
 
+    cvd.reset_cache()
     with patch_fetch(boom):
         snap = await cvd.snapshot("BTCUSDT")
-    assert set(snap) == {"unavailable"}
-    assert "451" in snap["unavailable"]
+    assert snap == {"unavailable": "upstream_unavailable"}
+
+
+class _RegionBlocked(Exception):
+    status = 451  # carries the HTTP status, like a Binance 451 answer
+
+
+@pytest.mark.asyncio
+async def test_snapshot_region_block_is_a_stable_code_not_raw_upstream_text():
+    async def blocked(symbol, limit=cvd.AGG_TRADES_LIMIT):
+        raise _RegionBlocked("upstream 451 code=0 msg='Service unavailable from a restricted location'")
+
+    cvd.reset_cache()  # the failure above is cached per symbol: start clean
+    with patch_fetch(blocked):
+        snap = await cvd.snapshot("BTCUSDT")
+    assert snap == {"unavailable": "region_blocked"}  # no code and no Binance wording in the payload
 
 
 @pytest.mark.asyncio

@@ -20,15 +20,16 @@ data class ConsensusConfig(
     val buyThreshold: Double = 0.4,
     val sellThreshold: Double = -0.4,
     val strongSellThreshold: Double = -1.2,
-    val conflictRatioThreshold: Double = 0.6,
+    // Shipped 0.4: minority/active never exceeds 0.5, so 0.6 could never fire.
+    val conflictRatioThreshold: Double = 0.4,
     val confidenceThreshold: Int = 25,
     val minConfidenceForTrade: Int = 30,
     val weights: Map<String, Double> = DEFAULT_F2_WEIGHTS,
 )
 
 /** 
- * F2 Consensus Weight Matrix. 
- * Supports dynamic scaling via Regime Analysis.
+ * Core consensus weights (15 names). Values match the desktop reference 
+ * `indicator_weights` in engine/config/default.yaml. Regime scaling is display-only (Regime.kt).
  */
 val DEFAULT_F2_WEIGHTS: Map<String, Double> = mapOf(
     "rsi" to 1.5,
@@ -38,13 +39,13 @@ val DEFAULT_F2_WEIGHTS: Map<String, Double> = mapOf(
     
     "macd" to 2.0,
     "ema_cross" to 1.8,
-    "sma_cross" to 1.5,
-    "ichimoku" to 1.5,
-    "psar" to 1.2,
+    "sma_cross" to 1.8,
+    "ichimoku" to 2.0,
+    "psar" to 1.3,
     
     "bollinger" to 1.5,
     "mfi" to 1.2,
-    "obv" to 1.5,
+    "obv" to 1.2,
     "roc" to 1.0,
     
     "adx_di" to 1.5,
@@ -65,7 +66,6 @@ class ConsensusEngine(
     private val defaultSettings = SettingsData(
         confidenceThreshold = 25,
         minConfidenceForTrade = 30,
-        enableRegimeMatrix = true,
         scanSurvivors = 50,
         scanParallelism = 8,
         weights = fallbackWeights,
@@ -78,15 +78,19 @@ class ConsensusEngine(
         weightAccountLs = 0.15
     )
 
-    fun evaluate(results: List<IndicatorResult>): ConsensusOutput {
+    fun evaluate(
+        results: List<IndicatorResult>,
+        labels: ConsensusLabels = EnglishConsensusLabels,
+    ): ConsensusOutput {
         val settings = settingsStore?.getSettings() ?: defaultSettings
         val config = ConsensusConfig(
             confidenceThreshold = settings.confidenceThreshold,
             minConfidenceForTrade = settings.minConfidenceForTrade,
             weights = settings.weights
         )
-        val dynamicWeights = applyRegimeMatrix(results, config.weights, settings.enableRegimeMatrix)
-        val s = Scorer.compute(results, dynamicWeights)
+        // Canonical verdict: configured weights only. Regime scaling is observational
+        // (Regime.evaluate) and must never change the verdict (desktop parity).
+        val s = Scorer.compute(results, config.weights)
 
         var signal = when {
             s.weightedScore >= config.strongBuyThreshold -> Signal.STRONG_BUY
@@ -111,7 +115,7 @@ class ConsensusEngine(
         val participationBonus = participation * 10
         var rawConfidence = baseConfidence + agreementBonus + participationBonus
         
-        val riskData = RiskAssessor.assess(results, s, RiskConfig())
+        val riskData = RiskAssessor.assess(results, s, RiskConfig(), labels)
         val riskPenalty = riskData.riskScore * 3.0
         rawConfidence -= riskPenalty
         
@@ -122,8 +126,17 @@ class ConsensusEngine(
             && (confidence >= config.minConfidenceForTrade)
             && (riskData.riskLevel != RiskLevel.HIGH)
 
-        val riskStr = if (riskData.riskFactors.isNotEmpty()) " Risks: ${riskData.riskFactors.joinToString("; ")}" else ""
-        val reason = "Signal=${signal.name} Conf=${confidence}% Risk=${riskData.riskLevel.name} Buy=${s.buyCount}/Sell=${s.sellCount}/Neut=${s.neutralCount} WScore=${s.weightedScore.format(3)}" + riskStr
+        // Desktop reference shows at most three risk factors in the reason line (engine.py).
+        val reason = labels.reasonLine(
+            signal = signal.name,
+            confidence = confidence,
+            risk = riskData.riskLevel.name,
+            buyCount = s.buyCount,
+            sellCount = s.sellCount,
+            neutralCount = s.neutralCount,
+            weightedScore = s.weightedScore.format(3),
+            risks = riskData.riskFactors.take(3),
+        )
 
         return ConsensusOutput(
             finalSignal = signal,
@@ -143,28 +156,11 @@ class ConsensusEngine(
         )
     }
 
-    private fun applyRegimeMatrix(results: List<IndicatorResult>, baseWeights: Map<String, Double>, enable: Boolean): Map<String, Double> {
-        if (!enable) return baseWeights
-        val adxRes = results.find { it.name == "adx_di" }
-        val adx = adxRes?.rawValues?.get("adx") ?: return baseWeights
-
-        val dynamic = baseWeights.toMutableMap()
-        
-        val oscillators = listOf("rsi", "stochastic", "williams_r", "cci")
-        val trendFollowers = listOf("macd", "ema_cross", "sma_cross", "ichimoku", "psar")
-
-        if (adx < 20.0) { // Chop / Range
-            oscillators.forEach { dynamic[it] = (dynamic[it] ?: 1.0) * 1.5 }
-            trendFollowers.forEach { dynamic[it] = (dynamic[it] ?: 1.0) * 0.5 }
-        } else if (adx > 25.0) { // Strong Trend
-            oscillators.forEach { dynamic[it] = (dynamic[it] ?: 1.0) * 0.5 }
-            trendFollowers.forEach { dynamic[it] = (dynamic[it] ?: 1.0) * 1.5 }
-        }
-        
-        return dynamic
-    }
-
     private fun clampInt(v: Double, lo: Int, hi: Int): Int = v.toInt().coerceIn(lo, hi)
+
+    /** Inclusive window [start]..[end], or empty when the window lies entirely before [start]. */
+    private fun <T> windowFrom(list: List<T>, start: Int, end: Int): List<T> =
+        if (start > end) emptyList() else list.subList(start, end + 1)
 
     data class AlignedData(
         val oi: List<OpenInterestPoint>,
@@ -172,7 +168,13 @@ class ConsensusEngine(
         val pos: List<LongShortRatioPoint>,
         val taker: List<TakerLongShortRatioPoint>,
         val global: List<LongShortRatioPoint>,
-        val funding: List<FundingRatePoint>
+        val funding: List<FundingRatePoint>,
+        /** First candle index holding a real sample of each feed (candles.size when it never reports). */
+        val accFirst: Int = 0,
+        val globalFirst: Int = 0,
+        val posFirst: Int = 0,
+        val takerFirst: Int = 0,
+        val fundingFirst: Int = 0,
     )
 
     private fun alignData(
@@ -197,8 +199,14 @@ class ConsensusEngine(
         val takerAligner = Aligner(rawTaker) { it.timestamp }
         val globalAligner = Aligner(rawGlobal) { it.timestamp }
         val fundingAligner = Aligner(rawFunding) { it.timestamp }
+        // Index of each feed's first real sample (-1 until seen). Before it the feed is padded.
+        var accFirst = -1
+        var globalFirst = -1
+        var posFirst = -1
+        var takerFirst = -1
+        var fundingFirst = -1
 
-        for (candle in candles) {
+        for ((i, candle) in candles.withIndex()) {
             val t = candle.openTime
 
             val oiPoint = oiAligner.findClosest(t, OpenInterestPoint(t, 0.0, 0.0))
@@ -242,66 +250,39 @@ class ConsensusEngine(
             } else {
                 alignedFunding.add(fundingPoint.copy(timestamp = t))
             }
+
+            if (accFirst < 0 && accAligner.hasSample()) accFirst = i
+            if (globalFirst < 0 && globalAligner.hasSample()) globalFirst = i
+            if (posFirst < 0 && posAligner.hasSample()) posFirst = i
+            if (takerFirst < 0 && takerAligner.hasSample()) takerFirst = i
+            if (fundingFirst < 0 && fundingAligner.hasSample()) fundingFirst = i
         }
 
-        return AlignedData(alignedOi, alignedAcc, alignedPos, alignedTaker, alignedGlobal, alignedFunding)
+        fun firstOrEnd(first: Int) = if (first < 0) candles.size else first
+        return AlignedData(
+            alignedOi, alignedAcc, alignedPos, alignedTaker, alignedGlobal, alignedFunding,
+            accFirst = firstOrEnd(accFirst),
+            globalFirst = firstOrEnd(globalFirst),
+            posFirst = firstOrEnd(posFirst),
+            takerFirst = firstOrEnd(takerFirst),
+            fundingFirst = firstOrEnd(fundingFirst),
+        )
     }
 
 
-    private fun getDownPriceBaseScore(x: String, y: String, z: String): Triple<String, String, Double> {
-        return when (x) {
-            "DOWN" -> when (y) {
-                "DOWN" -> when (z) {
-                    "DOWN" -> Triple("Classic deleveraging washout, most consistent with long liquidation and bearish follow-through", "Bearish now, but exhaustion risk rises late in the move", -60.0)
-                    "UP" -> Triple("Counterflow buying inside a still-bearish crowding regime; often short covering, not fresh trend reversal", "Tactical rebound candidate, weak structural conviction", 20.0)
-                    else -> Triple("Deleveraging with worsening crowding but no rush of aggression", "Slow bearish drift", -40.0)
-                }
-                "UP" -> when (z) {
-                    "DOWN" -> Triple("Crowd tries to get more bullish while weak longs are still being flushed", "One more flush is possible before a bounce", -30.0)
-                    "UP" -> Triple("Strongest bear-trap / short-covering rebound profile in the falling-OI family", "Best rebound candidate in this block", 50.0)
-                    else -> Triple("Positioning improves while leverage drains", "Neutral-to-bounce setup", 10.0)
-                }
-                else -> when (z) {
-                    "DOWN" -> Triple("Forced exits dominate more than new conviction", "Bearish, but energy is aging", -50.0)
-                    "UP" -> Triple("Deleveraging plus improving buyer aggression", "Local rebound candidate", 30.0)
-                    else -> Triple("Risk is leaving and conviction is fading on both sides", "Transition or no-trade", 0.0)
-                }
-            }
-            "UP" -> when (y) {
-                "DOWN" -> when (z) {
-                    "DOWN" -> Triple("Textbook new short build in a falling market", "Strongest bearish continuation", -95.0)
-                    "UP" -> Triple("Aggressive buyers are being absorbed while new leverage still enters against them", "Bull trap / bearish absorption", -45.0)
-                    else -> Triple("Stealth short build or hedge opening", "Bearish continuation", -70.0)
-                }
-                "UP" -> when (z) {
-                    "DOWN" -> Triple("Crowd gets more bullish into a falling market while sellers stay aggressive", "Fragile long buildup, long-squeeze risk", -50.0)
-                    "UP" -> Triple("Dip buyers are aggressive and leverage is rising, yet price still falls", "Two-sided war; either violent reversal or severe trap", 10.0)
-                    else -> Triple("Bullish crowding with rising leverage, but no flowing bid strong enough to stop the drop", "Distribution / hidden weakness", -30.0)
-                }
-                else -> when (z) {
-                    "DOWN" -> Triple("New leverage plus active sell dominance", "Clean continuation lower", -80.0)
-                    "UP" -> Triple("Both sides are adding risk while price still falls", "Volatility expansion, avoid unless breakout confirms", 0.0)
-                    else -> Triple("Participation rises without decisive trigger flow", "Pre-breakdown watch state", -30.0)
-                }
-            }
-            else -> when (y) { // FLAT
-                "DOWN" -> when (z) {
-                    "DOWN" -> Triple("Bearish absorption or distribution without major fresh leverage", "Grind lower", -50.0)
-                    "UP" -> Triple("Buyers are trying, but the tape still cannot lift while crowding worsens", "Failed-bounce risk", -10.0)
-                    else -> Triple("Sentiment worsens but aggression is muted", "Fragile bearish drift", -35.0)
-                }
-                "UP" -> when (z) {
-                    "DOWN" -> Triple("Crowd and carry improve, but active sellers still win", "Dip-buying is being absorbed", -20.0)
-                    "UP" -> Triple("Best accumulation / mild covering profile in the flat-OI family", "Reversal candidate if price stops making new lows", 45.0)
-                    else -> Triple("Positioning improves without trigger flow", "Neutral-to-slightly bullish, but incomplete", 15.0)
-                }
-                else -> when (z) {
-                    "DOWN" -> Triple("Active sellers dominate against unchanged leverage", "Bearish distribution", -45.0)
-                    "UP" -> Triple("Positive flow with unchanged leverage", "Early bounce candidate, low confidence", 25.0)
-                    else -> Triple("Compression, transfer, or noise", "No-trade by default", 0.0)
-                }
-            }
-        }
+    /**
+     * Narrative cell for the OI state [x] and the (possibly mirrored) taker/crowd states [y], [z]:
+     * returns the cell index (see [NARRATIVE_SCORES]) and its base score for a falling price.
+     */
+    private fun narrativeCell(x: String, y: String, z: String): Pair<Int, Double> {
+        val cell = stateIndex(x) * 9 + stateIndex(y) * 3 + stateIndex(z)
+        return cell to NARRATIVE_SCORES[cell]
+    }
+
+    private fun stateIndex(state: String): Int = when (state) {
+        "DOWN" -> 0
+        "UP" -> 1
+        else -> 2 // FLAT
     }
 
     fun evaluateMultimodal(
@@ -311,7 +292,8 @@ class ConsensusEngine(
         rawPos: List<LongShortRatioPoint>,
         rawGlobal: List<LongShortRatioPoint>,
         rawTaker: List<TakerLongShortRatioPoint>,
-        rawFunding: List<FundingRatePoint>
+        rawFunding: List<FundingRatePoint>,
+        labels: ConsensusLabels = EnglishConsensusLabels,
     ): List<ConsensusOutput> {
         if (candles.isEmpty()) return emptyList()
 
@@ -367,9 +349,10 @@ class ConsensusEngine(
             }
 
             val yStart = maxOf(0, i - 30)
-            val accHistory = aligned.acc.subList(yStart, i + 1).map { it.longShortRatio }
-            val globalHistory = aligned.global.subList(yStart, i + 1).map { it.longShortRatio }
-            val fundingHistory = aligned.funding.subList(yStart, i + 1).map { it.fundingRate }
+            // Each window starts at the feed's first real sample: padded candles never enter a mean or std.
+            val accHistory = windowFrom(aligned.acc, maxOf(yStart, aligned.accFirst), i).map { it.longShortRatio }
+            val globalHistory = windowFrom(aligned.global, maxOf(yStart, aligned.globalFirst), i).map { it.longShortRatio }
+            val fundingHistory = windowFrom(aligned.funding, maxOf(yStart, aligned.fundingFirst), i).map { it.fundingRate }
 
             val accMean = accHistory.average()
             val accStd = if (accHistory.size > 1) sqrt(accHistory.map { (it - accMean) * (it - accMean) }.sum() / (accHistory.size - 1)).coerceAtLeast(0.02) else 0.0
@@ -395,7 +378,7 @@ class ConsensusEngine(
             val netTakerPct = if (buyVol + sellVol > 0.0) (buyVol - sellVol) / (buyVol + sellVol) else 0.0
 
             val zStart = maxOf(0, i - 30)
-            val takerHistory = aligned.taker.subList(zStart, i + 1)
+            val takerHistory = windowFrom(aligned.taker, maxOf(zStart, aligned.takerFirst), i)
             val netTakerHistory = takerHistory.map {
                 val b = it.buyVol
                 val s = it.sellVol
@@ -415,7 +398,7 @@ class ConsensusEngine(
                 else -> "FLAT"
             }
 
-            val whaleHistory = aligned.pos.subList(yStart, i + 1).map { it.longShortRatio }
+            val whaleHistory = windowFrom(aligned.pos, maxOf(yStart, aligned.posFirst), i).map { it.longShortRatio }
             val whaleMean = whaleHistory.average()
             val whaleStd = if (whaleHistory.size > 1) sqrt(whaleHistory.map { (it - whaleMean) * (it - whaleMean) }.sum() / (whaleHistory.size - 1)).coerceAtLeast(0.02) else 0.0
             val whaleZ = if (whaleStd > 0.0) (aligned.pos[i].longShortRatio - whaleMean) / whaleStd else 0.0
@@ -428,26 +411,25 @@ class ConsensusEngine(
                 if (zState == "UP") "DOWN" else if (zState == "DOWN") "UP" else "FLAT"
             } else zState
 
-            var (reading, biasDesc, baseScore) = if (priceState == "FLAT") {
-                val desc = when (zState) {
-                    "UP" -> "Range accumulation, buyers attempting breakout"
-                    "DOWN" -> "Range distribution, sellers absorbing demand"
-                    else -> "Mean-reverting chop or inactive tape"
-                }
-                val score = when (zState) {
+            // A falling price reads the narrative table directly. A rising price reads the mirrored cell
+            // (taker/crowd states swapped above) with the bullish-perspective text and a negated score.
+            val mirrored = priceState == "UP"
+            val reading: String
+            val biasDesc: String
+            val baseScore: Double
+            if (priceState == "FLAT") {
+                reading = labels.flatPriceReading()
+                biasDesc = labels.flatPriceBias(zState)
+                baseScore = when (zState) {
                     "UP" -> 20.0
                     "DOWN" -> -20.0
                     else -> 0.0
                 }
-                Triple("Price flat (consolidation or mean reversion)", desc, score)
             } else {
-                getDownPriceBaseScore(xState, lookupY, lookupZ)
-            }
-
-            if (priceState == "UP") {
-                baseScore = -baseScore
-                reading = swapKeywords(reading)
-                biasDesc = swapKeywords(biasDesc)
+                val (cell, score) = narrativeCell(xState, lookupY, lookupZ)
+                reading = labels.narrativeReading(cell, mirrored)
+                biasDesc = labels.narrativeBias(cell, mirrored)
+                baseScore = if (mirrored) -score else score
             }
 
             var finalScore = baseScore
@@ -499,10 +481,10 @@ class ConsensusEngine(
             }
 
             val riskFactors = mutableListOf<String>()
-            if (whaleOverridden) riskFactors.add("Whale-Retail positioning divergence")
-            if (abs(aligned.funding[i].fundingRate) >= 0.003) riskFactors.add("Extreme carry/funding rate")
+            if (whaleOverridden) riskFactors.add(labels.whaleRetailDivergence())
+            if (abs(aligned.funding[i].fundingRate) >= 0.003) riskFactors.add(labels.extremeFunding())
 
-            val explanation = "Regime=$regime Conf=${confidence}% Bias=${biasDesc} Reading=${reading} Score=${finalScore.format(2)}"
+            val explanation = labels.multimodalExplanation(regime, confidence, biasDesc, reading, finalScore.format(2))
 
             outputList.add(
                 ConsensusOutput(
@@ -528,92 +510,36 @@ class ConsensusEngine(
     }
 
     companion object {
-        private val KEYWORDS_MAP = mapOf(
-            "long liquidation" to "short covering",
-            "short covering" to "long liquidation",
-            "long-liquidation" to "short-covering",
-            "short-covering" to "long-liquidation",
-            "long-squeeze" to "short-squeeze",
-            "short-squeeze" to "long-squeeze",
-            "bear-trap" to "bull-trap",
-            "bear trap" to "bull trap",
-            "bull-trap" to "bear-trap",
-            "bull trap" to "bear trap",
-            "bearish" to "bullish",
-            "Bearish" to "Bullish",
-            "bullish" to "bearish",
-            "Bullish" to "Bearish",
-            "bear" to "bull",
-            "Bear" to "Bull",
-            "bull" to "bear",
-            "Bull" to "Bear",
-            "long" to "short",
-            "Long" to "Short",
-            "short" to "long",
-            "Short" to "Long",
-            "buyers" to "sellers",
-            "Buyers" to "Sellers",
-            "sellers" to "buyers",
-            "Sellers" to "Buyers",
-            "buyer" to "seller",
-            "Buyer" to "Seller",
-            "seller" to "buyer",
-            "Seller" to "Buyer",
-            "buying" to "selling",
-            "Buying" to "Selling",
-            "selling" to "buying",
-            "Selling" to "Buying",
-            "buy" to "sell",
-            "Buy" to "Sell",
-            "sell" to "buy",
-            "Sell" to "Buy"
+        /**
+         * Base score per narrative cell (index = oi*9 + yState*3 + zState; DOWN=0, UP=1, FLAT=2),
+         * for a falling price. A rising price negates it. Order matches the labels' narrative lists.
+         */
+        private val NARRATIVE_SCORES = doubleArrayOf(
+            -60.0, 20.0, -40.0, -30.0, 50.0, 10.0, -50.0, 30.0, 0.0,
+            -95.0, -45.0, -70.0, -50.0, 10.0, -30.0, -80.0, 0.0, -30.0,
+            -50.0, -10.0, -35.0, -20.0, 45.0, 15.0, -45.0, 25.0, 0.0,
         )
-
-        private val SWAP_REGEX = Regex(
-            KEYWORDS_MAP.keys
-                .sortedByDescending { it.length }
-                .joinToString("|") { Regex.escape(it) }
-        )
-    }
-
-    private fun swapKeywords(text: String): String {
-        return SWAP_REGEX.replace(text) { matchResult ->
-            KEYWORDS_MAP[matchResult.value] ?: matchResult.value
-        }
     }
 }
 
 private class Aligner<T>(private val list: List<T>, private val getTimestamp: (T) -> Long) {
     private var idx = -1
 
-    private fun absDiff(a: Long, b: Long): Long = if (a > b) a - b else b - a
+    /**
+     * Causal lookup: the last sample at or before [t]. A sample timestamped after the
+     * candle is never used (look-ahead). Returns [default] while the series has no
+     * sample yet; the first sample is NOT substituted for earlier candles.
+     */
+    fun findClosest(t: Long, default: T): T = findLastBeforeOrClosest(t, default)
 
-    fun findClosest(t: Long, default: T): T {
-        if (list.isEmpty()) return default
-        while (idx + 1 < list.size && getTimestamp(list[idx + 1]) <= t) {
-            idx++
-        }
-        if (idx == -1) {
-            return list[0]
-        }
-        if (idx == list.size - 1) {
-            return list[idx]
-        }
-        val curr = list[idx]
-        val next = list[idx + 1]
-        val currDiff = absDiff(getTimestamp(curr), t)
-        val nextDiff = absDiff(getTimestamp(next), t)
-        return if (nextDiff < currDiff) next else curr
-    }
+    /** True once the last lookup found a real sample at or before its timestamp. */
+    fun hasSample(): Boolean = idx >= 0
 
     fun findLastBeforeOrClosest(t: Long, default: T): T {
         if (list.isEmpty()) return default
         while (idx + 1 < list.size && getTimestamp(list[idx + 1]) <= t) {
             idx++
         }
-        if (idx >= 0) {
-            return list[idx]
-        }
-        return list[0]
+        return if (idx >= 0) list[idx] else default
     }
 }

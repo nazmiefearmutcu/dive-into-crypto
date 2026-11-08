@@ -4,7 +4,7 @@ import com.diveintocrypto.android.engine.schema.OptType
 import com.diveintocrypto.android.engine.schema.OptionsChain
 import kotlin.math.abs
 
-/** IV surface, skew, term-structure, 25Δ RR/BF — port of `crypcodile/analytics/volsurface.py`. */
+/** IV surface, skew, term-structure, 25Δ RR/BF — port of `crocodile/crypto/analytics/volsurface.py`. */
 object VolSurface {
     private const val NS_PER_YEAR = 365.0 * 24.0 * 3600.0 * 1e9
     private const val NS_PER_DAY = 86_400.0 * 1e9
@@ -15,7 +15,9 @@ object VolSurface {
     )
 
     fun ivSurface(chain: List<OptionsChain>, atNs: Long, rate: Double = 0.0): List<SurfacePoint> {
-        val visible = chain.filter { it.localTs <= atNs }
+        // Expired contracts are not part of the live surface: their stale venue mark IV must
+        // not reach the skew or term structure (they would show negative days to expiry).
+        val visible = chain.filter { it.localTs <= atNs && it.expiry > atNs }
         if (visible.isEmpty()) return emptyList()
         val latest = visible
             .groupBy { Triple(it.strike, it.expiry, it.optType) }

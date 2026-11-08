@@ -9,7 +9,7 @@ import kotlin.math.sqrt
 
 /**
  * Black-76 option pricing, greeks, and implied-vol solver — Kotlin port of
- * `crypcodile/analytics/blackscholes.py`. European options on a forward/index F
+ * `crocodile/crypto/analytics/blackscholes.py`. European options on a forward/index F
  * with discount factor D = exp(-rate*t). Pure `kotlin.math`.
  */
 object BlackScholes {

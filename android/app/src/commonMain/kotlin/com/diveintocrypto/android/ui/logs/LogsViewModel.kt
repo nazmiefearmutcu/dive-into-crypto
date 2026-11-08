@@ -57,13 +57,18 @@ enum class StatusFilter(val label: String) {
     SUCCESS("2xx"),
     CLIENT_ERROR("4xx"),
     SERVER_ERROR("5xx"),
-    NETWORK_ERROR("ERR");
+    NETWORK_ERROR("ERR"),
+
+    /** Everything else that is recorded: 1xx/3xx and WebSocket codes (101 open, 1000 close). */
+    OTHER("1xx·3xx·WS");
 
     fun matches(entry: NetworkLogEntry): Boolean = when (this) {
         SUCCESS -> entry.status in 200..299
         CLIENT_ERROR -> entry.status in 400..499
         SERVER_ERROR -> entry.status in 500..599
         NETWORK_ERROR -> entry.status < 0
+        OTHER -> entry.status >= 0 && entry.status !in 200..299 &&
+            entry.status !in 400..499 && entry.status !in 500..599
     }
 }
 

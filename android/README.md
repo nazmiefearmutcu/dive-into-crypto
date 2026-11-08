@@ -122,7 +122,9 @@ All Binance USDT‑M perpetual‑futures symbols, with stablecoin pairs removed,
 
 ## Data sources
 
-Dive into Crypto reads only **public** Binance Futures endpoints. No authentication is required.
+Dive into Crypto reads only **public** endpoints. No authentication is required, and the app
+sends no account data or API keys. Each host receives your IP address and standard HTTP request
+metadata when the app calls it.
 
 | Data | Endpoint |
 | --- | --- |

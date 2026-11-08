@@ -103,7 +103,7 @@ def _corr_cov(a: list[float], b: list[float]) -> tuple[float, float]:
         return 0.0, 0.0
     da, ma = _central(a[:n])
     db, mb = _central(b[:n])
-    cov = sum(x * y for x, y in zip(da, db)) / n
+    cov = sum(x * y for x, y in zip(da, db, strict=True)) / n
     va = sum(x * x for x in da) / n
     vb = sum(y * y for y in db) / n
     if va <= 0 or vb <= 0:
@@ -129,11 +129,22 @@ def beta_corr(sym_rets: list[float], btc_rets: list[float]) -> tuple[float | Non
 
 
 def pair_correlation(a: list[float], b: list[float]) -> float | None:
+    """Correlation of two ALREADY time-aligned value lists (equal bars)."""
     n = min(len(a), len(b))
     if n < MIN_RETURNS:
         return None
     corr, _ = _corr_cov(a[:n], b[:n])
     return round(corr, 4) if math.isfinite(corr) else None
+
+
+def pair_correlation_ts(a_ts: list[tuple[int, float]], b_ts: list[tuple[int, float]]) -> float | None:
+    """Correlation of two ``[(t_ms, ret)]`` series over their TIMESTAMP inner join.
+
+    Pairing by list position would compare bars that are not the same hour once
+    either series has a gap or a shorter history, so the pair is joined on time.
+    """
+    ra, rb = _align(a_ts, b_ts)
+    return pair_correlation(ra, rb)
 
 
 def greedy_clusters(
@@ -207,7 +218,7 @@ async def _one_hour_candles(symbol: str, candles_1h: list[dict] | None = None) -
 # ── vol term structure + cone (report-only; reuses the cached 1h candles) ─────
 def _log_returns(closes: list[float]) -> list[float]:
     out: list[float] = []
-    for a, b in zip(closes, closes[1:]):
+    for a, b in zip(closes, closes[1:], strict=False):
         if a > 0 and b > 0:
             out.append(math.log(b / a))
     return out
@@ -350,7 +361,9 @@ def cluster_confirmation(
 
     ``cluster_agreement``: share of the row's cluster-mates (size ≥
     MIN_CLUSTER_MEMBERS, else null) whose ``dominantDir`` matches the row's own
-    — a read of how much the sector backs the call. ``cluster_rel_strength``:
+    — a read of how much the sector backs the call. A row with no call
+    (``dominantDir`` 0 or missing) has no agreement to report: its neutral peers
+    must not read as sector confirmation. ``cluster_rel_strength``:
     the row's ``netNss`` z-score vs its cluster's mean/sd (null when the cluster
     has <2 readings or zero spread). Pure, null-guarded, no fabrication.
     """
@@ -367,13 +380,16 @@ def cluster_confirmation(
         rel_strength = None
         if cid is not None:
             members = members_by_cluster.get(cid, [])
-            if len(members) >= MIN_CLUSTER_MEMBERS and r.get("dominantDir") is not None:
+            own_dir = r.get("dominantDir")
+            # agreement is about a call: a no-call row (dominantDir 0) has none
+            if len(members) >= MIN_CLUSTER_MEMBERS and own_dir not in (None, 0):
                 same = sum(
                     1 for m in members
-                    if m.get("dominantDir") is not None and int(m["dominantDir"]) == int(r["dominantDir"])
+                    if m.get("dominantDir") is not None and int(m["dominantDir"]) == int(own_dir)
                 )
                 agreement = round(same / len(members), 3)
-                # rel strength uses the same quorum: tiny clusters carry no signal
+            # rel strength uses the same quorum: tiny clusters carry no signal
+            if len(members) >= MIN_CLUSTER_MEMBERS and own_dir is not None:
                 strengths = [float(m["netNss"]) for m in members if m.get("netNss") is not None]
                 own = r.get("netNss")
                 if own is not None and len(strengths) >= 2:
@@ -432,25 +448,29 @@ async def attach_structure(
     out: dict[str, dict] = {}
     corr_pairs: dict[tuple[str, str], float] = {}
     aligned: dict[str, list[float]] = {}
+    series_ts: dict[str, list[tuple[int, float]]] = {}  # full timestamped returns
     for r in rows:
         s = r["s"]
         sym_ts = rets_by_symbol.get(s, [])
         if s == _BTC_SYMBOL:
             out[s] = {"beta": 1.0, "corr_btc": 1.0}
             aligned[s] = btc_vals
+            series_ts[s] = btc_rets_ts
             continue
         ra, rb = _align(sym_ts, btc_rets_ts)
         beta, corr = (None, None)
         if len(ra) >= MIN_RETURNS:
             beta, corr = beta_corr(ra, rb)
             aligned[s] = ra
+            series_ts[s] = sym_ts
         out[s] = {"beta": beta, "corr_btc": corr}
 
-    # pairwise correlations among rows that have aligned data (cluster inputs)
+    # pairwise correlations among rows that have aligned data (cluster inputs),
+    # joined on timestamp — never by list position
     usable = [s for s in (r["s"] for r in rows) if len(aligned.get(s, [])) >= MIN_RETURNS]
     for i, a in enumerate(usable):
         for b in usable[i + 1:]:
-            c = pair_correlation(aligned[a], aligned[b])
+            c = pair_correlation_ts(series_ts[a], series_ts[b])
             if c is not None:
                 corr_pairs[tuple(sorted((a, b)))] = c
     ids = greedy_clusters(usable, corr_pairs)
@@ -521,7 +541,8 @@ async def structure_summary(limit: int = 60) -> dict:
     corr_pairs: dict[tuple[str, str], float] = {}
     for i, a in enumerate(usable):
         for b in usable[i + 1:]:
-            c = pair_correlation(aligned[a], aligned[b])
+            # timestamp inner join on the full series (BTC included), not by position
+            c = pair_correlation_ts(rets_by_symbol[a], rets_by_symbol[b])
             if c is not None:
                 corr_pairs[tuple(sorted((a, b)))] = c
     ids = greedy_clusters(usable, corr_pairs)

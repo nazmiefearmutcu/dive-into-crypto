@@ -18,12 +18,15 @@ import com.diveintocrypto.android.domain.indicator.SmaCrossIndicator
 import com.diveintocrypto.android.domain.indicator.StochasticIndicator
 import com.diveintocrypto.android.domain.indicator.WilliamsRIndicator
 import com.diveintocrypto.android.domain.model.Candle
+import com.diveintocrypto.android.domain.model.ConsensusOutput
 import com.diveintocrypto.android.domain.model.IndicatorConfig
 import com.diveintocrypto.android.domain.model.IndicatorResult
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.sin
 import kotlin.system.measureNanoTime
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 
 /**
@@ -34,8 +37,12 @@ import org.junit.Test
  * [Candle] constructor and runs every indicator's real `calculate(...)` plus a
  * full [ConsensusEngine.evaluate] over the resulting 15 [IndicatorResult]s.
  *
- * It is a perf probe: it asserts only a trivially-true sanity invariant so it
- * never fails on slow CI. Numbers are printed as a GitHub-Markdown table.
+ * It is a perf probe, not a unit test, so it is OPT-IN: it is skipped unless the
+ * JVM is started with `-Ddive.bench=true` (ordinary unit-test runs skip it and
+ * pay none of its ~100k calculations). When enabled it checks real invariants
+ * (finite, bounded consensus score; valid confidence; positive throughput) rather
+ * than timing thresholds, so it never fails on slow CI. Numbers are printed as a
+ * GitHub-Markdown table.
  */
 class ScanBenchmark {
 
@@ -142,6 +149,7 @@ class ScanBenchmark {
 
     @Test
     fun benchmark() {
+        assumeTrue("opt-in benchmark: run with -Ddive.bench=true", System.getProperty("dive.bench") == "true")
         val candles = syntheticCandles(barCount)
         val indicators = allIndicators()
         val engine = ConsensusEngine()
@@ -158,11 +166,12 @@ class ScanBenchmark {
         }
 
         // ---- (b) one full consensus evaluation (all 15 indicators + engine.evaluate) ----
-        fun fullEvaluation() {
+        fun fullEvaluation(): ConsensusOutput {
             val results = ArrayList<IndicatorResult>(indicators.size)
             for ((_, ind) in indicators) results.add(ind.calculate(candles))
-            engine.evaluate(results)
+            return engine.evaluate(results)
         }
+        val lastOutput = fullEvaluation()
         val consensusNs = benchNs { fullEvaluation() }
         val consensusOps = opsPerSec(consensusNs)
 
@@ -199,7 +208,16 @@ class ScanBenchmark {
         )
         println(sb.toString())
 
-        // perf probe — always pass.
-        assertTrue("benchmark ran and produced indicator results", sanity && perIndicatorOps.size == 15)
+        // Real invariants (not timing thresholds): these catch wrong or non-finite output.
+        assertTrue("every indicator produced a named result", sanity)
+        assertTrue(
+            "consensus score is finite and within [-2, 2]",
+            lastOutput.weightedScore.isFinite() && abs(lastOutput.weightedScore) <= 2.0,
+        )
+        assertTrue("confidence is within 0..100", lastOutput.confidence in 0..100)
+        assertTrue(
+            "throughput is positive and finite for every indicator",
+            perIndicatorOps.values.all { it > 0.0 && it.isFinite() },
+        )
     }
 }

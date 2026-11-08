@@ -80,7 +80,7 @@ class FisherTransformIndicator(config: IndicatorConfig) : BaseIndicator(config) 
             if (turningUp) {
                 return result(Signal.STRONG_BUY, "Fisher=${fisherNow.format(2)} deep oversold reversal (turning up)", raw)
             }
-            return result(Signal.BUY, "Fisher=${fisherNow.format(2)} deeply stretched down, mean-reversion setup", raw)
+            return result(Signal.BUY, "Fisher=${fisherNow.format(2)} deeply stretched down, mean-reversion pattern", raw)
         }
 
         // --- Oversold -----------------------------------------------------
@@ -96,7 +96,7 @@ class FisherTransformIndicator(config: IndicatorConfig) : BaseIndicator(config) 
             if (turningDown) {
                 return result(Signal.STRONG_SELL, "Fisher=${fisherNow.format(2)} deep overbought reversal (turning down)", raw)
             }
-            return result(Signal.SELL, "Fisher=${fisherNow.format(2)} deeply stretched up, mean-reversion setup", raw)
+            return result(Signal.SELL, "Fisher=${fisherNow.format(2)} deeply stretched up, mean-reversion pattern", raw)
         }
 
         // --- Overbought ---------------------------------------------------

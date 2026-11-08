@@ -120,4 +120,4 @@ async def list_universe(limit: int | None = None) -> list[dict]:
                 _cache = await _fetch_universe()  # raises propagate; cache untouched
                 _cache_ts = now
     rows = _cache or []
-    return rows[:limit] if limit else rows
+    return rows[:limit] if limit is not None else rows

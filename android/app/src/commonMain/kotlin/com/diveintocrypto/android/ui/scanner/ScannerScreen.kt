@@ -63,6 +63,9 @@ import com.diveintocrypto.android.platform.nowMillis
 import com.diveintocrypto.android.platform.rememberShareVerdict
 import com.diveintocrypto.android.ui.alerts.AlertAddSheet
 import com.diveintocrypto.android.ui.alerts.AlertLabels
+import com.diveintocrypto.android.ui.common.UiLabels
+import com.diveintocrypto.android.ui.i18n.DiveStrings
+import com.diveintocrypto.android.ui.i18n.LocalDiveStrings
 import kotlinx.coroutines.delay
 import kotlin.math.abs
 import com.diveintocrypto.android.ui.theme.DiveColors
@@ -99,6 +102,7 @@ fun ScannerScreen(container: AppContainer, onSelectSymbol: (String) -> Unit = {}
     // viewModel{} so the scan does not stop on navigation between screens or in the background.
     val vm: ScannerViewModel = container.scannerViewModel
     val state by vm.ui.collectAsStateWithLifecycle()
+    val s = LocalDiveStrings.current
 
     // Result lens: "All" (consensus order, first TOP_N) vs "Divergence" (only rows flagged
     // with a whale-L/S bearish divergence, by divergence score). Presents divergence as a
@@ -146,8 +150,8 @@ fun ScannerScreen(container: AppContainer, onSelectSymbol: (String) -> Unit = {}
     // ★ İZLEME lens: client-side filter of the DISPLAYED list to SettingsStore favorites.
     val displayedRows = if (watchOnly) lensRows.filter { it.symbol.uppercase() in favoriteSet } else lensRows
     val resultSummary = when (resultFilter) {
-        ResultFilter.ALL -> "${state.universeSize} symbols · ✓ ${state.survivors.size} kept · ✕ $eliminatedCount eliminated"
-        ResultFilter.DIVERGENCE -> "Whale divergence contradicts the indicator: $eliminatedCount coins eliminated"
+        ResultFilter.ALL -> s.scanResultSummary(state.universeSize, state.survivors.size, eliminatedCount)
+        ResultFilter.DIVERGENCE -> s.scanDivergenceSummary(eliminatedCount)
     }
     // Number of candidate symbols tried but with no whale data available (coverage==0) — added
     // to the empty message to honestly surface silent false-negatives. remember()'d: the
@@ -225,7 +229,9 @@ fun ScannerScreen(container: AppContainer, onSelectSymbol: (String) -> Unit = {}
         }
 
         // Results (survivors after elimination). Also visible during a scan in continuous mode.
-        if (state.survivors.isNotEmpty()) {
+        // A completed scan with survivors OR eliminated coins shows the result section. (Previously
+        // "all eliminated" fell through to "No Scan Run Yet" and hid the eliminated lens.)
+        if (state.survivors.isNotEmpty() || state.eliminated.isNotEmpty()) {
             // ── Result lens toggle ─────────────────────────────────────────
             item("filter") {
                 ResultFilterToggle(
@@ -238,7 +244,7 @@ fun ScannerScreen(container: AppContainer, onSelectSymbol: (String) -> Unit = {}
             // ── ★ İZLEME lens: only SettingsStore favorites (client-side) ──
             item("watch") {
                 FilterPill(
-                    label = "★ İZLEME (${favoriteSet.size})",
+                    label = s.scanWatchFilter(favoriteSet.size),
                     selected = watchOnly,
                     accent = DiveColors.Yellow,
                     modifier = Modifier.fillMaxWidth(),
@@ -251,12 +257,19 @@ fun ScannerScreen(container: AppContainer, onSelectSymbol: (String) -> Unit = {}
                 }
             }
 
+            // ALL lens with every candidate eliminated: say so, with the count, instead of an empty list.
+            if (resultFilter == ResultFilter.ALL && state.survivors.isEmpty()) {
+                item("nosurv") { NoSurvivorsCard(eliminated = eliminatedCount) }
+            }
+
             // ── Divergence lens explanation (only when there are results; one message when empty) ──
             if (resultFilter == ResultFilter.DIVERGENCE && displayedRows.isNotEmpty()) {
                 item("divinfo") { DivergenceLensInfo() }
             }
 
-            if (resultFilter == ResultFilter.DIVERGENCE && displayedRows.isEmpty()) {
+            // Empty eliminated lens: the "no divergence" card only when the eliminated list is really
+            // empty. A ★ İZLEME filter that hides everything is explained by NoWatchlistCard above.
+            if (resultFilter == ResultFilter.DIVERGENCE && displayedRows.isEmpty() && !watchOnly) {
                 item("nodiv") { NoDivergenceCard(uncheckable = uncheckableCount) }
             } else {
                 // ── Coin result cards ─────────────────────────────────────
@@ -266,7 +279,8 @@ fun ScannerScreen(container: AppContainer, onSelectSymbol: (String) -> Unit = {}
                 ) { idx, row ->
                     CoinResultCard(
                         row = row,
-                        rank = idx + 1,
+                        // The scan's own rank (survivor order or pre-elimination position), not the lens index.
+                        rank = row.scanRank.takeIf { it > 0 } ?: (idx + 1),
                         allTfs = state.timeframes,
                         livePrice = liveTickers[row.symbol]?.price,
                         onAlert = { alertSheetSymbol = row.symbol },
@@ -292,7 +306,7 @@ fun ScannerScreen(container: AppContainer, onSelectSymbol: (String) -> Unit = {}
                 item("ts") {
                     Box(modifier = Modifier.fillMaxWidth().padding(top = 6.dp)) {
                         Text(
-                            text = "Last scan: ${formatTs(it)}",
+                            text = s.scanLastScan(formatTs(it)),
                             color = DiveColors.TextDim,
                             fontSize = 11.sp,
                             modifier = Modifier.fillMaxWidth(),
@@ -300,16 +314,37 @@ fun ScannerScreen(container: AppContainer, onSelectSymbol: (String) -> Unit = {}
                     }
                 }
             }
+            // Permanent not-investment-advice line under the signal list (Play policy).
+            item("disclaimer") {
+                Text(
+                    text = s.disclaimerShort,
+                    color = DiveColors.TextDim,
+                    fontSize = 11.sp,
+                    fontFamily = DiveFonts.body,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
         }
 
-        // Initial empty state — before the user has ever pressed Start
-        if (state.survivors.isEmpty() && !state.scanning) {
+        // A scan completed but produced no candidates at all.
+        if (state.lastScanAtMs != null && state.survivors.isEmpty() && state.eliminated.isEmpty() && !state.scanning) {
+            item("nocand") { NoSurvivorsCard(eliminated = 0) }
+        }
+
+        // Initial empty state — only before any scan has run. A FAILED run shows its error card
+        // instead; it must never claim "No Scan Run Yet" (PS-13).
+        if (state.lastScanAtMs == null && state.error == null && !state.scanning) {
             item("empty") { EmptyStateCard() }
         }
 
         state.error?.let { err ->
             item("err") {
-                ScanErrorCard(message = err, onRetry = vm::startScan)
+                if (state.regionBlocked) {
+                    // Region block: retrying cannot succeed, so there is no retry button.
+                    RegionBlockedCard()
+                } else {
+                    ScanErrorCard(message = err, onRetry = vm::startScan)
+                }
             }
         }
 
@@ -340,6 +375,7 @@ private fun ScanHeroCard(
     onStart: () -> Unit,
     onStop: () -> Unit,
 ) {
+    val s = LocalDiveStrings.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -372,7 +408,7 @@ private fun ScanHeroCard(
             Spacer(Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "MANUAL SCAN",
+                    text = s.scanHeroLabel,
                     color = DiveColors.TextMuted,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
@@ -381,14 +417,14 @@ private fun ScanHeroCard(
                 )
                 Spacer(Modifier.height(2.dp))
                 Text(
-                    text = heroSubtitle(state, resultSummary),
+                    text = heroSubtitle(state, resultSummary, s),
                     color = DiveColors.Text,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Medium,
                 )
                 Spacer(Modifier.height(2.dp))
                 Text(
-                    text = "Binance USDT-M Futures · ${state.timeframes.size} timeframes",
+                    text = s.scanSourceLine(state.timeframes.size),
                     color = DiveColors.TextDim,
                     fontSize = 11.sp,
                 )
@@ -409,7 +445,8 @@ private fun ScanHeroCard(
 @Composable
 private fun PrimaryCtaButton(scanning: Boolean, onStart: () -> Unit, onStop: () -> Unit) {
     val bg = if (scanning) DiveColors.Red else DiveColors.Accent
-    val label = if (scanning) "Stop" else "Start Scan"
+    val s = LocalDiveStrings.current
+    val label = if (scanning) s.scanStopButton else s.scanStartButton
     val icon = if (scanning) Icons.Rounded.Stop else Icons.Rounded.PlayArrow
     // onPrimary follows the preset (dark presets → near-black text on the bright accent,
     // light presets → white on the deep accent) — was pinned Color.White.
@@ -450,6 +487,7 @@ private fun PrimaryCtaButton(scanning: Boolean, onStart: () -> Unit, onStop: () 
 // ═════════════════════════════════════════════════════════════════════════
 @Composable
 private fun ScanProgressBlock(state: ScannerUiState) {
+    val s = LocalDiveStrings.current
     val pct = if (state.totalCount > 0) state.completedCount.toFloat() / state.totalCount else 0f
     Column(
         modifier = Modifier
@@ -473,7 +511,7 @@ private fun ScanProgressBlock(state: ScannerUiState) {
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    text = phaseLabel(state.currentPhase),
+                    text = phaseLabel(state.currentPhase, s),
                     color = DiveColors.Cyan,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
@@ -514,7 +552,7 @@ private fun ScanProgressBlock(state: ScannerUiState) {
             Spacer(Modifier.height(10.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = "NOW",
+                    text = s.scanNowLabel,
                     color = DiveColors.TextDim,
                     fontSize = 10.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -534,13 +572,13 @@ private fun ScanProgressBlock(state: ScannerUiState) {
     }
 }
 
-private fun phaseLabel(p: ScanPhase): String = when (p) {
-    ScanPhase.UNIVERSE -> "FETCHING UNIVERSE"
-    ScanPhase.PHASE1 -> "PHASE 1 · 1d/12h/8h"
-    ScanPhase.PHASE2 -> "PHASE 2 · 9 TF"
-    ScanPhase.FINALIZING -> "RANKING"
+private fun phaseLabel(p: ScanPhase, s: DiveStrings): String = when (p) {
+    ScanPhase.UNIVERSE -> s.scanPhaseUniverse
+    ScanPhase.PHASE1 -> s.scanPhase1
+    ScanPhase.PHASE2 -> s.scanPhase2
+    ScanPhase.FINALIZING -> s.scanPhaseRanking
     // HONESTY: IDLE means no scan is running — saying "SCANNING" was a lie.
-    ScanPhase.IDLE -> "HAZIR"
+    ScanPhase.IDLE -> s.scanPhaseIdle
 }
 
 // ═════════════════════════════════════════════════════════════════════════
@@ -637,8 +675,8 @@ private fun CoinResultCard(
                 )
             }
 
-            // ── Row 3c: RISK advisor (INFORMATIONAL — not investment advice) ──
-            // ATR-adaptive bracket suggestion; does NOT affect score/elimination/ranking.
+            // ── Row 3c: VOLATILITY (ATR) block (descriptive — not investment advice) ──
+            // Illustrative ATR-scaled levels; does NOT affect score/elimination/ranking.
             row.atrPct?.let { atrPct ->
                 if (atrPct > 0.0) {
                     Spacer(Modifier.height(8.dp))
@@ -667,6 +705,7 @@ private fun CoinResultCard(
  */
 @Composable
 private fun OverlayTagRow(row: CrossRankingRow) {
+    val s = LocalDiveStrings.current
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -681,7 +720,7 @@ private fun OverlayTagRow(row: CrossRankingRow) {
             },
         )
         TinyTag(
-            text = if (row.mtfGate) "MTF ✓" else "MTF –",
+            text = if (row.mtfGate) s.scanMtfPass else s.scanMtfFail,
             color = if (row.mtfGate) DiveColors.Green else DiveColors.TextDim,
         )
         row.microScore?.let {
@@ -692,7 +731,7 @@ private fun OverlayTagRow(row: CrossRankingRow) {
                 else -> "·"
             }
             TinyTag(
-                text = "MICRO $arrow ${microShortLabel(row.microLabel)}",
+                text = s.scanMicroTag(arrow, microShortLabel(row.microLabel, s)),
                 color = when {
                     dir > 0 -> DiveColors.Green
                     dir < 0 -> DiveColors.Red
@@ -703,12 +742,12 @@ private fun OverlayTagRow(row: CrossRankingRow) {
     }
 }
 
-/** Compact STRONG_BUY→S.BUY style shortening so the tag stays one-liner on 360dp. */
-private fun microShortLabel(label: String?): String = when (label) {
+/** Compact STRONG_BUY→S.BUY style shortening (localized) so the tag stays one-liner on 360dp. */
+private fun microShortLabel(label: String?, s: DiveStrings): String = when (label) {
     null -> "—"
-    "STRONG_BUY" -> "S.BUY"
-    "STRONG_SELL" -> "S.SELL"
-    "NEUTRAL" -> "NEUT"
+    "STRONG_BUY" -> s.microStrongBuy
+    "STRONG_SELL" -> s.microStrongSell
+    "NEUTRAL" -> s.microNeutral
     else -> label
 }
 
@@ -747,22 +786,20 @@ private fun WhaleDivergenceBlock(
     whaleDrop: Double,
     patternDirection: Int,
 ) {
+    val s = LocalDiveStrings.current
     // Descriptive pattern: did the whale SELL (distribution) or BUY (accumulation)? NOT sign(score).
     val isDistribution = patternDirection < 0
     // Distribution = red ▼ (whales selling), accumulation = green ▲ (whales accumulating).
     val color = if (isDistribution) DiveColors.Red else DiveColors.Green
     val arrow = if (isDistribution) "▼" else "▲"
-    val title = if (isDistribution) "DISTRIBUTION" else "ACCUMULATION"
+    val title = if (isDistribution) s.scanDistribution else s.scanAccumulation
     // Distribution: price rose (+), whale fell (−). Accumulation: price fell (−), whale rose (+).
     val priceSign = if (isDistribution) "+" else "−"
     val whaleSign = if (isDistribution) "−" else "+"
-    // The score is the EMPIRICAL CONTRARIAN ranking score — show its sign AS IS (distribution = +).
+    // The ranking score's sign is shown AS IS (distribution = +): a contrarian ranking heuristic.
     val scoreSign = if (score >= 0.0) "+" else "−"
-    // An honest note when the ranking direction (contrarian prediction) is OPPOSITE the descriptive pattern.
-    val contrarianNote = if (isDistribution)
-        "Contrarian: price has historically continued upward → RANK ↑"
-    else
-        "Contrarian: price has historically continued downward → RANK ↓"
+    // The ranking direction (contrarian heuristic) is OPPOSITE the descriptive pattern.
+    val contrarianNote = if (isDistribution) s.scanContrarianUp else s.scanContrarianDown
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -786,7 +823,12 @@ private fun WhaleDivergenceBlock(
                     letterSpacing = 0.4.sp,
                 )
                 Text(
-                    text = "Price $priceSign${(abs(risePct) * 100).format(1)}% · Whale $whaleSign${(whaleDrop * 100).format(1)}%",
+                    text = s.scanPriceWhaleLine(
+                        priceSign = priceSign,
+                        risePct = (abs(risePct) * 100).format(1),
+                        whaleSign = whaleSign,
+                        whaleDrop = (whaleDrop * 100).format(1),
+                    ),
                     color = DiveColors.TextMuted,
                     fontSize = 10.sp,
                     fontFamily = DiveFonts.body,
@@ -794,14 +836,6 @@ private fun WhaleDivergenceBlock(
                 )
                 Text(
                     text = contrarianNote,
-                    color = DiveColors.TextMuted,
-                    fontSize = 10.sp,
-                    fontFamily = DiveFonts.body,
-                    lineHeight = 13.sp,
-                )
-                // Honest holding-horizon hint (descriptive text — does NOT affect signal/ranking logic).
-                Text(
-                    text = "Suggested hold: 24–48 hours",
                     color = DiveColors.TextMuted,
                     fontSize = 10.sp,
                     fontFamily = DiveFonts.body,
@@ -820,26 +854,15 @@ private fun WhaleDivergenceBlock(
 }
 
 /**
- * RISK ADVISOR — INFORMATIONAL only, NOT investment advice.
+ * VOLATILITY (ATR) block — descriptive only, NOT investment advice.
  *
- * Shows the ATR-adaptive bracket validated in docs/DIVERGENCE_VALIDATION.md §8
- * (a real strategy backtest, 120 trades), scaled to each coin's volatility:
- *   • Stop  = 2.5 × ATR(1h)  (as a price-%) — reduces noise-driven stop-outs
- *     (≈ 65-68% hit rate, vs ≈ 59.7% for a fixed -1.6% stop).
- *   • Target = 1.5 × Stop      (reward:risk = 1.5).
- *   • Max leverage ≈ riskPct / stopPct (risking 5% of the account). At 50x, full-account
- *     margin ≈ 100% liquidation risk — even with an edge. This row is PURELY explanatory;
- *     it does NOT touch the score/elimination/ranking/auto-trade logic.
- *
- *  Position: risk 5-10% of the account (per-trade). Max leverage is derived with riskPct = 5%.
+ * Shows the ATR percentage from the indicator layer (atr_filter → atr_pct) as a volatility
+ * yardstick. It carries NO stop, target, position-size, % of account or leverage guidance,
+ * and it never touches the score / elimination / ranking.
  */
 @Composable
 private fun RiskAdvisorBlock(atrPct: Double) {
-    // All values are in price-%. ATR% comes from the indicator layer (atr_filter → atr_pct).
-    val stopPct = 2.5 * atrPct          // 2.5 × ATR(1h) — adaptive stop
-    val targetPct = 1.5 * stopPct       // reward:risk = 1.5
-    val riskPct = 5.0                   // 5% of the account (conservative end of the 5-10 range)
-    val maxLev = if (stopPct > 0.0) riskPct / stopPct else 0.0
+    val s = LocalDiveStrings.current
     // Theme warning token (per-preset amber) — was a pinned 0xFFF59E0B hex.
     val amber = DiveColors.Warn
     Column(
@@ -853,7 +876,7 @@ private fun RiskAdvisorBlock(atrPct: Double) {
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                text = "RISK",
+                text = s.scanVolatilityTitle,
                 color = amber,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Black,
@@ -862,24 +885,22 @@ private fun RiskAdvisorBlock(atrPct: Double) {
             )
             Spacer(Modifier.width(6.dp))
             Text(
-                text = "suggestion · not investment advice",
+                text = s.disclaimerShort,
                 color = DiveColors.TextDim,
                 fontSize = 10.sp,
                 fontFamily = DiveFonts.body,
             )
         }
         Text(
-            text = "Stop ≈ −${stopPct.format(2)}% (2.5×ATR) · Target +${targetPct.format(2)}% " +
-                "· Max ~${maxLev.format(1)}x · Size: 5-10% of account",
+            text = s.scanVolatilityLine(atrPct.format(2)),
             color = DiveColors.TextMuted,
             fontSize = 10.sp,
             fontFamily = DiveFonts.body,
             lineHeight = 13.sp,
         )
         Text(
-            text = "⚠ 50x + full-account margin ≈ 100% liquidation risk (even with an edge) — " +
-                "cap leverage relative to the stop %.",
-            color = DiveColors.Red,
+            text = s.scanVolatilityNote,
+            color = DiveColors.TextDim,
             fontSize = 10.sp,
             fontFamily = DiveFonts.body,
             lineHeight = 13.sp,
@@ -897,6 +918,7 @@ private fun CoinCardHeader(
     onAlert: () -> Unit,
     onShare: () -> Unit,
 ) {
+    val s = LocalDiveStrings.current
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -962,7 +984,7 @@ private fun CoinCardHeader(
                 .border(1.dp, DiveColors.Border, RoundedCornerShape(6.dp))
                 .semantics {
                     role = Role.Button
-                    contentDescription = "${row.symbol} için alarm ekle"
+                    contentDescription = s.scanAlertCd(row.symbol)
                 }
                 .clickable(onClick = onAlert)
                 .padding(horizontal = 6.dp, vertical = 4.dp),
@@ -983,7 +1005,7 @@ private fun CoinCardHeader(
                 .border(1.dp, DiveColors.Border, RoundedCornerShape(6.dp))
                 .semantics {
                     role = Role.Button
-                    contentDescription = "${row.symbol} karar kartını paylaş"
+                    contentDescription = s.scanShareCd(row.symbol)
                 }
                 .clickable(onClick = onShare)
                 .padding(horizontal = 6.dp, vertical = 4.dp),
@@ -1036,7 +1058,8 @@ private fun LivePriceCell(symbol: String, rowPrice: Double, livePrice: Double?) 
             .padding(horizontal = 4.dp, vertical = 1.dp),
     ) {
         Text(
-            text = "${'$'}${displayed.format(2, grouped = true)}",
+            // Magnitude-based decimals: sub-cent contracts (e.g. 1000x-denominated) stay readable.
+            text = "\$" + UiLabels.priceLabel(displayed),
             color = DiveColors.Text,
             fontSize = 14.sp,
             fontWeight = FontWeight.SemiBold,
@@ -1046,11 +1069,9 @@ private fun LivePriceCell(symbol: String, rowPrice: Double, livePrice: Double?) 
 }
 
 /**
- * TARAMA EVRENİ status row (Task 3 — HONEST READ-ONLY). ScannerViewModel exposes
- * NO public universe setter, so the UI renders the CURRENT mode (what the next
- * scan will use, read from the persisted SettingsStore) plus the rolling ETA —
- * never a fabricated countdown. Changing the mode requires a VM setter (noted in
- * the campaign report); this row is intentionally not clickable.
+ * TARAMA EVRENİ row. The chips call [ScannerViewModel.setUniverseMode], which persists the mode;
+ * it takes effect on the next scan. The mode shown is the one the next scan will use (seeded from
+ * the persisted setting), plus the rolling ETA — never a fabricated countdown.
  */
 @Composable
 private fun UniverseInfoRow(
@@ -1059,6 +1080,7 @@ private fun UniverseInfoRow(
     etaSeconds: Long?,
     onSelectMode: (String) -> Unit,
 ) {
+    val s = LocalDiveStrings.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -1070,7 +1092,7 @@ private fun UniverseInfoRow(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                text = "TARAMA EVRENİ",
+                text = s.scanUniverseTitle,
                 color = DiveColors.TextMuted,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Bold,
@@ -1079,8 +1101,8 @@ private fun UniverseInfoRow(
             )
             Spacer(Modifier.width(8.dp))
             Text(
-                text = AlertLabels.universeLabel(universeMode) +
-                    if (universeSize > 0) " · $universeSize sembol" else "",
+                text = AlertLabels.universeLabel(universeMode, s) +
+                    if (universeSize > 0) s.scanUniverseSymbols(universeSize) else "",
                 color = DiveColors.Accent,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Bold,
@@ -1088,7 +1110,7 @@ private fun UniverseInfoRow(
             )
             Spacer(Modifier.weight(1f))
             Text(
-                text = "ETA ${AlertLabels.etaLabel(etaSeconds)}",
+                text = s.scanEtaLabel(AlertLabels.etaLabel(etaSeconds, s)),
                 color = DiveColors.TextMuted,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.SemiBold,
@@ -1098,7 +1120,7 @@ private fun UniverseInfoRow(
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             listOf("TOP20", "TOP50", "TOP100", "TOP250", "ALL").forEach { mode ->
                 FilterPill(
-                    label = AlertLabels.universeLabel(mode),
+                    label = AlertLabels.universeLabel(mode, s),
                     selected = universeMode == mode,
                     accent = DiveColors.Accent,
                     onClick = { if (universeMode != mode) onSelectMode(mode) },
@@ -1107,7 +1129,7 @@ private fun UniverseInfoRow(
         }
         if (AlertLabels.isFullUniverse(universeMode)) {
             Text(
-                text = "⚠ ~500 sembol · birkaç dk sürer · yeni taramada geçerli",
+                text = s.scanUniverseWarning,
                 color = DiveColors.Warn,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.SemiBold,
@@ -1120,6 +1142,7 @@ private fun UniverseInfoRow(
 /** Honest empty state for the ★ İZLEME lens. */
 @Composable
 private fun NoWatchlistCard(hasFavorites: Boolean) {
+    val s = LocalDiveStrings.current
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -1130,8 +1153,7 @@ private fun NoWatchlistCard(hasFavorites: Boolean) {
         contentAlignment = Alignment.Center,
     ) {
         Text(
-            text = if (hasFavorites) "★ İzleme listesinde bu taramadan sonuç yok."
-            else "★ İzleme listen boş — Ayarlar > Favori Coinler'e ekle.",
+            text = if (hasFavorites) s.scanWatchNoResults else s.scanWatchEmpty,
             color = DiveColors.TextMuted,
             fontSize = 13.sp,
             fontFamily = DiveFonts.body,
@@ -1141,12 +1163,13 @@ private fun NoWatchlistCard(hasFavorites: Boolean) {
 
 @Composable
 private fun ConfidenceBlock(confidence: Int, accentColor: Color, risk: String) {
+    val s = LocalDiveStrings.current
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            text = "CONFIDENCE",
+            text = s.scanConfidence,
             color = DiveColors.TextMuted,
             fontSize = 10.sp,
             fontWeight = FontWeight.Bold,
@@ -1183,6 +1206,14 @@ private fun ConfidenceBlock(confidence: Int, accentColor: Color, risk: String) {
     }
 }
 
+/** Localized label for the canonical risk key (LOW / MEDIUM / HIGH / N/A). */
+private fun riskText(risk: String, s: DiveStrings): String = when (risk.uppercase()) {
+    "LOW" -> s.scanRiskLow
+    "MEDIUM" -> s.scanRiskMedium
+    "HIGH" -> s.scanRiskHigh
+    else -> s.scanRiskNone
+}
+
 /**
  * SCORE block — surfaces the time-weighted net NSS that actually drives the
  * cross-rank sort. Previously hidden inside `row.netNss` and miscast as
@@ -1196,12 +1227,13 @@ private fun ConfidenceBlock(confidence: Int, accentColor: Color, risk: String) {
  */
 @Composable
 private fun ScoreBlock(netNss: Double, countHit: Int, totalTfs: Int) {
+    val s = LocalDiveStrings.current
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            text = "SCORE",
+            text = s.scanScore,
             color = DiveColors.TextMuted,
             fontSize = 10.sp,
             fontWeight = FontWeight.Bold,
@@ -1239,20 +1271,13 @@ private fun ScoreBlock(netNss: Double, countHit: Int, totalTfs: Int) {
                 .padding(horizontal = 10.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            // Directional agreement: TFs whose verdict matches the dominant side, out of all TFs.
             Text(
-                text = "$countHit/$totalTfs",
+                text = s.scanTfAgree(countHit, totalTfs),
                 color = chipFg,
-                fontSize = 12.sp,
+                fontSize = 11.sp,
                 fontWeight = FontWeight.Black,
-                fontFamily = DiveFonts.body,
-            )
-            Spacer(Modifier.width(4.dp))
-            Text(
-                text = "TF AGREE",
-                color = chipFg,
-                fontSize = 10.sp,
-                fontWeight = FontWeight.SemiBold,
-                letterSpacing = 0.5.sp,
+                letterSpacing = 0.3.sp,
                 fontFamily = DiveFonts.body,
             )
         }
@@ -1261,6 +1286,7 @@ private fun ScoreBlock(netNss: Double, countHit: Int, totalTfs: Int) {
 
 @Composable
 private fun RiskChip(risk: String) {
+    val s = LocalDiveStrings.current
     val (bg, fg) = when (risk.uppercase()) {
         "LOW" -> DiveColors.GreenTint15 to DiveColors.Green
         "MEDIUM" -> DiveColors.YellowTint15 to DiveColors.Yellow
@@ -1268,7 +1294,7 @@ private fun RiskChip(risk: String) {
         else -> DiveColors.NeutralTint15 to DiveColors.TextDim
     }
     Text(
-        text = risk.uppercase(),
+        text = riskText(risk, s),
         color = fg,
         fontSize = 10.sp,
         fontWeight = FontWeight.Bold,
@@ -1285,9 +1311,10 @@ private fun RiskChip(risk: String) {
 // Cell = TF label + confidence%, tinted by signal direction.
 @Composable
 private fun TfGrid(perTf: Map<String, TfSlotState>, allTfs: List<String>) {
+    val s = LocalDiveStrings.current
     Column(modifier = Modifier.fillMaxWidth()) {
         Text(
-            text = "ALL ${allTfs.size} TIMEFRAMES",
+            text = s.scanTimeframesHeader(allTfs.size),
             color = DiveColors.TextMuted,
             fontSize = 10.sp,
             fontWeight = FontWeight.Bold,
@@ -1357,6 +1384,7 @@ private fun TfCell(tf: String, slot: TfSlotState?, modifier: Modifier = Modifier
  */
 @Composable
 private fun CoinCardFooterCta(onSelect: () -> Unit) {
+    val s = LocalDiveStrings.current
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -1371,7 +1399,7 @@ private fun CoinCardFooterCta(onSelect: () -> Unit) {
                 .padding(horizontal = 18.dp, vertical = 9.dp),
         ) {
             Text(
-                text = "SELECT →",
+                text = s.scanSelect,
                 // Preset-aware on-accent color — was pinned Color.White.
                 color = MaterialTheme.colorScheme.onPrimary,
                 fontSize = 12.sp,
@@ -1387,6 +1415,7 @@ private fun CoinCardFooterCta(onSelect: () -> Unit) {
 // ═════════════════════════════════════════════════════════════════════════
 @Composable
 private fun EmptyStateCard() {
+    val s = LocalDiveStrings.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -1399,16 +1428,68 @@ private fun EmptyStateCard() {
         Text("🔎", fontSize = 32.sp)
         Spacer(Modifier.height(10.dp))
         Text(
-            text = "No Scan Run Yet",
+            text = s.scanNoRunTitle,
             color = DiveColors.Text,
             fontSize = 15.sp,
             fontWeight = FontWeight.SemiBold,
         )
         Spacer(Modifier.height(4.dp))
         Text(
-            text = "Tap the \"Start Scan\" button above",
+            text = s.scanNoRunHint,
             color = DiveColors.TextMuted,
             fontSize = 12.sp,
+        )
+    }
+}
+
+/** Empty result with a completed scan: the scan ran, nothing survived / nothing was found. */
+@Composable
+private fun NoSurvivorsCard(eliminated: Int) {
+    val s = LocalDiveStrings.current
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(DiveColors.BgCard)
+            .border(1.dp, DiveColors.Border, RoundedCornerShape(12.dp))
+            .padding(20.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = if (eliminated > 0) s.scanNoSurvivors(eliminated) else s.scanNoCandidates,
+            color = DiveColors.TextMuted,
+            fontSize = 13.sp,
+            fontFamily = DiveFonts.body,
+        )
+    }
+}
+
+/** Region block (HTTP 451): a dedicated explanation with NO retry control — retrying cannot help. */
+@Composable
+private fun RegionBlockedCard() {
+    val s = LocalDiveStrings.current
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(DiveDims.Radius))
+            .background(DiveColors.Warn.copy(alpha = 0.10f))
+            .border(1.dp, DiveColors.Warn.copy(alpha = 0.35f), RoundedCornerShape(DiveDims.Radius))
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(
+            text = s.errRegionBlockedTitle,
+            color = DiveColors.Warn,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold,
+            fontFamily = DiveFonts.body,
+        )
+        Text(
+            text = s.errRegionBlockedBody,
+            color = DiveColors.TextMuted,
+            fontSize = 12.sp,
+            lineHeight = 16.sp,
+            fontFamily = DiveFonts.body,
         )
     }
 }
@@ -1419,6 +1500,7 @@ private fun EmptyStateCard() {
  */
 @Composable
 private fun ScanErrorCard(message: String, onRetry: () -> Unit) {
+    val s = LocalDiveStrings.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -1427,7 +1509,7 @@ private fun ScanErrorCard(message: String, onRetry: () -> Unit) {
             .border(1.dp, DiveColors.RedTint25, RoundedCornerShape(DiveDims.Radius))
             .padding(12.dp),
     ) {
-        Text("Error: $message", color = DiveColors.Red, fontSize = 13.sp)
+        Text(s.scanErrorLine(message), color = DiveColors.Red, fontSize = 13.sp)
         Spacer(Modifier.height(10.dp))
         Row(
             modifier = Modifier
@@ -1453,6 +1535,7 @@ private fun ScanErrorCard(message: String, onRetry: () -> Unit) {
 /** Amber partial-result note: "N sembol taranamadı — kısmi sonuç" with a dismiss affordance. */
 @Composable
 private fun FailedScanNote(count: Int, onDismiss: () -> Unit) {
+    val s = LocalDiveStrings.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1463,7 +1546,7 @@ private fun FailedScanNote(count: Int, onDismiss: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            text = "⚠ $count sembol taranamadı — kısmi sonuç",
+            text = s.scanFailedNote(count),
             color = DiveColors.Warn,
             fontSize = 12.sp,
             fontWeight = FontWeight.SemiBold,
@@ -1480,7 +1563,7 @@ private fun FailedScanNote(count: Int, onDismiss: () -> Unit) {
                 .clickable(onClick = onDismiss)
                 .semantics {
                     role = Role.Button
-                    contentDescription = "Kısmi sonuç uyarısını kapat"
+                    contentDescription = s.scanFailedNoteDismiss
                 }
                 .padding(horizontal = 8.dp, vertical = 2.dp),
         )
@@ -1513,44 +1596,42 @@ private fun formatScore(s: Double): String = when {
     else -> s.toInt().toString()
 }
 
-private fun heroSubtitle(state: ScannerUiState, resultSummary: String): String = when (state.currentPhase) {
-    ScanPhase.UNIVERSE -> "Fetching symbol list..."
-    ScanPhase.PHASE1 ->
-        "Phase 1 · scanning 1d/12h/8h"
-    ScanPhase.PHASE2 ->
-        "Phase 2 · remaining 9 timeframes"
-    ScanPhase.FINALIZING -> "Computing cross-ranking..."
+private fun heroSubtitle(state: ScannerUiState, resultSummary: String, s: DiveStrings): String = when (state.currentPhase) {
+    ScanPhase.UNIVERSE -> s.scanHeroFetchingUniverse
+    ScanPhase.PHASE1 -> s.scanHeroPhase1
+    ScanPhase.PHASE2 -> s.scanHeroPhase2
+    ScanPhase.FINALIZING -> s.scanHeroRanking
     ScanPhase.IDLE -> when {
-        state.universeLoading -> "Fetching symbol list..."
+        state.universeLoading -> s.scanHeroFetchingUniverse
         state.hotList.isNotEmpty() -> resultSummary // lens-aware (All/Divergence)
-        else -> "All Binance USDT-M · 12 timeframes"
+        else -> s.scanHeroIdle
     }
 }
 
-/** Show only this many highest-confidence cards after a scan completes. */
 /** Scanner result lens. */
 private enum class ResultFilter { ALL, DIVERGENCE }
 
-/** "All" / "⚠ Divergence (n)" two-pill lens selector. */
+/** "All" / "✕ Eliminated (n)" two-pill lens selector. */
 @Composable
 private fun ResultFilterToggle(
     selected: ResultFilter,
     flaggedCount: Int,
     onSelect: (ResultFilter) -> Unit,
 ) {
+    val s = LocalDiveStrings.current
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         FilterPill(
-            label = "All",
+            label = s.scanLensAll,
             selected = selected == ResultFilter.ALL,
             accent = DiveColors.Accent,
             modifier = Modifier.weight(1f),
             onClick = { onSelect(ResultFilter.ALL) },
         )
         FilterPill(
-            label = if (flaggedCount > 0) "✕ Eliminated ($flaggedCount)" else "✕ Eliminated",
+            label = s.scanLensEliminated(flaggedCount),
             selected = selected == ResultFilter.DIVERGENCE,
             accent = DiveColors.Warn,
             modifier = Modifier.weight(1f),
@@ -1571,12 +1652,13 @@ private fun ScanControlsRow(
     onContinuous: (Boolean) -> Unit,
     onDivergenceSort: (Boolean) -> Unit,
 ) {
+    val s = LocalDiveStrings.current
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text(
-            text = "TABLE SIZE",
+            text = s.scanTableSize,
             color = DiveColors.TextMuted,
             fontSize = 10.sp,
             fontWeight = FontWeight.Bold,
@@ -1589,7 +1671,7 @@ private fun ScanControlsRow(
         ) {
             for (n in listOf(5, 10, 15, 20, Int.MAX_VALUE)) {
                 FilterPill(
-                    label = if (n >= Int.MAX_VALUE / 2) "All" else "$n",
+                    label = if (n >= Int.MAX_VALUE / 2) s.scanAllSize else "$n",
                     selected = displaySize == n,
                     accent = DiveColors.Accent,
                     modifier = Modifier.weight(1f),
@@ -1601,7 +1683,7 @@ private fun ScanControlsRow(
         // When ON, the SAME survivors are shown by |divergence score| desc (the cross-sectional
         // top-K validated by backtest). Only the display order changes; score/elimination are unchanged.
         FilterPill(
-            label = if (divergenceSort) "◆ DIVERGENCE SORT ON" else "DIVERGENCE SORT OFF",
+            label = if (divergenceSort) s.scanDivSortOn else s.scanDivSortOff,
             selected = divergenceSort,
             accent = DiveColors.Warn,
             modifier = Modifier.fillMaxWidth(),
@@ -1609,8 +1691,7 @@ private fun ScanControlsRow(
         )
         if (divergenceSort) {
             Text(
-                text = "Display sorted by |divergence score| ↓ — backtest: top 3 divergences ≈ 61–76% (24–48h). " +
-                    "Ranking/score/elimination are UNCHANGED; display order only.",
+                text = s.scanDivSortNote,
                 color = DiveColors.TextDim,
                 fontSize = 10.sp,
                 lineHeight = 13.sp,
@@ -1619,8 +1700,8 @@ private fun ScanControlsRow(
         }
         FilterPill(
             label = if (continuous) {
-                if (scanning) "● CONTINUOUS · cycle #$cycle" else "● CONTINUOUS ON"
-            } else "CONTINUOUS OFF",
+                if (scanning) s.scanContinuousCycle(cycle) else s.scanContinuousOn
+            } else s.scanContinuousOff,
             selected = continuous,
             accent = DiveColors.Cyan,
             modifier = Modifier.fillMaxWidth(),
@@ -1640,6 +1721,7 @@ private fun FilterPill(
     val bg = if (selected) accent.copy(alpha = 0.18f) else DiveColors.BgCard
     val border = if (selected) accent.copy(alpha = 0.6f) else DiveColors.Border
     val fg = if (selected) accent else DiveColors.TextMuted
+    val s = LocalDiveStrings.current
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(8.dp))
@@ -1648,7 +1730,7 @@ private fun FilterPill(
             // A11y: exposed as a button whose selection state is announced.
             .semantics {
                 role = Role.Button
-                stateDescription = if (selected) "Seçili" else "Seçili değil"
+                stateDescription = if (selected) s.scanSelected else s.scanNotSelected
             }
             .clickable { onClick() }
             .padding(vertical = 9.dp),
@@ -1667,6 +1749,7 @@ private fun FilterPill(
 /** Info card that explains the "Divergence" lens concept once (discoverability). */
 @Composable
 private fun DivergenceLensInfo() {
+    val s = LocalDiveStrings.current
     // Theme warning token — was a pinned 0xFFF59E0B amber that clashed with light presets.
     val amber = DiveColors.Warn
     Column(
@@ -1679,7 +1762,7 @@ private fun DivergenceLensInfo() {
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Text(
-            text = "⚠ WHALE L/S DIVERGENCE",
+            text = s.scanDivInfoTitle,
             color = amber,
             fontSize = 11.sp,
             fontWeight = FontWeight.Black,
@@ -1687,22 +1770,16 @@ private fun DivergenceLensInfo() {
             fontFamily = DiveFonts.body,
         )
         Text(
-            text = "Label = the whale's RAW movement; SCORE = EMPIRICAL CONTRARIAN ranking. " +
-                "▼ DISTRIBUTION (red): price ↑ + whale L/S ↓ (whales selling into a rally). " +
-                "Top-trader L/S is contrarian → price has historically CONTINUED upward, " +
-                "so the SCORE is POSITIVE (+) and the coin ranks UP. " +
-                "▲ ACCUMULATION (green): price ↓ + whale L/S ↑ → contrarian expectation is a decline " +
-                "→ SCORE NEGATIVE (−), ranks down. A higher timeframe (1d) scores stronger than a " +
-                "lower one (5m).",
+            text = s.scanDivInfoBody,
             color = DiveColors.TextMuted,
             fontSize = 11.sp,
             fontFamily = DiveFonts.body,
             lineHeight = 15.sp,
         )
-        // ── Honest historical backtest + suggested holding horizon (descriptive text only) ──
-        // This block is PURELY explanatory; it does NOT affect signal/ranking/elimination logic.
+        // ── Research note: descriptive only; no hit rates are shown (none is validated in-app). ──
+        // It does NOT affect signal/ranking/elimination logic.
         Text(
-            text = "HISTORICAL BACKTEST / SUGGESTED HOLD",
+            text = s.scanResearchNoteTitle,
             color = amber,
             fontSize = 10.sp,
             fontWeight = FontWeight.Black,
@@ -1710,11 +1787,7 @@ private fun DivergenceLensInfo() {
             fontFamily = DiveFonts.body,
         )
         Text(
-            text = "Suggested hold: 24–48 hours. " +
-                "Most reliable: the divergence picks in the top 3 ranks. " +
-                "Historical backtest: top 3 divergences ≈ 61–64% correct (24–48h, 2%+ move) — not guaranteed. " +
-                "Contrarian: whale selling = DISTRIBUTION label, but historically price has " +
-                "continued upward → rank ↑.",
+            text = s.scanResearchNoteBody,
             color = DiveColors.TextMuted,
             fontSize = 11.sp,
             fontFamily = DiveFonts.body,
@@ -1727,10 +1800,8 @@ private fun DivergenceLensInfo() {
  *  the number of symbols whose whale data could not be fetched (silent false-negative risk). */
 @Composable
 private fun NoDivergenceCard(uncheckable: Int) {
-    val msg = buildString {
-        append("No whale L/S divergence was found in this scan.")
-        if (uncheckable > 0) append("  ($uncheckable symbols had no whale data — partial check.)")
-    }
+    val s = LocalDiveStrings.current
+    val msg = s.scanNoDivergence(uncheckable)
     Box(
         modifier = Modifier
             .fillMaxWidth()

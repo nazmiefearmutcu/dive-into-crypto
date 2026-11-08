@@ -14,10 +14,18 @@ private const val MS_TO_NS = 1_000_000L
 /** Canonical symbol for a USDT-M perp raw symbol. */
 internal fun usdmSymbol(raw: String): String = "${Venue.BINANCE_USDM.wire}:$raw"
 
-/** [Candle] → canonical [OHLCV] (USD-M venue; ms→ns timestamps). */
-fun Candle.toOhlcv(symbolRaw: String, interval: String, localTsMs: Long): OHLCV = OHLCV(
-    venue = Venue.BINANCE_USDM,
-    symbol = usdmSymbol(symbolRaw),
+/**
+ * [Candle] → canonical [OHLCV] (ms→ns timestamps). [venue] must match the market the
+ * candle came from: SPOT data is tagged [Venue.BINANCE_SPOT], USD-M data [Venue.BINANCE_USDM].
+ */
+fun Candle.toOhlcv(
+    symbolRaw: String,
+    interval: String,
+    localTsMs: Long,
+    venue: Venue = Venue.BINANCE_USDM,
+): OHLCV = OHLCV(
+    venue = venue,
+    symbol = "${venue.wire}:$symbolRaw",
     symbolRaw = symbolRaw,
     exchangeTs = openTime * MS_TO_NS,
     localTs = localTsMs * MS_TO_NS,

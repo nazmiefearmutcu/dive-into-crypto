@@ -17,7 +17,9 @@ class MacdIndicator(config: IndicatorConfig) : BaseIndicator(config) {
         val signalP = config.getInt("signal_period", 9)
         val strongHist = config.getDouble("strong_histogram_threshold", 0.5)
 
-        if (candles.size < slow + signalP) {
+        // Mirrors macd.py: the EWMs are defined from the first bar, so there is no extra
+        // warm-up guard (the Python reference emits as soon as it has any candle).
+        if (candles.isEmpty()) {
             return result(Signal.NEUTRAL, "MACD data insufficient")
         }
 

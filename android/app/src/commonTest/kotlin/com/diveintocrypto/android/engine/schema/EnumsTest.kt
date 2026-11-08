@@ -4,7 +4,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 class EnumsTest {
-    @Test fun venueWireKeysMatchCrypcodile() {
+    @Test fun venueWireKeysMatchCrocodileSourceKeys() {
         assertEquals("deribit", Venue.DERIBIT.wire)
         assertEquals("binance-spot", Venue.BINANCE_SPOT.wire)
         assertEquals("binance-usdm", Venue.BINANCE_USDM.wire)

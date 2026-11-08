@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 import time
 
-from diveintocrypto_desktop.data.http import FAPI_V1, get_json
+from diveintocrypto_desktop.data.http import FAPI_V1, describe_failure, get_json, prune_oldest
 
 logger = logging.getLogger("trading_bot.data.cvd")
 
@@ -24,6 +24,7 @@ AGG_TRADES_LIMIT = 1000       # Binance max per page
 WINDOW_SECONDS = 15 * 60      # rolling lookback
 SERIES_POINTS = 60            # downsampled cumulative-delta series cap
 CACHE_TTL = 10.0              # seconds a snapshot is reused
+CACHE_MAX = 128               # symbol-keyed: bounded so arbitrary symbols cannot grow it
 
 _cache: dict[str, tuple[float, dict]] = {}
 
@@ -113,6 +114,7 @@ async def snapshot(symbol: str) -> dict:
             snap = {"unavailable": "no_trades_in_window"}
     except Exception as e:
         logger.warning("cvd: %s fetch failed — %s", symbol, str(e)[:80])
-        snap = {"unavailable": str(e)[:120]}
+        snap = {"unavailable": describe_failure(e)}  # stable code; raw text stays in the log
     _cache[symbol] = (time.monotonic(), snap)
+    prune_oldest(_cache, CACHE_MAX)
     return snap

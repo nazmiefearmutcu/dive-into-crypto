@@ -5,7 +5,6 @@ import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.appendPathSegments
-import io.ktor.http.isSuccess
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -17,6 +16,9 @@ import kotlinx.serialization.json.longOrNull
 /**
  * F1: Binance Spot REST client — kline history only.
  * Live signed orders land in F3.
+ *
+ * Error contract matches [BinanceFuturesClient]: non-2xx → [UpstreamHttpException];
+ * rows with a missing required number are dropped, never zero-filled.
  */
 class BinanceSpotClient(
     private val baseUrl: String = DEFAULT_BASE_URL,
@@ -32,7 +34,7 @@ class BinanceSpotClient(
                 parameters.append("limit", limit.toString())
             }
         }
-        if (!response.status.isSuccess()) throw IllegalStateException("klines HTTP ${response.status.value}")
+        requireUpstreamOk("klines", response.status)
         val raw = response.bodyAsText()
 
         val arr = Json.parseToJsonElement(raw).jsonArray
@@ -66,18 +68,18 @@ class BinanceSpotClient(
                 appendPathSegments("api", "v3", "ticker", "24hr")
             }
         }
-        if (!response.status.isSuccess()) throw IllegalStateException("ticker/24hr HTTP ${response.status.value}")
+        requireUpstreamOk("ticker/24hr", response.status)
         val raw = response.bodyAsText()
         return Json.parseToJsonElement(raw).jsonArray.mapNotNull { entry ->
             val o = entry.jsonObject
-            val sym = o["symbol"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+            val sym = o.stringValue("symbol") ?: return@mapNotNull null
             Ticker24h(
                 symbol = sym,
-                lastPrice = o["lastPrice"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: 0.0,
-                priceChangePercent = o["priceChangePercent"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: 0.0,
-                quoteVolume = o["quoteVolume"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: 0.0,
-                highPrice = o["highPrice"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: 0.0,
-                lowPrice = o["lowPrice"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: 0.0,
+                lastPrice = o.finiteDouble("lastPrice") ?: return@mapNotNull null,
+                priceChangePercent = o.finiteDouble("priceChangePercent") ?: return@mapNotNull null,
+                quoteVolume = o.finiteDouble("quoteVolume") ?: return@mapNotNull null,
+                highPrice = o.finiteDouble("highPrice") ?: return@mapNotNull null,
+                lowPrice = o.finiteDouble("lowPrice") ?: return@mapNotNull null,
             )
         }
     }

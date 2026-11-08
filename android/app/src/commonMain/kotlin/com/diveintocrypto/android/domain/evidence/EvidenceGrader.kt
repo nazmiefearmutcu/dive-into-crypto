@@ -8,14 +8,18 @@ import kotlin.math.sqrt
  *
  * v2 (0.3.0) adds the Wilson 95% score interval around the hit rate plus the
  * small-sample GATES:
- *   - `samples < [EvidenceGrader.MIN_BUCKET_N]` (5) → [hitRate] is `null`
- *     (too few graded records to even display a rate honestly) and both
+ *   - the gates count DIRECTIONAL samples only (LONG/SHORT). NEUTRAL samples make no
+ *     claim: they are excluded from the rate, not counted as misses;
+ *   - `directional < [EvidenceGrader.MIN_BUCKET_N]` (5) → [hitRate] is `null`
+ *     (too few directional records to even display a rate honestly) and both
  *     interval bounds are `null`;
- *   - `samples < [EvidenceGrader.UNGATED_MIN_N]` (20) → [gated] is `true`
+ *   - a bucket with no directional samples (all NEUTRAL) → [hitRate] is `null`
+ *     as well: there is no hit to count;
+ *   - `directional < [EvidenceGrader.UNGATED_MIN_N]` (20) → [gated] is `true`
  *     (the rate and its wide interval are shown but flagged low-confidence).
  *
- * @param samples graded records in the bucket
- * @param hitRate share of records whose forward move agreed with the verdict
+ * @param samples all graded records in the bucket, NEUTRAL included
+ * @param hitRate share of the DIRECTIONAL records whose forward move agreed with the verdict
  *   direction (0..1); `null` when the bucket is gated below the display floor
  * @param medianReturnPct median forward return, percent (signed)
  * @param hitRateLo Wilson 95% lower bound (0..1); `null` while gated below the floor
@@ -110,15 +114,31 @@ object EvidenceGrader {
         return (center - half).coerceIn(0.0, 1.0) to (center + half).coerceIn(0.0, 1.0)
     }
 
-    /** Bucket stats for one set of samples (hit rate + Wilson interval + gates). */
+    /**
+     * Bucket stats for one set of samples (hit rate + Wilson interval + gates). The hit rate, its
+     * interval and the gates count only DIRECTIONAL samples (LONG/SHORT). NEUTRAL samples make no
+     * claim, so they are left out of the denominator instead of being counted as misses.
+     * [EvidenceBucketStats.samples] stays the total graded in the bucket.
+     */
     fun stats(samples: List<GradedSample>): EvidenceBucketStats {
-        val n = samples.size
-        val hits = samples.count { isHit(it.dominantDir, it.forwardReturnPct) }
+        val total = samples.size
         val med = median(samples.map { it.forwardReturnPct }) ?: 0.0
-        val gated = n < UNGATED_MIN_N
+        val directional = samples.filter { it.dominantDir != 0 }
+        val n = directional.size
+        // Nothing directional to score (empty, or all NEUTRAL): no hit rate, not a structural 0%.
+        if (n == 0) {
+            return EvidenceBucketStats(
+                samples = total,
+                hitRate = null,
+                medianReturnPct = med,
+                hitRateLo = null,
+                hitRateHi = null,
+                gated = total < UNGATED_MIN_N,
+            )
+        }
         if (n < MIN_BUCKET_N) {
             return EvidenceBucketStats(
-                samples = n,
+                samples = total,
                 hitRate = null,
                 medianReturnPct = med,
                 hitRateLo = null,
@@ -126,15 +146,16 @@ object EvidenceGrader {
                 gated = true,
             )
         }
+        val hits = directional.count { isHit(it.dominantDir, it.forwardReturnPct) }
         val (lo, hi) = wilsonInterval(hits, n)
-            ?: return EvidenceBucketStats(n, null, med, null, null, true)
+            ?: return EvidenceBucketStats(total, null, med, null, null, true)
         return EvidenceBucketStats(
-            samples = n,
+            samples = total,
             hitRate = hits.toDouble() / n,
             medianReturnPct = med,
             hitRateLo = lo,
             hitRateHi = hi,
-            gated = gated,
+            gated = n < UNGATED_MIN_N,
         )
     }
 
@@ -276,26 +297,51 @@ object EvidenceGrader {
         WINDOW_ALL to grade(samples),
     )
 
+    /** Candle interval of the klines the Performance screen grades against (1h). */
+    const val GRADE_CANDLE_MS: Long = 3_600_000L
+
     /**
-     * Forward return in PERCENT from the last candle whose openTime is at or
-     * before [recordTs] to the newest candle. Returns null when no candle covers
-     * the record (symbol listed later) or the base price is degenerate — the
-     * record is then honestly ungradable.
+     * Forward return in PERCENT, measured over exactly one horizon:
+     *   - the BASE is [basePrice], the verdict-time price archived with the record
+     *     (no look-ahead: candle closes after the record are never used as a base);
+     *   - only candles that OPEN after [recordTs] are considered. The candle that contains the
+     *     verdict timestamp is never graded on: its close is partly before the verdict;
+     *   - the END is the close of the candle that COVERS `recordTs + horizonMs`
+     *     (open ≤ target < open + [candleMs]). Its close lies at most one candle
+     *     interval after the target. That candle must also be CLOSED at [nowMs]: a candle
+     *     still forming has a provisional close, which must not be stored as final.
+     * Returns null — pending, retried on a later pass — when the base is degenerate, the
+     * horizon candle is not in the supplied window yet, it is still open at [nowMs], or the
+     * candle data is malformed.
      */
     fun forwardReturnPct(
         candleOpenTimes: List<Long>,
         candleCloses: List<Double>,
         recordTs: Long,
+        basePrice: Double,
+        horizonMs: Long,
+        nowMs: Long,
+        candleMs: Long = GRADE_CANDLE_MS,
     ): Double? {
         if (candleOpenTimes.size != candleCloses.size || candleCloses.isEmpty()) return null
-        var baseIdx = -1
+        if (basePrice <= 0.0 || basePrice.isNaN() || basePrice.isInfinite()) return null
+        if (horizonMs <= 0L || candleMs <= 0L) return null
+        val targetTs = recordTs + horizonMs
+        var endIdx = -1
         for (i in candleOpenTimes.indices) {
-            if (candleOpenTimes[i] <= recordTs) baseIdx = i else break
+            val open = candleOpenTimes[i]
+            if (open <= recordTs) continue // the verdict's own candle, and anything before it, is never graded on
+            if (open <= targetTs) endIdx = i else break
         }
-        if (baseIdx < 0) return null
-        val base = candleCloses[baseIdx]
-        val last = candleCloses.last()
-        if (base <= 0.0 || abs(base).isInfinite() || last <= 0.0) return null
-        return (last - base) / base * 100.0
+        if (endIdx < 0) return null
+        val endOpen = candleOpenTimes[endIdx]
+        // The candle must cover the target instant; otherwise the horizon has not
+        // been reached by the supplied candles yet.
+        if (endOpen + candleMs <= targetTs) return null
+        // The horizon candle must have closed by now; a forming candle is still pending.
+        if (endOpen + candleMs > nowMs) return null
+        val end = candleCloses[endIdx]
+        if (end <= 0.0 || end.isNaN() || end.isInfinite()) return null
+        return (end - basePrice) / basePrice * 100.0
     }
 }

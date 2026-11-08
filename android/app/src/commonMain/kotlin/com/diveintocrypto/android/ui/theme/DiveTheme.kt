@@ -77,7 +77,7 @@ val PRESETS: List<DivePreset> = listOf(
         bg = rgb(0xF1F3F7), bg2 = rgb(0xE9ECF2),
         elev = rgb(0xFFFFFF), elev2 = rgb(0xF6F8FB),
         border = rgb(0xE1E5EC), borderStrong = rgb(0xC9D0DC),
-        text = rgb(0x0E1422), muted = rgb(0x5A6478), dim = rgb(0x9AA3B5),
+        text = rgb(0x0E1422), muted = rgb(0x5A6478), dim = rgb(0x5B6475),
         accent = rgb(0x1B4DFF), accent2 = rgb(0x16357A),
         up = rgb(0x0F9E6E), down = rgb(0xE0334B), warn = rgb(0xC88A00)),
     DivePreset("ledger-graphite", "LEDGER", "Graphite", dark = true, radiusDp = 10, mono = false,
@@ -101,7 +101,7 @@ val PRESETS: List<DivePreset> = listOf(
         bg = rgb(0x05070A), bg2 = rgb(0x080B10),
         elev = rgb(0x0A0E14), elev2 = rgb(0x0C1119),
         border = rgb(0x182029), borderStrong = rgb(0x232E38),
-        text = rgb(0xDFE7EA), muted = rgb(0x7C8A92), dim = rgb(0x3A454D),
+        text = rgb(0xDFE7EA), muted = rgb(0x7C8A92), dim = rgb(0x6E7A84),
         accent = rgb(0x39FF9E), accent2 = rgb(0x1C7A52),
         up = rgb(0x4DFFA6), down = rgb(0xFF5C6C), warn = rgb(0xFFC23D)),
     DivePreset("term-amber", "TERMINAL", "Amber", dark = true, radiusDp = 2, mono = true,
@@ -122,7 +122,7 @@ val PRESETS: List<DivePreset> = listOf(
         bg = rgb(0xE9E4D8), bg2 = rgb(0xE4DED0),
         elev = rgb(0xF2EEE4), elev2 = rgb(0xECE7DA),
         border = rgb(0xCFC8B6), borderStrong = rgb(0xBCB4A0),
-        text = rgb(0x1B1C18), muted = rgb(0x6B675B), dim = rgb(0xB3AD9C),
+        text = rgb(0x1B1C18), muted = rgb(0x5E5A4E), dim = rgb(0x5E5A4E),
         accent = rgb(0xC2410C), accent2 = rgb(0xE08A5A),
         up = rgb(0x1A7A4A), down = rgb(0xB42318), warn = rgb(0xA66A00)),
 )
@@ -288,13 +288,17 @@ object DiveThemeController {
         )
         // OLED pure black: make all surfaces #000000 (pixels turn off), disable the mesh, and
         // strengthen the card border so hairline edges stay visible, with fully-white text.
+        // A user's custom colour for one of these tokens still wins over the OLED default.
         if (a.oled) {
             val black = Color(0xFF000000)
+            fun customOr(name: String, fallback: Color): Color =
+                a.customColors[name]?.let { Color(0xFF000000L or it) } ?: fallback
             resolved = resolved.copy(
-                bg = black, bg2 = black, elev = black, elev2 = black,
+                bg = customOr("bg", black), bg2 = customOr("bg2", black),
+                elev = customOr("elev", black), elev2 = customOr("elev2", black),
                 meshCenter = null,
-                text = Color(0xFFFFFFFF),
-                border = resolved.borderStrong,
+                text = customOr("text", Color(0xFFFFFFFF)),
+                border = customOr("border", resolved.borderStrong),
             )
         }
         DiveColors.apply(resolved)

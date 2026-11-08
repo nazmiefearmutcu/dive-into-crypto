@@ -3,7 +3,6 @@ package com.diveintocrypto.android.data.binance
 import com.diveintocrypto.android.data.binance.dto.WsKlineEnvelope
 import com.diveintocrypto.android.data.binance.dto.WsMiniTickerEnvelope
 import com.diveintocrypto.android.domain.model.Candle
-import com.diveintocrypto.android.platform.logDebug
 import com.diveintocrypto.android.platform.logError
 import com.diveintocrypto.android.platform.nowMillis
 import io.ktor.client.HttpClient
@@ -11,6 +10,7 @@ import io.ktor.client.plugins.websocket.webSocket
 import io.ktor.http.Url
 import io.ktor.websocket.Frame
 import io.ktor.websocket.readText
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -45,8 +45,8 @@ class BinanceWsClient(
                     )
                     for (frame in incoming) {
                         if (frame !is Frame.Text) continue
+                        // Raw payloads are never logged: release builds must not write them to logcat.
                         val text = frame.readText()
-                        logDebug("DiveIntoCrypto", "WS onMessage raw: $text")
                         val envelope = runCatching {
                             json.decodeFromString(WsKlineEnvelope.serializer(), text)
                         }.onFailure {
@@ -64,16 +64,21 @@ class BinanceWsClient(
                     )
                     close()
                 }
+            } catch (e: CancellationException) {
+                // Torn down by us (symbol switch / awaitClose): not a network failure, so no failure entry.
+                close(e)
+                throw e
             } catch (t: Throwable) {
+                val failure = t.asUpstreamIfHandshake(parsedUrl.encodedPath)
                 val duration = if (openedAt > 0) nowMillis() - openedAt else 0
                 NetworkLog.recordWs(
                     host = parsedUrl.host,
                     path = parsedUrl.encodedPath,
                     status = -1,
                     durationMs = duration,
-                    error = t.message ?: (t::class.simpleName ?: "Unknown")
+                    error = failure.message ?: (failure::class.simpleName ?: "Unknown")
                 )
-                close(t)
+                close(failure)
             }
         }
         awaitClose { job.cancel() }
@@ -144,13 +149,13 @@ class BinanceWsClient(
                             logError("DiveIntoCrypto", "WS miniTicker parse error: ${it.message}", it)
                         }.getOrNull() ?: continue
                         val batch = envelopes.mapNotNull { e ->
-                            val last = e.close.toDoubleOrNull() ?: return@mapNotNull null
+                            // A row with any malformed price is dropped, never zero-filled.
                             MiniTicker(
                                 symbol = e.symbol,
-                                lastPrice = last,
-                                openPrice = e.open.toDoubleOrNull() ?: 0.0,
-                                highPrice = e.high.toDoubleOrNull() ?: 0.0,
-                                lowPrice = e.low.toDoubleOrNull() ?: 0.0,
+                                lastPrice = e.close.toDoubleOrNull() ?: return@mapNotNull null,
+                                openPrice = e.open.toDoubleOrNull() ?: return@mapNotNull null,
+                                highPrice = e.high.toDoubleOrNull() ?: return@mapNotNull null,
+                                lowPrice = e.low.toDoubleOrNull() ?: return@mapNotNull null,
                                 eventTime = e.eventTime,
                             )
                         }
@@ -166,16 +171,20 @@ class BinanceWsClient(
                     )
                     close()
                 }
+            } catch (e: CancellationException) {
+                close(e)
+                throw e
             } catch (t: Throwable) {
+                val failure = t.asUpstreamIfHandshake(parsedUrl.encodedPath)
                 val duration = if (openedAt > 0) nowMillis() - openedAt else 0
                 NetworkLog.recordWs(
                     host = parsedUrl.host,
                     path = parsedUrl.encodedPath,
                     status = -1,
                     durationMs = duration,
-                    error = t.message ?: (t::class.simpleName ?: "Unknown")
+                    error = failure.message ?: (failure::class.simpleName ?: "Unknown")
                 )
-                close(t)
+                close(failure)
             }
         }
         awaitClose { job.cancel() }

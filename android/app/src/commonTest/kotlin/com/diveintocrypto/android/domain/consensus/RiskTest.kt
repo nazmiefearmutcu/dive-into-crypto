@@ -55,7 +55,6 @@ class RiskTest {
         assertEquals(RiskLevel.LOW, out.riskLevel)
         assertEquals(0.0, out.riskScore, 0.0)
         assertTrue(out.riskFactors.isEmpty(), "no risk factors expected")
-        assertEquals(1.0, out.details["position_size_modifier"])
         assertEquals("LOW", out.details["risk_level"])
     }
 
@@ -74,16 +73,15 @@ class RiskTest {
 
         assertEquals(RiskLevel.LOW, out.riskLevel)
         assertEquals(0.0, out.riskScore, 0.0)
-        assertEquals(1.0, out.details["position_size_modifier"])
     }
 
     @Test
     fun `50-50 split triggers high conflict and is HIGH risk`() {
-        // 3 buys vs 3 sells → minority/active = 3/6 = 0.5 > 0.3 (moderate) +1
+        // 3 buys vs 3 sells → minority/active = 3/6 = 0.5 > 0.4 (high conflict) +3
         // … and we crank weightedScore to 0 to also trip "weak conviction" +1
         // … and active=6 >= minActive(4) so section 4 contributes 0.
-        // To reach HIGH (>=5) we need at least one more contribution, so add
-        // a high-volatility ATR filter (+3). Combined: 1 + 1 + 3 = 5 → HIGH.
+        // The high-conflict (+3) and ATR (+3) terms together reach HIGH (>=5), so add
+        // a high-volatility ATR filter (+3). Combined: 3 + 1 + 3 = 7 → HIGH.
         val results = listOf(
             r("rsi", Signal.BUY),
             r("macd", Signal.BUY),
@@ -98,14 +96,43 @@ class RiskTest {
 
         assertEquals(RiskLevel.HIGH, out.riskLevel)
         assertTrue(out.riskScore >= 5.0, "score must be >=5")
-        assertEquals(0.25, out.details["position_size_modifier"])
         assertTrue(
             out.riskFactors.any { it.contains("High ATR volatility") },
             "expected high-volatility factor",
         )
         assertTrue(
-            out.riskFactors.any { it.contains("conflict") },
-            "expected conflict factor",
+            out.riskFactors.any { it.startsWith("High signal conflict") },
+            "expected high-conflict factor (ratio 0.5 > 0.4)",
+        )
+        assertTrue(
+            out.riskFactors.none { it.startsWith("Moderate signal conflict") },
+            "high conflict must not also report the moderate factor",
+        )
+    }
+
+    @Test
+    fun `conflict ratio exactly at the threshold is MODERATE not HIGH`() {
+        // 2 buy vs 3 sell: active = 5, minority = 2, ratio = 0.4. 0.4 is not > 0.4 (no high),
+        // but it is > 0.3 (moderate, +1). Score 0.5 keeps conviction and active-count checks quiet.
+        val results = listOf(
+            r("rsi", Signal.BUY),
+            r("macd", Signal.BUY),
+            r("bollinger", Signal.SELL),
+            r("ema_cross", Signal.SELL),
+            r("stochastic", Signal.SELL),
+        )
+        val s = breakdown(weightedScore = 0.5, buy = 2, sell = 3)
+        val out = RiskAssessor.assess(results, s, config)
+
+        assertEquals(1.0, out.riskScore, 0.0)
+        assertEquals(RiskLevel.LOW, out.riskLevel)
+        assertTrue(
+            out.riskFactors.any { it.startsWith("Moderate signal conflict") },
+            "expected moderate-conflict factor",
+        )
+        assertTrue(
+            out.riskFactors.none { it.startsWith("High signal conflict") },
+            "ratio 0.4 must not trigger high conflict",
         )
     }
 
@@ -122,7 +149,6 @@ class RiskTest {
 
         assertEquals(RiskLevel.MEDIUM, out.riskLevel)
         assertEquals(3.0, out.riskScore, 0.0)
-        assertEquals(0.6, out.details["position_size_modifier"])
         assertTrue(out.riskFactors.contains("High ATR volatility"))
     }
 

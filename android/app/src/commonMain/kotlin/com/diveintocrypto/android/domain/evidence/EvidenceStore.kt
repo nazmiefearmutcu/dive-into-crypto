@@ -14,6 +14,10 @@ import kotlinx.serialization.json.Json
  * [verdict] is a [com.diveintocrypto.android.domain.model.Signal] name;
  * [dominantDir] is the signed direction (+1 long / −1 short / 0 neutral);
  * [risk] is the scanner's LOW/MEDIUM/HIGH/N/A label.
+ * [coverage] says how complete the run that produced the record was: [COVERAGE_OK] when every
+ * planned fetch succeeded, [COVERAGE_ATTEMPTED] for a partial run (time budget, throttling or
+ * failed fetches). It is null for records written before the field existed and for foreground
+ * scans, which do not stamp it. The field is last with a null default, so older lines still decode.
  */
 @Serializable
 data class VerdictRecord(
@@ -24,7 +28,13 @@ data class VerdictRecord(
     val risk: String,
     val price: Double,
     val dominantDir: Int,
-)
+    val coverage: String? = null,
+) {
+    companion object {
+        const val COVERAGE_OK = "ok"
+        const val COVERAGE_ATTEMPTED = "attempted"
+    }
+}
 
 /**
  * Append-only verdict archive stored as a bounded JSONL blob under ONE

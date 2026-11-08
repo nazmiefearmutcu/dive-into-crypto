@@ -69,7 +69,7 @@
       console.warn("[DIVE] DEMO MODE ON — every price, verdict and score on screen is FABRICATED. Not live market data.");
     Object.keys(M).forEach(k=>{window.SGS_DATA_MAP[k]=M[k];});
     window.SGS_DATA=order.map(k=>M[k]);
-    window.SGS_SCAN={survivors:order.map((k,i)=>({d:M[k],score:M[k].netNss,rank:i+1,_demo:true})),eliminated:[],scanned:60,universeCount:437,_demo:true};
+    window.SGS_SCAN={survivors:order.map((k,i)=>Object.assign(window.sgsWrapScanRow(M[k]),{rank:i+1,_demo:true})),eliminated:[],scanned:60,universeCount:437,_demo:true};
     window.SGS_LOGS=[{t:"--:--:--",msg:"[DEMO] fabricated log line — no request was made"},{t:"--:--:--",msg:"[DEMO] fabricated log line — no request was made"},{t:"--:--:--",msg:"[DEMO] fabricated log line — no request was made"}];
     if(typeof window.__diveOnData==="function") window.__diveOnData();
   };

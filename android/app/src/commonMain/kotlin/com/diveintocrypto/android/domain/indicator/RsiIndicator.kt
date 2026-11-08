@@ -6,6 +6,11 @@ import com.diveintocrypto.android.domain.model.IndicatorResult
 import com.diveintocrypto.android.domain.model.Signal
 import com.diveintocrypto.android.platform.format
 
+/**
+ * RSI, mirroring rsi.py: average gain and average loss are simple means of the last
+ * `period` deltas (Cutler-style), NOT Wilder's RMA smoothing. Deliberate: stoch_rsi
+ * uses the same series. Values differ from charting-platform RSI for the same closes.
+ */
 class RsiIndicator(config: IndicatorConfig) : BaseIndicator(config) {
 
     override val name: String = "rsi"
@@ -31,17 +36,16 @@ class RsiIndicator(config: IndicatorConfig) : BaseIndicator(config) {
         val avgGain = gains.takeLast(period).average()
         val avgLoss = losses.takeLast(period).average()
 
-        if (avgGain == 0.0 && avgLoss == 0.0) {
-            return result(Signal.NEUTRAL, "RSI data insufficient (no price movement)", mapOf("rsi" to 50.0))
-        }
-
-        val rsi = if (avgLoss == 0.0) {
-            100.0
-        } else if (avgGain == 0.0) {
-            0.0
-        } else {
-            val rs = avgGain / avgLoss
-            100.0 - 100.0 / (1.0 + rs)
+        // Mirrors rsi.py's np.select: a flat window is RSI 50 and runs through the
+        // threshold ladder (no early return, so thresholds at or below 50 still apply).
+        val rsi = when {
+            avgGain == 0.0 && avgLoss == 0.0 -> 50.0
+            avgLoss == 0.0 -> 100.0
+            avgGain == 0.0 -> 0.0
+            else -> {
+                val rs = avgGain / avgLoss
+                100.0 - 100.0 / (1.0 + rs)
+            }
         }
 
         val rounded = Math.round(rsi * 100.0) / 100.0

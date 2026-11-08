@@ -171,4 +171,66 @@ class ScannerLogicTest {
         // "1h" has no result for AAA → no cell fabricated.
         assertEquals(null, patched.perTf["1h"])
     }
+
+    // ── directional agreement + NEUTRAL handling (regression) ─────────────────
+
+    @Test
+    fun `agreement counts only TFs matching the dominant side, not opposing or neutral ones`() {
+        // BUY on 6 TFs and SELL on 6 TFs: presence would read 12/12 (LOW risk, star).
+        val tfTop15 = mapOf(
+            "1m" to listOf(tfResult("AAA", "1m", Signal.BUY, 70, 10.0)),
+            "3m" to listOf(tfResult("AAA", "3m", Signal.BUY, 70, 10.0)),
+            "5m" to listOf(tfResult("AAA", "5m", Signal.BUY, 70, 10.0)),
+            "15m" to listOf(tfResult("AAA", "15m", Signal.BUY, 70, 10.0)),
+            "30m" to listOf(tfResult("AAA", "30m", Signal.BUY, 70, 10.0)),
+            "1h" to listOf(tfResult("AAA", "1h", Signal.BUY, 70, 10.0)),
+            "2h" to listOf(tfResult("AAA", "2h", Signal.SELL, 70, 5.0)),
+            "4h" to listOf(tfResult("AAA", "4h", Signal.SELL, 70, 5.0)),
+            "6h" to listOf(tfResult("AAA", "6h", Signal.SELL, 70, 5.0)),
+            "8h" to listOf(tfResult("AAA", "8h", Signal.SELL, 70, 5.0)),
+            "12h" to listOf(tfResult("AAA", "12h", Signal.SELL, 70, 5.0)),
+            "1d" to listOf(tfResult("AAA", "1d", Signal.SELL, 70, 5.0)),
+        )
+        val row = ScannerViewModel.crossRankRows(tfTop15).single()
+        assertEquals(Signal.BUY, row.dominantDir)   // 60 vs 30
+        assertEquals(6, row.countHit)               // not 12
+        assertTrue(row.countHit < row.totalTfs)
+        assertEquals("MEDIUM", ScannerViewModel.riskFromAgreement(row.countHit, row.totalTfs))
+    }
+
+    @Test
+    fun `neutral entries never count toward agreement`() {
+        val tfTop15 = mapOf(
+            "1d" to listOf(tfResult("AAA", "1d", Signal.BUY, 80, 60.0)),
+            "12h" to listOf(tfResult("AAA", "12h", Signal.NEUTRAL, 10, 1.0)),
+            "8h" to listOf(tfResult("AAA", "8h", Signal.NEUTRAL, 10, 1.0)),
+            "6h" to listOf(tfResult("AAA", "6h", Signal.NEUTRAL, 10, 1.0)),
+        )
+        val row = ScannerViewModel.crossRankRows(tfTop15).single()
+        assertEquals(Signal.BUY, row.dominantDir)
+        assertEquals(1, row.countHit)
+    }
+
+    @Test
+    fun `an exact buy-sell tie has no winning side (matches the desktop reference)`() {
+        val tfTop15 = mapOf(
+            "1d" to listOf(tfResult("TIE", "1d", Signal.BUY, 70, 10.0)),
+            "1h" to listOf(tfResult("TIE", "1h", Signal.SELL, 70, 10.0)),
+        )
+        val row = ScannerViewModel.crossRankRows(tfTop15).single()
+        assertEquals(Signal.NEUTRAL, row.dominantDir)
+        assertEquals(0, row.countHit)
+    }
+
+    @Test
+    fun `all-neutral symbol has no direction and is not labelled BUY`() {
+        val tfTop15 = mapOf(
+            "1d" to listOf(tfResult("ZZZ", "1d", Signal.NEUTRAL, 10, 1.0)),
+            "1h" to listOf(tfResult("ZZZ", "1h", Signal.NEUTRAL, 12, 0.0)),
+        )
+        val row = ScannerViewModel.crossRankRows(tfTop15).single()
+        assertEquals(Signal.NEUTRAL, row.dominantDir)
+        assertEquals(0.0, row.netNss)
+        assertEquals(0, row.countHit)
+    }
 }

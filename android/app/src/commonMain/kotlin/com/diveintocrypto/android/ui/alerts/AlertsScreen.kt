@@ -249,7 +249,7 @@ private fun RuleRow(
             Spacer(Modifier.height(3.dp))
             // v2 condition summary: kinds + cooldown
             Text(
-                text = AlertLabels.conditionSummaryLabel(rule),
+                text = AlertLabels.conditionSummaryLabel(rule, strings),
                 color = DiveColors.TextMuted,
                 fontSize = 11.sp,
                 fontFamily = DiveFonts.body,
@@ -258,7 +258,7 @@ private fun RuleRow(
             Spacer(Modifier.height(3.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = AlertLabels.ruleLineLabel(rule),
+                    text = AlertLabels.ruleLineLabel(rule, strings),
                     color = DiveColors.TextDim,
                     fontSize = 10.sp,
                     fontFamily = DiveFonts.body,
@@ -284,6 +284,7 @@ private fun RuleRow(
                 .border(1.dp, DiveColors.Border, RoundedCornerShape(12.dp))
                 .semantics {
                     role = Role.Switch
+                    contentDescription = strings.a11yToggleRule(rule.symbol)
                     stateDescription = if (rule.enabled) strings.active else strings.passive
                 }
                 .clickable(onClick = onToggle)
@@ -401,7 +402,7 @@ private fun DigestTab(
                             HistoryRow(
                                 timeLabel = formatTime(fired.firedTs, "HH:mm"),
                                 symbol = fired.symbol,
-                                lineLabel = AlertLabels.ruleLineLabel(rule),
+                                lineLabel = AlertLabels.ruleLineLabel(rule, strings),
                                 onClick = { onOpenSymbol(fired.symbol) },
                             )
                         }

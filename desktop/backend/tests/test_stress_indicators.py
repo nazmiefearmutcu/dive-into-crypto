@@ -52,26 +52,26 @@ def test_choppiness_period_one():
         "close": [9.5 + i for i in range(20)]
     })
     chop_ind = ChoppinessIndexIndicator(config={"indicator_thresholds": {"choppiness": {"period": 1}}})
-    # period=1 results in log10(1) = 0 in denominator, check if division warning/error occurs.
-    # Note: Pandas/numpy series division by zero might return inf/nan without raising a warning on some systems,
-    # but let's assert we get results.
+    # period=1 puts log10(1) = 0 in the denominator, so the degenerate chop is +inf
+    # (a defined number, not NaN, and not a crash). Pinned so a change is deliberate.
     res = chop_ind.calculate(df)
-    assert res is not None
+    assert res.signal == Signal.NEUTRAL
+    assert np.isinf(res.raw_values["chop"]) and res.raw_values["chop"] > 0
 
-def test_choppiness_period_zero_or_negative():
+def test_choppiness_period_zero_or_negative_is_insufficient_data():
+    # A lookback below one bar is not a valid window: the indicator reports NEUTRAL
+    # insufficient data in production (no warning, no pandas error). The autouse
+    # fixture turns any warning into an error, so a log10(0) would fail this test.
     df = pd.DataFrame({
         "high": [10.0 + i for i in range(20)],
         "low": [9.0 + i for i in range(20)],
         "close": [9.5 + i for i in range(20)]
     })
-    for p in [0, -5]:
-        chop_ind = ChoppinessIndexIndicator(config={"indicator_thresholds": {"choppiness": {"period": p}}})
-        # Check if period <= 0 triggers warning/error in log10 or runs
-        try:
-            res = chop_ind.calculate(df)
-            assert res is not None
-        except Exception:
-            pass
+    for period in (0, -5):
+        ind = ChoppinessIndexIndicator(config={"indicator_thresholds": {"choppiness": {"period": period}}})
+        res = ind.calculate(df)
+        assert res.signal == Signal.NEUTRAL
+        assert "insufficient" in res.reason
 
 def test_choppiness_extreme_values():
     # Infinite values

@@ -40,7 +40,6 @@ uses only TRIX values up to t. The emitted decision reads .iloc[-1] and
 .iloc[-2] exclusively - no future rows, no negative shift, no repainting.
 """
 
-from typing import Any
 
 import numpy as np
 import pandas as pd

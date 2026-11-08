@@ -17,7 +17,9 @@ class EmaCrossIndicator(config: IndicatorConfig) : BaseIndicator(config) {
         val longP = config.getInt("long_period", 21)
         val strongDiv = config.getDouble("strong_divergence_pct", 0.02)
 
-        if (candles.size < longP + 2) return result(Signal.NEUTRAL, "EMA data insufficient")
+        // Mirrors ema_cross.py: EWMs are defined from the first bar (no extra warm-up
+        // guard); the previous value falls back to the current one with a single bar.
+        if (candles.isEmpty()) return result(Signal.NEUTRAL, "EMA data insufficient")
 
         val closes = candles.map { it.close }
         val emaShort = Series.ewmAdjustFalse(closes, shortP)
@@ -25,8 +27,8 @@ class EmaCrossIndicator(config: IndicatorConfig) : BaseIndicator(config) {
 
         val curS = emaShort.last()
         val curL = emaLong.last()
-        val prevS = emaShort.dropLast(1).last()
-        val prevL = emaLong.dropLast(1).last()
+        val prevS = emaShort.getOrElse(emaShort.size - 2) { curS }
+        val prevL = emaLong.getOrElse(emaLong.size - 2) { curL }
 
         val divergence = if (curL != 0.0) (curS - curL) / curL else 0.0
         val shortSlope = if (prevS != 0.0) (curS - prevS) / prevS else 0.0

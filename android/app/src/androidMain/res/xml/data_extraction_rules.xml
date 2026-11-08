@@ -1,5 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 12+ backup and device-to-device transfer. Same policy as backup_rules.xml:
+  the local preferences file (portfolio, alerts, history) never leaves the device.
+  Trade-off: the settings it holds (language, theme, favourites) are not restored
+  onto a new device and must be set again.
+-->
 <data-extraction-rules>
-    <cloud-backup />
-    <device-transfer />
+    <cloud-backup>
+        <exclude domain="sharedpref" path="dive_settings.xml" />
+        <exclude domain="sharedpref" path="dive_permissions.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="dive_settings.xml" />
+        <exclude domain="sharedpref" path="dive_permissions.xml" />
+    </device-transfer>
 </data-extraction-rules>

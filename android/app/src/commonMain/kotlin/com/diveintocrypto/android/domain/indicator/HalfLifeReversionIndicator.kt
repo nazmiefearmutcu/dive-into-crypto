@@ -14,11 +14,14 @@ import kotlin.math.sqrt
  *
  * OU Half-Life Mean Reversion — statistically-gated reversion. Fits an
  * AR(1)/Ornstein-Uhlenbeck model over the window: Δprice_t = a + β·price_{t-1}
- * (β = np.polyfit(lagged, delta, 1)[0], i.e. OLS slope). β<0 implies mean
- * reversion with half-life = −ln2/ln(1+β). Only when the series is
- * statistically mean-reverting AND the half-life is short enough to act on
- * does it fade the current z-score deviation (z uses the window's sample std,
- * ddof=1). Causal.
+ * (β = OLS slope, identical to np.polyfit(lagged, delta, 1)[0]). Gates, in order:
+ *   1. β < 0 (reversion direction) and β > -1 (stable AR(1));
+ *   2. Dickey-Fuller style t-stat on β (OLS standard error from the residuals)
+ *      at or below `adf_t_critical` (default -2.86);
+ *   3. half-life = −ln2/ln(1+β) of at least one bar and at most `max_half_life`;
+ *   4. finite window (non-finite closes are NEUTRAL).
+ * Only then does it fade the current z-score deviation (z uses the window's
+ * sample std, ddof=1). Causal.
  */
 class HalfLifeReversionIndicator(config: IndicatorConfig) : BaseIndicator(config) {
 
@@ -29,17 +32,20 @@ class HalfLifeReversionIndicator(config: IndicatorConfig) : BaseIndicator(config
         val maxHl = config.getDouble("max_half_life", 30.0)
         val strongZ = config.getDouble("strong_z", 2.0)
         val weakZ = config.getDouble("weak_z", 1.0)
+        val adfCrit = config.getDouble("adf_t_critical", -2.86)
 
         val closes = candles.map { it.close }
         val n = closes.size
-        if (n < period) {
+        if (n < period || period < 4) {
             return result(Signal.NEUTRAL, "Half-life insufficient data")
         }
 
         val y = DoubleArray(period) { closes[n - period + it] }
+        if (y.any { !it.isFinite() }) {
+            return result(Signal.NEUTRAL, "Half-life insufficient data")
+        }
 
-        // beta = np.polyfit(lagged, delta, 1)[0] with lagged = y[:-1],
-        // delta = np.diff(y). OLS slope = cov(x, y) / var(x).
+        // beta = OLS slope of delta on lagged, with lagged = y[:-1], delta = diff(y).
         val m = period - 1
         var mx = 0.0
         var my = 0.0
@@ -56,10 +62,11 @@ class HalfLifeReversionIndicator(config: IndicatorConfig) : BaseIndicator(config
             num += dx * (y[i + 1] - y[i] - my)
             den += dx * dx
         }
-        // den == 0 (constant window ⇒ delta ≡ 0) would give NaN; np.polyfit's
-        // lstsq returns the minimum-norm solution beta = 0.0 there instead
-        // (with a RankWarning), which then hits the β≥0 NEUTRAL branch.
-        val beta = if (den == 0.0) 0.0 else num / den
+        if (den == 0.0) {
+            return result(Signal.NEUTRAL, "flat series")
+        }
+        val beta = num / den
+        val intercept = my - beta * mx
 
         if (beta >= 0.0) {
             return result(
@@ -68,7 +75,32 @@ class HalfLifeReversionIndicator(config: IndicatorConfig) : BaseIndicator(config
                 mapOf<String, Double?>("beta" to roundTo(beta, 6)),
             )
         }
-        val hl = if (beta > -1.0 && beta < 0.0) -ln(2.0) / ln1p(beta) else Double.POSITIVE_INFINITY
+        if (beta <= -1.0) {
+            return result(
+                Signal.NEUTRAL,
+                "AR(1) unstable (β≤-1)",
+                mapOf<String, Double?>("beta" to roundTo(beta, 6)),
+            )
+        }
+
+        // OLS standard error of beta from the residual variance (m - 2 degrees of freedom).
+        var ssRes = 0.0
+        for (i in 0 until m) {
+            val e = (y[i + 1] - y[i]) - (beta * y[i] + intercept)
+            ssRes += e * e
+        }
+        val s2 = ssRes / (m - 2)
+        val se = if (s2 > 0.0) sqrt(s2 / den) else 0.0
+        val tStat = if (se > 0.0) beta / se else Double.NEGATIVE_INFINITY
+        if (tStat > adfCrit) {
+            return result(
+                Signal.NEUTRAL,
+                "not statistically mean-reverting (t=${tStat.format(2)} > ${adfCrit.format(2)})",
+                mapOf<String, Double?>("beta" to roundTo(beta, 6)),
+            )
+        }
+
+        val hl = -ln(2.0) / ln1p(beta)
 
         var mean = 0.0
         for (v in y) mean += v
@@ -92,6 +124,9 @@ class HalfLifeReversionIndicator(config: IndicatorConfig) : BaseIndicator(config
 
         // Python `{hl:.1f}` prints "inf" for float('inf').
         val hlStr = if (hl.isFinite()) hl.format(1) else "inf"
+        if (hl < 1.0) {
+            return result(Signal.NEUTRAL, "half-life ${hl.format(2)} below 1 bar (implausible)", raw)
+        }
         if (hl > maxHl || hl.isNaN()) {
             return result(Signal.NEUTRAL, "half-life $hlStr too slow", raw)
         }

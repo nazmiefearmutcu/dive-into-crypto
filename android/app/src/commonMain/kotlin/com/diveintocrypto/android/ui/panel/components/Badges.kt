@@ -11,6 +11,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.diveintocrypto.android.ui.i18n.LocalDiveStrings
 import com.diveintocrypto.android.ui.theme.DiveColors
 import com.diveintocrypto.android.ui.theme.DiveFonts
 
@@ -33,6 +34,35 @@ fun SignalBadge(signal: String, modifier: Modifier = Modifier) {
     }
     Text(
         text = s,
+        color = fg,
+        fontSize = 12.sp,
+        fontWeight = FontWeight.Bold,
+        letterSpacing = 0.3.sp,
+        fontFamily = DiveFonts.body,
+        modifier = modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(bg)
+            .padding(horizontal = 10.dp, vertical = 3.dp),
+    )
+}
+
+/**
+ * Headline verdict badge: same colours as [SignalBadge], but the text is the localized
+ * bias wording (LONG eğilim / SHORT eğilim / Belirgin eğilim yok · LONG bias / SHORT bias /
+ * No clear bias) rather than the raw BUY/SELL token. Use this wherever the app's OWN final
+ * verdict is the headline (Play policy: no execution-style commands); keep [SignalBadge]
+ * for indicator-level technical rows.
+ */
+@Composable
+fun VerdictBadge(signal: String, modifier: Modifier = Modifier) {
+    val strings = LocalDiveStrings.current
+    val (bg, fg, label) = when (signal.uppercase()) {
+        "STRONG_BUY", "BUY" -> Triple(DiveColors.GreenTint15, DiveColors.Green, strings.biasLong)
+        "STRONG_SELL", "SELL" -> Triple(DiveColors.RedTint15, DiveColors.Red, strings.biasShort)
+        else -> Triple(DiveColors.NeutralTint15, DiveColors.TextMuted, strings.biasNone)
+    }
+    Text(
+        text = label.uppercase(),
         color = fg,
         fontSize = 12.sp,
         fontWeight = FontWeight.Bold,

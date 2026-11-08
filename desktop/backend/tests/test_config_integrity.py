@@ -3,6 +3,8 @@ and every indicator must carry a weight. Regression for the `atr:` → `atr_filt
 rename (the old key meant the ATR filter's thresholds block never applied).
 """
 
+from types import SimpleNamespace
+
 import pytest
 import yaml
 
@@ -24,7 +26,7 @@ def indicator_names(config) -> set[str]:
 
 
 def test_yaml_on_disk_matches_loader():
-    with _CONFIG_PATH.open() as f:
+    with _CONFIG_PATH.open(encoding="utf-8") as f:
         assert yaml.safe_load(f) == load_config()
 
 
@@ -61,8 +63,25 @@ def test_regime_block_matches_the_overlay_contract(config):
     regime = config.get("regime")
     assert regime is not None, "regime overlay must be explicitly configurable"
     assert set(regime) == {"strong_adx", "weak_adx", "chop_trend", "chop_range"}
-    # Load-time values must keep matching the module fallbacks.
+    # Load-time values must keep matching the module fallbacks (regime.py detect_regime).
     from diveintocrypto_desktop.engine.consensus import regime as rg
+
+    fallbacks = {"strong_adx": 25.0, "weak_adx": 20.0, "chop_trend": 38.2, "chop_range": 61.8}
+    assert {k: float(regime[k]) for k in fallbacks} == fallbacks
+
+    # Behavioural check: boundary inputs must classify identically under the YAML
+    # block and under the code fallbacks (an empty config), so drift is caught.
+    probes = [
+        [SimpleNamespace(name="adx_di", raw_values={"adx": 25.0})],
+        [SimpleNamespace(name="adx_di", raw_values={"adx": 24.9})],
+        [SimpleNamespace(name="adx_di", raw_values={"adx": 20.0})],
+        [SimpleNamespace(name="adx_di", raw_values={"adx": 20.1})],
+        [SimpleNamespace(name="choppiness", raw_values={"chop": 38.2})],
+        [SimpleNamespace(name="choppiness", raw_values={"chop": 61.8})],
+        [SimpleNamespace(name="choppiness", raw_values={"chop": 50.0})],
+    ]
+    for results in probes:
+        assert rg.detect_regime(results, config) == rg.detect_regime(results, {}), results
 
     out = rg.detect_regime([], config)
     assert out["regime"] == "MIXED"  # no data → MIXED, no crash

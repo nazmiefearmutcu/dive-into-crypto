@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Module lint configuration (picked up automatically by AGP).
+
+  ObsoleteSdkInt on mipmap-anydpi-v26: minSdk is 26, so lint suggests dropping the
+  -v26 qualifier. That is wrong for these two files: they carry a <monochrome> layer
+  (API 33), and in an unversioned mipmap-anydpi folder AAPT2 auto-versions them to
+  v33, after which the manifest's @mipmap/ic_launcher(_round) no longer resolves for
+  minSdk 26 ("resource mipmap/ic_launcher_round not found"). Keeping the explicit
+  v26 qualifier pins the resource to API 26 while still shipping the themed icon.
+-->
+<lint>
+    <issue id="ObsoleteSdkInt">
+        <ignore path="src/androidMain/res/mipmap-anydpi-v26" />
+    </issue>
+</lint>

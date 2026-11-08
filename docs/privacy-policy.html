@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DVCRY (Dive into Crypto): Gizlilik Politikası / Privacy Policy</title>
+<meta name="description" content="DVCRY gizlilik politikası ve Privacy Policy (TR/EN). Hesap yok, reklam veya analitik SDK'sı yok, veriler cihazda.">
+<style>
+  :root {
+    --bg: #f7f7f5;
+    --fg: #1d1f21;
+    --muted: #4f5660;
+    --line: #d6d8dc;
+    --accent: #1c6b4a;
+    --code-bg: #eceef0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f1216;
+      --fg: #e8eaed;
+      --muted: #aab2bd;
+      --line: #2b313a;
+      --accent: #5fd3a0;
+      --code-bg: #1a1f26;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0f1216;
+    --fg: #e8eaed;
+    --muted: #aab2bd;
+    --line: #2b313a;
+    --accent: #5fd3a0;
+    --code-bg: #1a1f26;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    font-size: 16px;
+    line-height: 1.6;
+    padding: 16px;
+  }
+  main { max-width: 760px; margin: 0 auto; }
+  h1 { font-size: 1.6rem; margin: 0.4em 0 0.2em; }
+  h2 { font-size: 1.2rem; margin: 1.6em 0 0.4em; color: var(--accent); }
+  h3 { font-size: 1.05rem; margin: 1.2em 0 0.3em; }
+  p, li { overflow-wrap: anywhere; }
+  .meta { color: var(--muted); font-size: 0.95rem; }
+  .meta div { margin: 0.1em 0; }
+  nav.lang { margin: 1em 0; display: flex; gap: 12px; flex-wrap: wrap; }
+  nav.lang a { color: var(--accent); font-weight: 600; }
+  hr { border: 0; border-top: 1px solid var(--line); margin: 2em 0; }
+  table { width: 100%; border-collapse: collapse; margin: 0.6em 0 1em; font-size: 0.95rem; }
+  th, td { text-align: left; vertical-align: top; border: 1px solid var(--line); padding: 6px 8px; }
+  th { background: var(--code-bg); }
+  code { background: var(--code-bg); padding: 0 4px; border-radius: 4px; font-size: 0.92em; overflow-wrap: anywhere; }
+  .table-wrap { overflow-x: auto; }
+  footer { color: var(--muted); font-size: 0.9rem; margin-top: 2em; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>DVCRY <small>(Dive into Crypto)</small></h1>
+    <div class="meta">
+      <div><strong>Yürürlük tarihi / Effective date:</strong> 2026-11-08</div>
+      <div><strong>Sürüm / Version:</strong> 1.0 (Android 0.4.0 ve sonrası / Android 0.4.0 and later)</div>
+      <div><strong>Geliştirici / Developer:</strong> &lt;OWNER: developer name&gt;</div>
+      <div><strong>İletişim / Contact:</strong> &lt;OWNER: support email&gt;</div>
+    </div>
+    <nav class="lang" aria-label="Language">
+      <a href="#tr">Türkçe</a>
+      <a href="#en">English</a>
+    </nav>
+    <p>Bu belge iki dildedir. Türkçe bölüm önce gelir; İngilizce bölüm aşağıdadır. İki metin arasında bir çelişki olursa Türkçe metin esas alınır.<br>
+    This document is available in two languages. The Turkish section comes first, followed by the English section. If the two texts conflict, the Turkish text prevails.</p>
+  </header>
+
+  <!-- ============================== TÜRKÇE ============================== -->
+  <section id="tr" lang="tr">
+    <h1>Türkçe</h1>
+
+    <h2>1. Özet</h2>
+    <ul>
+      <li>DVCRY uygulamasında hesap açmanız, giriş yapmanız veya API anahtarı girmeniz gerekmez.</li>
+      <li>Uygulama geliştiricinin işlettiği bir sunucuya kişisel veri göndermez.</li>
+      <li>Uygulamada reklam SDK'sı, analitik SDK'sı ve çökme raporlama SDK'sı yoktur.</li>
+      <li>Uygulama emir iletmez, bir borsa hesabına bağlanmaz, para veya kripto varlık tutmaz.</li>
+      <li>Uygulama yalnızca herkese açık piyasa verisi ister ve kayıtlarınızı cihazınızda tutar.</li>
+    </ul>
+
+    <h2>2. Uygulamanın bağlandığı sunucular</h2>
+    <p>Uygulama aşağıdaki Binance sunucularına bağlanır. Bunların dışında hiçbir sunucuya bağlanmaz.</p>
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>Sunucu</th><th>Ne için kullanılır</th></tr></thead>
+      <tbody>
+        <tr><td><code>fapi.binance.com</code></td><td>USDT-M vadeli işlem verileri: mumlar, açık pozisyon, fonlama oranı, fiyat ticker'ı, uzun/kısa oranları</td></tr>
+        <tr><td><code>api.binance.com</code></td><td>Spot piyasa verileri; yalnızca Ayarlar'dan spot veri kaynağını seçerseniz</td></tr>
+        <tr><td><code>fstream.binance.com</code></td><td>Canlı vadeli işlem fiyat ve mum akışı (WebSocket)</td></tr>
+        <tr><td><code>stream.binance.com:9443</code></td><td>Canlı spot fiyat akışı (WebSocket); yalnızca Ayarlar'dan spot kaynağı seçerseniz</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <ul>
+      <li>Bu istekler herkese açık ve kimlik içermeyen GET ve WebSocket isteklerdir. İstek parametreleri yalnızca sembol, zaman aralığı ve kayıt sayısı gibi piyasa verisi parametreleridir.</li>
+      <li>Her internet isteğinde olduğu gibi Binance, isteği yapan cihazın IP adresini görür. Binance'in kendi gizlilik politikası onun hizmetleri için geçerlidir: &lt;OWNER: Binance privacy policy URL, verify before publishing&gt;.</li>
+      <li>Bazı bölgelerde Binance piyasa verisini sunmayabilir ve HTTP 451 gibi bir yanıt dönebilir. Bu durumda uygulama bir hata mesajı gösterir ve veri göstermez.</li>
+      <li>Arka plan taraması yalnızca Ayarlar'da açtığınızda çalışır. Canlı fiyat akışları, uygulama canlı fiyat gösterirken veya fiyat uyarıları için gerektiğinde açılır.</li>
+    </ul>
+
+    <h2>3. Cihazınızda saklanan veriler</h2>
+    <p>Aşağıdaki veriler yalnızca cihazınızda, uygulamaya özel alanda saklanır. Bu veriler geliştiriciye veya üçüncü taraflara gönderilmez.</p>
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>Veri</th><th>Amaç</th></tr></thead>
+      <tbody>
+        <tr><td>Portföy kayıtları (sembol, giriş fiyatı, miktar, yön, oluşturma zamanı)</td><td>Kendi kayıtlarınızı uygulamada görmek ve analiz etmek</td></tr>
+        <tr><td>Uyarı kuralları ve tetiklenen uyarı geçmişi</td><td>Sizin belirlediğiniz eşikler için yerel bildirim göndermek</td></tr>
+        <tr><td>Analiz kanıt arşivi (karar kayıtları)</td><td>Uygulamadaki geçmiş analiz sonuçlarını göstermek</td></tr>
+        <tr><td>Ana ekran widget'ı durumu (son tarama sonuçları)</td><td>Widget'ta son taramanın özetini göstermek</td></tr>
+        <tr><td>Favoriler, tema, dil, tarama evreni ve veri kaynağı ayarları</td><td>Uygulamayı tercihlerinize göre çalıştırmak</td></tr>
+        <tr><td>Bildirim izni için tek bir "soruldu" işareti</td><td>Bildirim iznini tekrar tekrar sormamak</td></tr>
+        <tr><td>Paylaşım için oluşturulan kart görüntüleri (PNG)</td><td>Paylaş'a bastığınızda bir görüntü dosyası olarak paylaşmak; Android önbelleğinde tutulur</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <p>Uygulama bu verileri uygulamanın kendi tercihleri ve önbelleği içinde tutar. Diğer uygulamalar bu alana erişemez.</p>
+
+    <h2>4. Yedekleme ve cihaz aktarımı</h2>
+    <ul>
+      <li>Uygulamanın ayar dosyası (<code>dive_settings</code>) ve bildirim izni dosyası (<code>dive_permissions</code>), Android Otomatik Yedekleme (Google hesabınızdaki bulut yedeği) ve cihazdan cihaza aktarım kapsamı dışındadır. Portföy kayıtlarınız, uyarılarınız ve kanıt arşiviniz de bu dosyada olduğu için yedeklere veya yeni cihaza aktarılmaz.</li>
+      <li>Bu nedenle yeni bir cihaza geçtiğinizde dil, tema, favoriler ve ayarlar yeniden seçilmelidir.</li>
+      <li>Paylaşım kart görüntüleri önbellekte tutulur. Android önbelleği varsayılan olarak yedeklemeye dahil etmez.</li>
+      <li>Bu davranış uygulamanın yedekleme kuralları değiştirilirse güncellenir.</li>
+    </ul>
+
+    <h2>5. Bildirimler</h2>
+    <ul>
+      <li>Uyarılar yalnızca cihazınızda oluşturulan yerel bildirimlerdir. Uygulama bir bildirim sunucusu kullanmaz.</li>
+      <li>Android 13 ve sonrasında bildirim izni isteğe bağlıdır. İzni Android sistem ayarlarından dilediğiniz zaman kapatabilirsiniz.</li>
+    </ul>
+
+    <h2>6. Paylaşım</h2>
+    <p>Bir kartı paylaştığınızda görüntü, Android paylaşım menüsünde seçtiğiniz uygulamaya gönderilir. Bu işlem sizin eyleminizdir; geliştirici bu görüntüyü almaz.</p>
+
+    <h2>7. Güvenlik</h2>
+    <ul>
+      <li>Uygulama yalnızca HTTPS ve WSS (şifreli) bağlantılar kullanır. Şifresiz (cleartext) trafik kapalıdır.</li>
+      <li>Veriler uygulamaya özel alanda saklanır. Ek bir uygulama düzeyi şifreleme yapılmaz; cihazınızın kilidi ve Android'in cihaz şifrelemesi geçerlidir.</li>
+    </ul>
+
+    <h2>8. Saklama ve silme</h2>
+    <ul>
+      <li>Veriler siz silene veya uygulamayı kaldırana kadar cihazınızda kalır.</li>
+      <li>Tüm yerel verileri silmek için uygulamanın Ayarlar ekranındaki "Tüm yerel verileri temizle" işlemini kullanın. Bu işlem ayarları, favorileri, alarmları, portföyü ve önbelleği cihazdan siler.</li>
+      <li>Alternatif olarak Android Ayarlar &gt; Uygulamalar &gt; DVCRY &gt; Depolama &gt; Verileri temizle yolunu izleyebilir veya uygulamayı kaldırabilirsiniz.</li>
+      <li>Geliştiricinin sunucusunda sizinle ilgili bir veri bulunmadığı için geliştiriciden ayrıca silme talebinde bulunulacak bir veri yoktur.</li>
+    </ul>
+
+    <h2>9. Çocuklar</h2>
+    <p>Uygulama çocuklara yönelik değildir. Uygulama 18 yaş ve üzeri kullanıcılara yöneliktir; 18 yaşından küçük kişilere yönelik değildir.</p>
+
+    <h2>10. Yatırım tavsiyesi değildir</h2>
+    <p>DVCRY eğitim ve araştırma amaçlı bir analiz aracıdır. Yatırım, alım-satım veya finansal danışmanlık değildir. Kişiye özel tavsiye vermez, emir iletmez ve hesabınıza erişmez. Kaldıraçlı kripto vadeli işlemler yüksek risk taşır ve yatırdığınız tutarın tamamını kaybetmenize yol açabilir.</p>
+
+    <h2>11. Bağımsızlık</h2>
+    <p>DVCRY bağımsızdır; Binance ile bağlantılı, onaylı veya sponsorlu değildir. Binance adı yalnızca veri kaynağını belirtmek için kullanılır.</p>
+
+    <h2>12. Haklarınız (KVKK ve GDPR)</h2>
+    <p>Geliştirici sunucusunda veri tutmadığı için, geliştiricinin elinde erişilecek, düzeltilecek veya silinecek bir kişisel veri yoktur. 6698 sayılı KVKK veya GDPR kapsamındaki haklarınızla ilgili sorularınız için &lt;OWNER: support email&gt; adresine yazabilirsiniz. Binance'e ilişkin haklar için Binance'in gizlilik politikasına bakın.</p>
+
+    <h2>13. Değişiklikler</h2>
+    <p>Bu politika değiştiğinde yeni yürürlük tarihi ve sürüm numarası bu sayfada yayımlanır. Uygulamanın veri davranışı değişirse bu politika da güncellenir.</p>
+
+    <h2>14. İletişim</h2>
+    <p>&lt;OWNER: support email&gt;</p>
+  </section>
+
+  <hr>
+
+  <!-- ============================== ENGLISH ============================== -->
+  <section id="en" lang="en">
+    <h1>English</h1>
+
+    <h2>1. Summary</h2>
+    <ul>
+      <li>You do not need to create an account, sign in, or enter an API key in DVCRY.</li>
+      <li>The app does not send personal data to any server operated by the developer.</li>
+      <li>The app contains no advertising SDK, no analytics SDK and no crash-reporting SDK.</li>
+      <li>The app places no orders, does not connect to an exchange account, and does not hold money or crypto assets.</li>
+      <li>The app requests only public market data, and it keeps your records on your device.</li>
+    </ul>
+
+    <h2>2. Servers the app connects to</h2>
+    <p>The app connects to the Binance servers below and to no other server.</p>
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>Server</th><th>Used for</th></tr></thead>
+      <tbody>
+        <tr><td><code>fapi.binance.com</code></td><td>USDT-M futures market data: candles, open interest, funding rate, price ticker, long/short ratios</td></tr>
+        <tr><td><code>api.binance.com</code></td><td>Spot market data; used only if you choose the spot data source in Settings</td></tr>
+        <tr><td><code>fstream.binance.com</code></td><td>Live futures price and candle stream (WebSocket)</td></tr>
+        <tr><td><code>stream.binance.com:9443</code></td><td>Live spot price stream (WebSocket); used only if you choose the spot data source in Settings</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <ul>
+      <li>These are public, unauthenticated GET and WebSocket requests. The request parameters are market-data parameters only, such as symbol, interval and record limit.</li>
+      <li>As with any internet request, Binance sees the IP address of the device that makes the request. Binance's own privacy policy governs its services: &lt;OWNER: Binance privacy policy URL, verify before publishing&gt;.</li>
+      <li>In some regions Binance may not serve market data and may answer with HTTP 451 or a similar error. In that case the app shows an error message and no data.</li>
+      <li>Background scanning runs only when you turn it on in Settings. Live price streams are opened while the app shows live prices or needs them for price alerts.</li>
+    </ul>
+
+    <h2>3. Data stored on your device</h2>
+    <p>The data below is stored only on your device, in the app's private storage. It is not sent to the developer or to any third party.</p>
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>Data</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td>Portfolio entries (symbol, entry price, size, direction, creation time)</td><td>Showing and analysing your own entries in the app</td></tr>
+        <tr><td>Alert rules and fired-alert history</td><td>Sending local notifications for thresholds you set</td></tr>
+        <tr><td>Analysis evidence archive (verdict records)</td><td>Showing past analysis results in the app</td></tr>
+        <tr><td>Home-screen widget state (latest scan results)</td><td>Showing a summary of the latest scan in the widget</td></tr>
+        <tr><td>Favourites, theme, language, scan universe and data source settings</td><td>Running the app according to your preferences</td></tr>
+        <tr><td>A single "already asked" flag for the notification permission</td><td>Avoiding repeated permission prompts</td></tr>
+        <tr><td>Share-card images (PNG) created when you share a result</td><td>Passing an image file to the app you choose; kept in the Android cache</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <p>The app keeps this data in its own preferences and cache. Other apps cannot access this storage.</p>
+
+    <h2>4. Backup and device transfer</h2>
+    <ul>
+      <li>The app's settings file (<code>dive_settings</code>) and notification-permission file (<code>dive_permissions</code>) are excluded from Android Auto Backup (cloud backup to your Google account) and from device-to-device transfer. Because your portfolio entries, alert rules and evidence archive are stored in the settings file, they are not uploaded to backups and are not copied to a new device.</li>
+      <li>After moving to a new device, you must set your language, theme, favourites and settings again.</li>
+      <li>Share-card images are kept in the cache. Android does not include the cache in backups by default.</li>
+      <li>If the app's backup rules change, this section will be updated.</li>
+    </ul>
+
+    <h2>5. Notifications</h2>
+    <ul>
+      <li>Alerts are local notifications created on your device. The app does not use a notification server.</li>
+      <li>On Android 13 and later, the notification permission is optional. You can turn it off at any time in Android system settings.</li>
+    </ul>
+
+    <h2>6. Sharing</h2>
+    <p>When you share a card, the image is handed to the app you pick in the Android share sheet. That is your action. The developer does not receive the image.</p>
+
+    <h2>7. Security</h2>
+    <ul>
+      <li>The app uses only HTTPS and WSS (encrypted) connections. Cleartext traffic is disabled.</li>
+      <li>Data is stored in app-private storage. The app adds no encryption of its own beyond what Android provides, so your device lock screen and device encryption matter.</li>
+    </ul>
+
+    <h2>8. Retention and deletion</h2>
+    <ul>
+      <li>Data stays on your device until you delete it or uninstall the app.</li>
+      <li>To delete all local data, use "Clear all local data" in the app's Settings screen. It deletes settings, favourites, alarms, portfolio entries and cache from this device, stops background scans, and then restarts the app. Only a flag that records whether the notification permission was already requested is kept.</li>
+      <li>You can also go to Android Settings &gt; Apps &gt; DVCRY &gt; Storage &gt; Clear storage, or uninstall the app.</li>
+      <li>The developer holds no server-side data about you, so there is nothing to request from the developer for deletion.</li>
+    </ul>
+
+    <h2>9. Children</h2>
+    <p>The app is not directed at children. It is intended for users aged 18 and over and is not intended for anyone under 18.</p>
+
+    <h2>10. Not investment advice</h2>
+    <p>DVCRY is an educational and research analytics tool. It is not investment, trading or financial advice. It gives no personalised advice, places no orders and has no access to any account. Leveraged crypto derivatives are high risk and you can lose your entire deposit.</p>
+
+    <h2>11. Independence</h2>
+    <p>DVCRY is independent and is not affiliated with, endorsed by or sponsored by Binance. The name Binance is used only to identify the data source.</p>
+
+    <h2>12. Your rights (GDPR and KVKK)</h2>
+    <p>The developer does not store personal data on any server, so there is no developer-held personal data to access, correct or erase. For questions about rights under the GDPR or Turkey's KVKK (Law No. 6698), write to &lt;OWNER: support email&gt;. For Binance, see Binance's privacy policy.</p>
+
+    <h2>13. Changes</h2>
+    <p>When this policy changes, the new effective date and version are published on this page. If the app's data behaviour changes, this policy is updated too.</p>
+
+    <h2>14. Contact</h2>
+    <p>&lt;OWNER: support email&gt;</p>
+  </section>
+
+  <footer>
+    <p>DVCRY · Yürürlük 2026-11-08 · Effective 2026-11-08</p>
+  </footer>
+</main>
+</body>
+</html>

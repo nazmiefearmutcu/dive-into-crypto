@@ -6,7 +6,6 @@ bar (NR7) is compression → NEUTRAL (coiled, awaiting release). Otherwise a wea
 when the last bar agrees with the short trend. Causal (no future bars).
 """
 
-import numpy as np
 import pandas as pd
 
 from diveintocrypto_desktop.engine.indicators.base import BaseIndicator, IndicatorResult, Signal

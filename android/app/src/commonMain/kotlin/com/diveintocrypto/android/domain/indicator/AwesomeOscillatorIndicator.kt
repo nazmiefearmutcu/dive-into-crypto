@@ -27,6 +27,9 @@ class AwesomeOscillatorIndicator(config: IndicatorConfig) : BaseIndicator(config
         val currentAo = ao.lastOrNull()
             ?: return result(Signal.NEUTRAL, "AO data insufficient")
         val prevAo = if (ao.size >= 2) ao[ao.size - 2] else currentAo
+        // Previous bar not yet defined (slow SMA on the last bar only): warm up, as
+        // awesome_oscillator.py does, rather than falling through to a trend label.
+        if (prevAo == null) return result(Signal.NEUTRAL, "AO warming up")
         val prev2Ao = if (ao.size >= 3) ao[ao.size - 3] else prevAo
 
         val raw = mapOf<String, Double?>(

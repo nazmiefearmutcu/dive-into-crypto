@@ -34,8 +34,21 @@
     kotlinx.serialization.KSerializer serializer(...);
 }
 
+# Polymorphic sealed hierarchy `sealed interface Record` (engine/schema/Records.kt):
+# keep every subtype with its generated $$serializer and Companion so the sealed
+# deserializer can resolve each @SerialName discriminator at runtime.
+-keep class com.diveintocrypto.android.engine.schema.** { *; }
+
+# Release logging: android.util.Log.d calls are removed from release builds
+# (debug-only logDebug is also gated on BuildConfig.DEBUG in Platform.android.kt).
+-assumenosideeffects class android.util.Log {
+    public static *** d(...);
+}
+
 # ---- Ktor / OkHttp ----
 # Both ship consumer rules; these are defensive against missing optional deps.
+# io.ktor.** stays suppressed until build/outputs/mapping/release/missing_rules.txt
+# has been reviewed after an assembleRelease; then narrow it to the real gaps.
 -dontwarn org.slf4j.**
 -dontwarn org.conscrypt.**
 -dontwarn io.ktor.**

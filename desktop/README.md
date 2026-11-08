@@ -3,7 +3,7 @@
 A single-window terminal for the Binance USDT-M perpetual-futures market. The **reference**
 consensus engine — 60 indicators across 12 timeframes, three futures-native overlays, and a
 whale-divergence filter — fed with highest-fidelity data through
-[**Crypcodile**](https://github.com/nazmiefearmutcu/Crypcodile), rendered in the **Depth Terminal**
+[**Crocodile**](https://github.com/nazmiefearmutcu/Crocodile), rendered in the **Depth Terminal**
 UI.
 
 | Scanner | Panel |
@@ -21,14 +21,18 @@ Requires **Python 3.12+** and [`uv`](https://docs.astral.sh/uv/). The UI ships p
 
 ```bash
 cd desktop/backend
-uv sync                  # backend + Crypcodile (pinned commit)
+uv sync                  # backend + Crocodile (pinned commit)
 uv run dive-desktop      # serves 127.0.0.1:8780 and opens the UI
 
 uv run dive-desktop --no-open        # serve only
 uv run dive-desktop --port 8888      # custom port
+uv run dive-desktop --host 0.0.0.0 --allow-remote   # exposes the unauthenticated API to your network; explicit opt-in only
 ```
 
-Everything runs locally; the only network traffic is **public** Binance market-data requests.
+Everything runs locally. Outbound traffic is limited to **public, read-only** requests: Binance
+(futures and spot), Deribit, alternative.me (Fear & Greed), DefiLlama (stablecoins), and the Google
+Fonts stylesheet that your browser loads for the UI. The full host list is in the root
+[README's Data sources](../README.md#data-sources) table.
 
 ---
 
@@ -39,7 +43,7 @@ Binance public REST/WS ─┐
 Deribit (IV / DVOL)     ─┤
                         ▼
                   ┌──────────────┐
-                  │  Crypcodile  │  OHLCV · funding · OI · mark · IV   (data engine)
+                  │  Crocodile   │  OHLCV · funding · OI · mark · IV   (data engine)
                   └──────┬───────┘
  Binance futures/data ───┤  global / top-trader / taker long-short ratios
                          ▼
@@ -49,7 +53,7 @@ Deribit (IV / DVOL)     ─┤
             │   scan/     whale divergence · microstructure  │
             │             · regime · MTF-confluence overlays │
             │             · two-phase ranking + backfill     │
-            │   data/     Crypcodile-fed klines/OI/ratios…   │
+            │   data/     Crocodile-fed klines/OI/ratios…    │
             │   api/      REST + WS + serves the built UI    │
             └───────────────┬───────────────────────────────┘
                             │  JSON (per-symbol data-contract) · WS live
@@ -69,7 +73,8 @@ the parity-locked vote. The Android/Kotlin engine mirrors all 60, pinned to the 
 `BTCUSDT 1h × 300` fixtures (signal + score, exact) — cross-language parity is enforced
 per-indicator, on the original core and the extended set alike.
 
-**Honest data.** Every number in the live app is real, derived from Binance via Crypcodile. There is
+**Honest data.** Every number in the live app is real, derived from the public sources listed in the
+root README (Binance and Crocodile for market data, plus Deribit and two public sentiment feeds). There is
 no synthesised path in production; when a source is unavailable it is shown as unavailable (e.g. a
 `502` on a symbol). `mock.js` exists only as an offline demo fallback for the UI and is never used
 while the backend is reachable.
@@ -101,11 +106,11 @@ Günlüğü** (live request log) · **Ayarlar**. Deep-link a view with `#panel`,
 
 ```bash
 # backend tests (offline parity + parsers)
-cd desktop/backend && uv run pytest -q
-uv run pytest -m live -q                # network-gated, against live Binance
+(cd desktop/backend && uv run pytest -q)
+(cd desktop/backend && uv run pytest -m live -q)   # network-gated, against live Binance
 
 # rebuild the UI bundle (needs Node)
-cd desktop/ui && node build.mjs         # → ui/dist/{bundle.js, styles.css, index.html}
+(cd desktop/ui && node build.mjs)       # → ui/dist/{bundle.js, styles.css, index.html}
 ```
 
 The UI is bundled with esbuild into a single offline `bundle.js` (no CDN). Source of truth:

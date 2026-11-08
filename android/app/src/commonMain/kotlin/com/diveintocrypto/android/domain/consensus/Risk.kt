@@ -17,8 +17,8 @@ enum class RiskLevel { LOW, MEDIUM, HIGH }
  * - [riskScore] integer score in Python (`risk_score`).
  * - [riskFactors] list of human-readable contributing factors.
  * - [details] holds the structured payload mirroring the Python dict
- *   (`risk_level`, `risk_score`, `risk_factors`, `position_size_modifier`)
- *   so downstream code (UI / serialization) can mimic Python's `.get(...)`
+ *   (`risk_level`, `risk_score`, `risk_factors`)
+ *   so downstream code (UI / serialization) can mimic the Python `.get(...)`
  *   access without re-deriving the values.
  */
 data class RiskAssessment(
@@ -37,8 +37,11 @@ data class RiskAssessment(
 data class RiskConfig(
     /** `no_trade.adx_min` (risk.py:49). */
     val adxMin: Double = 15.0,
-    /** `consensus.conflict_ratio_threshold` (risk.py:62). */
-    val conflictRatioThreshold: Double = 0.6,
+    /**
+     * `consensus.conflict_ratio_threshold` (risk.py:62). Shipped 0.4: the
+     * minority/active ratio never exceeds 0.5, so a 0.6 threshold was unreachable.
+     */
+    val conflictRatioThreshold: Double = 0.4,
     /** `consensus.min_active_signals` (risk.py:72). */
     val minActiveSignals: Int = 4,
 )
@@ -52,6 +55,7 @@ object RiskAssessor {
      * Signature adapted to Kotlin:
      *  - `score_data` → [ScoreBreakdown]
      *  - `config`     → [RiskConfig]
+     *  - `labels`     → [ConsensusLabels] (English by default)
      *
      * Volatility (Python reads a string from `raw_values["volatility"]`):
      * encoded numerically in Kotlin because [IndicatorResult.rawValues] is
@@ -62,6 +66,7 @@ object RiskAssessor {
         results: List<IndicatorResult>,
         scoreBreakdown: ScoreBreakdown,
         config: RiskConfig,
+        labels: ConsensusLabels = EnglishConsensusLabels,
     ): RiskAssessment {
         val riskFactors: MutableList<String> = mutableListOf()
         var riskScore = 0  // Higher = more risk
@@ -73,10 +78,11 @@ object RiskAssessor {
                 when {
                     vol == 2.0 -> {
                         riskScore += 3
-                        riskFactors += "High ATR volatility"
+                        riskFactors += labels.highAtrVolatility()
                     }
-                    vol == 0.0 -> {
-                        riskFactors += "Low ATR volatility (squeeze potential)"
+                    // atr_filter labels LOW only when atr_ratio < 0.5; 0.5-0.8 is NORMAL.
+                    vol == 0.0 && (r.rawValues["atr_ratio"] ?: 0.0) < 0.5 -> {
+                        riskFactors += labels.lowAtrVolatility()
                     }
                     // else: NORMAL — no risk contribution
                 }
@@ -90,9 +96,7 @@ object RiskAssessor {
                 val adxMin = config.adxMin
                 if (adxVal < adxMin) {
                     riskScore += 2
-                    val adxStr = adxVal.format(1)
-                    val minStr = formatThreshold(adxMin)
-                    riskFactors += "Weak trend (ADX=$adxStr < $minStr)"
+                    riskFactors += labels.weakTrend(adxVal.format(1), formatThreshold(adxMin))
                 }
             }
         }
@@ -109,12 +113,10 @@ object RiskAssessor {
 
             if (conflictRatio > conflictThreshold) {
                 riskScore += 3
-                val ratioStr = conflictRatio.format(2)
-                riskFactors += "High signal conflict (ratio=$ratioStr)"
+                riskFactors += labels.highSignalConflict(conflictRatio.format(2))
             } else if (conflictRatio > 0.3) {
                 riskScore += 1
-                val ratioStr = conflictRatio.format(2)
-                riskFactors += "Moderate signal conflict (ratio=$ratioStr)"
+                riskFactors += labels.moderateSignalConflict(conflictRatio.format(2))
             }
         }
 
@@ -122,15 +124,14 @@ object RiskAssessor {
         val minActive = config.minActiveSignals
         if (active < minActive) {
             riskScore += 1
-            riskFactors += "Few active signals ($active < $minActive)"
+            riskFactors += labels.fewActiveSignals(active, minActive)
         }
 
         // 5. Weighted score magnitude (risk.py:78-81)
         val wScore = abs(scoreBreakdown.weightedScore)
         if (wScore < 0.3) {
             riskScore += 1
-            val scoreStr = wScore.format(3)
-            riskFactors += "Weak conviction (score=$scoreStr)"
+            riskFactors += labels.weakConviction(wScore.format(3))
         }
 
         // Determine risk level (risk.py:84-89)
@@ -140,19 +141,11 @@ object RiskAssessor {
             else -> RiskLevel.LOW
         }
 
-        // Position size modifier (risk.py:92-97)
-        val positionSizeModifier = when (riskLevel) {
-            RiskLevel.HIGH -> 0.25
-            RiskLevel.MEDIUM -> 0.6
-            RiskLevel.LOW -> 1.0
-        }
-
         // Mirror Python dict (risk.py:99-104).
         val details: Map<String, Any?> = mapOf(
             "risk_level" to riskLevel.name,
             "risk_score" to riskScore,
             "risk_factors" to riskFactors.toList(),
-            "position_size_modifier" to positionSizeModifier,
         )
 
         return RiskAssessment(

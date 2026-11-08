@@ -33,9 +33,10 @@ def _candles_from_returns(rets: list[float], start_close: float = 100.0, high_lo
 def test_planning_strip_hand_computed():
     out = pl.planning_strip(2.0)
     assert out["sl_distance_pct"] == pytest.approx(3.0)   # 1.5 × ATR%
-    assert out["tp_1r_pct"] == pytest.approx(2.0)
-    assert out["tp_2r_pct"] == pytest.approx(4.0)
-    assert out["tp_3r_pct"] == pytest.approx(6.0)
+    # 1R is the STOP distance (not the bare ATR): the ladder is stop × 1/2/3
+    assert out["tp_1r_pct"] == pytest.approx(3.0)
+    assert out["tp_2r_pct"] == pytest.approx(6.0)
+    assert out["tp_3r_pct"] == pytest.approx(9.0)
     assert out["envelope"]["h1"] == pytest.approx(2.0)
     assert out["envelope"]["h4"] == pytest.approx(2.0 * 2.0)          # √4
     assert out["envelope"]["h24"] == pytest.approx(2.0 * math.sqrt(24), rel=1e-4)

@@ -31,7 +31,7 @@ Public market-data endpoints do not require exchange credentials. The applicatio
 | --- | --- | --- |
 | Interface | React UI served by a local Python service | Kotlin and Jetpack Compose |
 | Runtime | Python 3.12+ and a browser | Android 8.0+ |
-| Data access | Pinned Crypcodile dependency and direct public-data adapters | Public REST and WebSocket clients |
+| Data access | Pinned [Crocodile](https://github.com/nazmiefearmutcu/Crocodile) dependency and direct public-data adapters | Public REST and WebSocket clients |
 | Signal calculation | Python reference implementation | Kotlin implementation with reference-fixture tests |
 
 ## Architecture
@@ -55,7 +55,7 @@ Most inputs come from Binance Futures, including candles, funding, open interest
 
 ## Run the desktop edition
 
-Requirements: **Python 3.12+**, **uv**, internet access to the market-data providers, and GitHub read access to the pinned **Crypcodile** dependency. Crypcodile is a private repository; an anonymous installation cannot currently resolve it. Configure Git authentication for an account with access before running `uv sync`.
+Requirements: **Python 3.12+**, **uv**, internet access to the market-data providers, and network access to GitHub for the pinned **[Crocodile](https://github.com/nazmiefearmutcu/Crocodile)** dependency (`uv sync` installs it from the commit pinned in `desktop/backend/pyproject.toml`; the unrelated `crocodile` package on PyPI is never used).
 
 ```bash
 git clone https://github.com/nazmiefearmutcu/Dive-into-Crypto.git dive-into-crypto

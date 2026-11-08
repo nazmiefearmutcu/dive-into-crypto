@@ -5,8 +5,13 @@ import kotlin.math.sqrt
 
 /**
  * Futures-microstructure overlay — a scan-layer signal bundle over the assembled
- * series data (OI / funding / taker / L-S). Faithful port of the Python reference
- * `scan/microstructure.py`.
+ * series data (OI / funding / taker / L-S). Port of the Python reference
+ * `scan/microstructure.py` covering a SIX-signal SUBSET: oi_price_divergence,
+ * oi_breakout_confirm, funding_fade, taker_aggression, ls_crowding_fade and
+ * smart_dumb_spread. The reference's basis_extreme and funding_acceleration signals
+ * need basis and predicted-funding feeds that the Android data layer does not
+ * supply, so they are absent here; the same market data can therefore produce a
+ * different bundle score than desktop when those two signals would have fired.
  *
  * Every signal is a pure function over aligned float lists, strictly causal, and
  * returns a value in [-1, +1] (+ bullish / − bearish) or null when there is not

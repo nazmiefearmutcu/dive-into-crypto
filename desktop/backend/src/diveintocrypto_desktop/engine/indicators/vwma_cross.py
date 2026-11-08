@@ -5,7 +5,6 @@ weights price by traded volume, so moves on real participation dominate — dist
 from the plain SMA/EMA crosses and from VWAP (a single anchored average). Causal.
 """
 
-import numpy as np
 import pandas as pd
 
 from diveintocrypto_desktop.engine.indicators.base import BaseIndicator, IndicatorResult, Signal

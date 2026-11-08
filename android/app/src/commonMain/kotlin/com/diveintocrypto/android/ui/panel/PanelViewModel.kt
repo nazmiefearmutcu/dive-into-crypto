@@ -3,31 +3,38 @@ package com.diveintocrypto.android.ui.panel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.diveintocrypto.android.AppContainer
-import com.diveintocrypto.android.domain.model.Candle
-import com.diveintocrypto.android.domain.model.Signal
+import com.diveintocrypto.android.data.binance.FundingRatePoint
 import com.diveintocrypto.android.data.binance.LongShortRatioPoint
 import com.diveintocrypto.android.data.binance.OpenInterestPoint
 import com.diveintocrypto.android.data.binance.TakerLongShortRatioPoint
-import com.diveintocrypto.android.data.binance.FundingRatePoint
+import com.diveintocrypto.android.data.binance.UpstreamHttpException
+import com.diveintocrypto.android.data.binance.isRegionBlocked
 import com.diveintocrypto.android.domain.consensus.Regime
-import com.diveintocrypto.android.domain.cvd.CvdSnapshot
 import com.diveintocrypto.android.domain.math.Series
+import com.diveintocrypto.android.domain.model.Candle
+import com.diveintocrypto.android.domain.model.Signal
 import com.diveintocrypto.android.domain.overlay.Microstructure
 import com.diveintocrypto.android.domain.overlay.MtfConfluence
+import com.diveintocrypto.android.engine.appendLiveCandle
 import com.diveintocrypto.android.platform.logDebug
 import com.diveintocrypto.android.platform.logError
 import com.diveintocrypto.android.platform.nowMillis
+import com.diveintocrypto.android.ui.i18n.DiveStrings
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Paper-free ViewModel for the Panel screen.
@@ -46,11 +53,22 @@ import kotlinx.coroutines.launch
  *
  * NOTHING IS SYNTHESISED: no random-tick fallback exists; when the WS is quiet the
  * last REAL data stays and [PanelUiState.isStale] / [PanelUiState.dataAgeMs] say so.
+ *
+ * SYMBOL SWITCH SAFETY: the cached candles and REST series are only ever used for the
+ * symbol/timeframe recorded in [loadedKey], and every write from a background job is
+ * checked against the symbol the screen shows right now. A late result from the
+ * previous symbol is therefore dropped instead of being drawn under the new title.
  */
 class PanelViewModel(private val container: AppContainer) : ViewModel() {
 
     private val _ui = MutableStateFlow(PanelUiState())
     val ui: StateFlow<PanelUiState> = _ui.asStateFlow()
+
+    /** Serialises every access to the cached candles / REST series / throttles below. */
+    private val stateMutex = Mutex()
+
+    /** Symbol+timeframe whose candles and REST series are cached. Guarded by [stateMutex]. */
+    private var loadedKey: Pair<String, String>? = null
 
     private var candles: List<Candle> = emptyList()
 
@@ -66,11 +84,19 @@ class PanelViewModel(private val container: AppContainer) : ViewModel() {
     private var lastAtrPct: Double? = null
     private var lastDirection: String? = null
 
-    private var bootstrapJob: kotlinx.coroutines.Job? = null
-    private var multiTfJob: kotlinx.coroutines.Job? = null
-    private var tickerJob: kotlinx.coroutines.Job? = null
-    private var stalenessJob: kotlinx.coroutines.Job? = null
-    private var parityJob: kotlinx.coroutines.Job? = null
+    private var bootstrapJob: Job? = null
+    private var multiTfJob: Job? = null
+    private var tickerJob: Job? = null
+    private var stalenessJob: Job? = null
+
+    // ── CHART + CVD plumbing (additive; UI lane renders [PanelUiState] fields) ──
+    private var cvdJob: Job? = null
+    private var parityJob: Job? = null
+    private var lastCvdFetchMs = 0L
+    private var lastParityFetchMs = 0L
+
+    /** Time of the last WS frame for the staleness watchdog (0 = none yet). */
+    private val lastWsMessageTime = kotlinx.atomicfu.atomic(0L)
 
     init {
         viewModelScope.launch {
@@ -80,29 +106,57 @@ class PanelViewModel(private val container: AppContainer) : ViewModel() {
             ) { symbol, timeframe ->
                 symbol to timeframe
             }.collect { (symbol, timeframe) ->
-                _ui.update {
-                    it.copy(
+                // Per-symbol state goes back to its defaults in the same atomic update that
+                // changes the active symbol, so no previous symbol's value survives the switch.
+                _ui.update { st ->
+                    PanelUiState(
                         activeSymbol = symbol,
                         timeframe = timeframe,
                         isLoading = true,
-                        errorMessage = null
+                        allSymbols = st.allSymbols,
+                        filteredSymbols = st.filteredSymbols,
+                        searchQuery = st.searchQuery,
+                        favorites = st.favorites,
+                        isStale = st.isStale,
+                        dataAgeMs = st.dataAgeMs,
                     )
                 }
                 restartJobs(symbol, timeframe)
             }
         }
-        viewModelScope.launch(kotlinx.coroutines.Dispatchers.Default) {
+        viewModelScope.launch(Dispatchers.Default) {
             try {
                 val symbols = container.repository.futuresUniverse()
-                _ui.update {
-                    it.copy(
+                _ui.update { st ->
+                    st.copy(
                         allSymbols = symbols,
-                        filteredSymbols = symbols
+                        // Keep a search the user already typed while the universe was loading.
+                        filteredSymbols = filterSymbols(symbols, st.searchQuery),
                     )
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Throwable) {
                 logError("PanelVM", "Failed to fetch futures universe", e)
             }
+        }
+    }
+
+    private fun strings(): DiveStrings = container.language.value
+
+    /** True while [symbol]/[timeframe] is the symbol/timeframe the screen currently shows. */
+    private fun isShowing(symbol: String, timeframe: String): Boolean {
+        val st = _ui.value
+        return st.activeSymbol == symbol && st.timeframe == timeframe
+    }
+
+    /**
+     * Applies [block] only while [symbol] (and [timeframe], when given) is still the one shown.
+     * The check and the write happen in one atomic StateFlow update.
+     */
+    private fun updateFor(symbol: String, timeframe: String?, block: (PanelUiState) -> PanelUiState) {
+        _ui.update { st ->
+            if (st.activeSymbol == symbol && (timeframe == null || st.timeframe == timeframe)) block(st) else st
         }
     }
 
@@ -111,6 +165,8 @@ class PanelViewModel(private val container: AppContainer) : ViewModel() {
         multiTfJob?.cancel()
         tickerJob?.cancel()
         stalenessJob?.cancel()
+        cvdJob?.cancel()
+        parityJob?.cancel()
 
         bootstrapJob = viewModelScope.launch(Dispatchers.Default) {
             try {
@@ -125,43 +181,42 @@ class PanelViewModel(private val container: AppContainer) : ViewModel() {
                     val globalRatioDeferred = async { container.repository.globalLongShortAccountRatio(symbol, timeframe, limit = limit) }
                     val fundingRateDeferred = async { container.repository.fundingRate(symbol, limit = limit) }
 
-                    logDebug("PanelVM", "bootstrapJob: awaiting deferreds...")
                     val cs = candlesDeferred.await()
                     logDebug("PanelVM", "bootstrapJob: candles fetched count=${cs.size}")
                     val oi = oiDeferred.await()
-                    logDebug("PanelVM", "bootstrapJob: oi fetched count=${oi.size}")
                     val accountRatio = accountRatioDeferred.await()
-                    logDebug("PanelVM", "bootstrapJob: accountRatio fetched count=${accountRatio.size}")
                     val positionRatio = positionRatioDeferred.await()
-                    logDebug("PanelVM", "bootstrapJob: positionRatio fetched count=${positionRatio.size}")
                     val taker = takerRatioDeferred.await()
-                    logDebug("PanelVM", "bootstrapJob: taker fetched count=${taker.size}")
                     val globalRatio = globalRatioDeferred.await()
-                    logDebug("PanelVM", "bootstrapJob: globalRatio fetched count=${globalRatio.size}")
                     val fundingRate = fundingRateDeferred.await()
-                    logDebug("PanelVM", "bootstrapJob: fundingRate fetched count=${fundingRate.size}")
+                    ensureActive()
 
-                    candles = cs
-                    // Cache the REAL REST series for the throttled live recompute.
-                    lastOi = oi
-                    lastAcc = accountRatio
-                    lastPos = positionRatio
-                    lastTaker = taker
-                    lastGlob = globalRatio
-                    lastFunding = fundingRate
-                    logDebug("PanelVM", "bootstrapJob: calling recomputeMultimodal")
-                    recomputeMultimodal(oi, accountRatio, positionRatio, taker, globalRatio, fundingRate)
-                    refreshCvd(symbol, force = true)
-                    refreshParity(symbol, force = true)
+                    stateMutex.withLock {
+                        // A newer symbol/timeframe is on screen: this result belongs to nobody now.
+                        if (!isShowing(symbol, timeframe)) return@withLock
+                        candles = cs
+                        // Cache the REAL REST series for the throttled live recompute.
+                        lastOi = oi
+                        lastAcc = accountRatio
+                        lastPos = positionRatio
+                        lastTaker = taker
+                        lastGlob = globalRatio
+                        lastFunding = fundingRate
+                        loadedKey = symbol to timeframe
+                        // A successful bootstrap is the only thing that clears a load error.
+                        updateFor(symbol, timeframe) { it.copy(errorMessage = null) }
+                        recomputeMultimodal(symbol, timeframe)
+                        refreshCvd(symbol, force = true)
+                        refreshParity(symbol, force = true)
+                    }
                 }
             } catch (e: CancellationException) {
                 logError("PanelVM", "bootstrapJob cancelled", e)
                 throw e
             } catch (t: Throwable) {
                 logError("PanelVM", "bootstrapJob error", t)
-                _ui.update {
-                    it.copy(isLoading = false, errorMessage = t.message ?: "network error")
-                }
+                val message = errorText(t, strings())
+                updateFor(symbol, timeframe) { it.copy(isLoading = false, errorMessage = message) }
             }
         }
 
@@ -175,94 +230,104 @@ class PanelViewModel(private val container: AppContainer) : ViewModel() {
                 // surfaced via the staleness fields instead.
                 container.repository.liveKlines(symbol, timeframe).collect { update ->
                     lastWsMessageTime.value = nowMillis()
-                    mergeTickCandle(update.candle)
-                    _ui.update {
-                        it.copy(
-                            currentPrice = update.candle.close,
-                            lastUpdateMs = nowMillis(),
-                            isStale = false,
-                            dataAgeMs = 0L,
-                        )
+                    _ui.update { it.copy(isStale = false, dataAgeMs = 0L) }
+                    try {
+                        val now = nowMillis()
+                        stateMutex.withLock {
+                            // Ticks only feed the cache once THIS symbol's history is loaded;
+                            // before that a single bar would be shown as a verdict.
+                            val ready = loadedKey == (symbol to timeframe) && isShowing(symbol, timeframe)
+                            val gap = ready && mergeTickCandle(
+                                update.candle,
+                                container.repository.getIntervalMs(timeframe),
+                            )
+                            if (gap) reloadAfterGap(symbol, timeframe)
+                            updateFor(symbol, timeframe) { st ->
+                                st.copy(
+                                    currentPrice = update.candle.close,
+                                    priceChangeDirection = priceDirection(st.currentPrice, update.candle.close, st.priceChangeDirection),
+                                    lastUpdateMs = nowMillis(),
+                                )
+                            }
+                            // THROTTLED LIVE RECOMPUTE: rerun indicators over the cached
+                            // candles at most every [LIVE_RECOMPUTE_INTERVAL_MS], plus
+                            // immediately on candle close. Recompose only when a value changed.
+                            if (ready && !gap && (now - lastRecomputeMs >= LIVE_RECOMPUTE_INTERVAL_MS || update.isClosed)) {
+                                lastRecomputeMs = now
+                                recomputeMultimodal(symbol, timeframe)
+                                // CVD rides the same throttle; the engine's 10s cache makes
+                                // the actual REST cadence ≥10s per symbol.
+                                refreshCvd(symbol)
+                                // Parity blocks ride the same throttle (premiumIndex 15s cache,
+                                // candles already engine-cached).
+                                refreshParity(symbol)
+                            }
+                        }
+                        // The 12-TF grid refreshes on candle close (grid cells only change
+                        // when a TF's candle settles — keeps network chatter bounded).
+                        if (update.isClosed) refreshMultiTf(symbol)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (t: Throwable) {
+                        // One bad tick must not end the live feed for the session.
+                        logError("PanelVM", "live tick processing failed", t)
                     }
-                    val now = nowMillis()
-                    // THROTTLED LIVE RECOMPUTE: rerun indicators over the cached candles
-                    // at most every [LIVE_RECOMPUTE_INTERVAL_MS], plus immediately on
-                    // candle close. Recompose only when a value actually changed.
-                    if (now - lastRecomputeMs >= LIVE_RECOMPUTE_INTERVAL_MS || update.isClosed) {
-                        lastRecomputeMs = now
-                        recomputeVerdictFromCache()
-                        // CVD rides the same throttle; the engine's 10s cache makes
-                        // the actual REST cadence ≥10s per symbol.
-                        refreshCvd(symbol)
-                        // Parity blocks ride the same throttle (premiumIndex 15s cache,
-                        // candles already engine-cached).
-                        refreshParity(symbol)
-                    }
-                    // The 12-TF grid refreshes on candle close (grid cells only change
-                    // when a TF's candle settles — keeps network chatter bounded).
-                    if (update.isClosed) refreshMultiTf(symbol)
                 }
             } catch (e: CancellationException) {
                 throw e
-            } catch (_: Throwable) {
+            } catch (t: Throwable) {
                 // WS is optional — the REST snapshot already provided the last price.
+                logError("PanelVM", "live ticker stopped", t)
             }
         }
 
         // Clock-only staleness watchdog (reads the wall clock; never fabricates data).
         stalenessJob = viewModelScope.launch(Dispatchers.Default) {
-            var lastAgePush = 0L
             while (true) {
                 delay(1_000)
                 val last = lastWsMessageTime.value
                 if (last <= 0L) continue // no frame received yet in this session
-                val now = nowMillis()
-                val age = now - last
+                val age = nowMillis() - last
                 val stale = age > STALE_AFTER_MS
-                _ui.update {
-                    val dueAgePush = now - lastAgePush >= STALE_AGE_PUSH_MS
-                    if (it.isStale == stale && !dueAgePush && it.dataAgeMs == age) {
-                        it
-                    } else {
-                        if (dueAgePush || it.isStale != stale) lastAgePush = now
-                        it.copy(isStale = stale, dataAgeMs = age)
-                    }
+                // The age changes every second, so this pushes once per second by design:
+                // that keeps the "last update" and stale-chip ages live.
+                _ui.update { st ->
+                    if (st.isStale == stale && st.dataAgeMs == age) st else st.copy(isStale = stale, dataAgeMs = age)
                 }
             }
         }
     }
 
-    /** Time of the last WS frame for the staleness watchdog (0 = none yet). */
-    private val lastWsMessageTime = kotlinx.atomicfu.atomic(0L)
-
-    /** Folds a live WS candle into the cached candle list (real ticks only). */
-    private fun mergeTickCandle(candle: Candle) {
+    /**
+     * Folds a live WS candle into the cached candle list (real ticks only). Guarded by [stateMutex].
+     * Returns true, and appends nothing, when the candle opens more than one interval after the
+     * cached tail: a missing bar must never be bridged (see [reloadAfterGap]).
+     */
+    private fun mergeTickCandle(candle: Candle, intervalMs: Long): Boolean {
         val last = candles.lastOrNull()
-        candles = when {
-            last == null -> listOf(candle)
-            candle.openTime == last.openTime -> candles.dropLast(1) + candle
-            candle.openTime > last.openTime -> (candles + candle).takeLast(300)
-            else -> candles
+        if (last != null && intervalMs > 0L && candle.openTime - last.openTime > intervalMs) return true
+        candles = appendLiveCandle(candles, candle, intervalMs).takeLast(300)
+        return false
+    }
+
+    /**
+     * A live tick opened after a missing bar: the cached series must not bridge it. The
+     * symbol's history is reloaded from REST (same as a fresh symbol switch) and ticks are
+     * ignored until that reload has landed. Called under [stateMutex].
+     */
+    private fun reloadAfterGap(symbol: String, timeframe: String) {
+        loadedKey = null
+        viewModelScope.launch {
+            if (isShowing(symbol, timeframe)) restartJobs(symbol, timeframe)
         }
     }
 
-    /** Reruns the multimodal consensus + overlays over the CACHED candles/series. */
-    private fun recomputeVerdictFromCache() {
-        recomputeMultimodal(lastOi, lastAcc, lastPos, lastTaker, lastGlob, lastFunding)
-    }
-
-    // ── CHART + CVD plumbing (additive; UI lane renders [PanelUiState] fields) ──
-
-    private var cvdJob: kotlinx.coroutines.Job? = null
-    private var lastCvdFetchMs = 0L
-    private var lastParityFetchMs = 0L
-
     /**
-     * Rolling CVD for the active symbol. Fire-and-forget on the VM scope; the
-     * engine caches 10s per symbol (plus [CVD_FETCH_INTERVAL_MS] local guard) so
-     * the REST cadence stays polite. On failure the headline fields keep the
-     * last real values and [PanelUiState.cvdUnavailable] flips true — nothing
-     * is zero-filled or fabricated.
+     * Rolling CVD for the active symbol. Fire-and-forget on the VM scope; the engine caches
+     * 10s per symbol (plus [CVD_FETCH_INTERVAL_MS] local guard) so the REST cadence stays
+     * polite. On failure the headline fields keep the last real values for this symbol and
+     * [PanelUiState.cvdUnavailable] flips true — nothing is zero-filled or fabricated.
+     * Called under [stateMutex].
      */
     private fun refreshCvd(symbol: String, force: Boolean = false) {
         val now = nowMillis()
@@ -277,7 +342,7 @@ class PanelViewModel(private val container: AppContainer) : ViewModel() {
             } catch (_: Throwable) {
                 null
             }
-            _ui.update { st ->
+            updateFor(symbol, null) { st ->
                 if (snap == null) {
                     if (st.cvdUnavailable) st else st.copy(cvdUnavailable = true)
                 } else st.copy(
@@ -292,25 +357,27 @@ class PanelViewModel(private val container: AppContainer) : ViewModel() {
     }
 
     /**
-     * Parity blocks (basis / funding lens / vol-cone / planning) for the active
-     * symbol. Fire-and-forget on the VM scope; the engine's caches (premium 15s,
-     * funding + candles 30s+) keep the REST cadence polite. On ANY failure the
-     * affected fields stay/become null — nothing is zero-filled or fabricated.
+     * Parity blocks (basis / funding lens / vol-cone / planning) for the active symbol.
+     * Fire-and-forget on the VM scope; the engine's caches (premium 15s, funding + candles
+     * 30s+) keep the REST cadence polite. On ANY failure the affected fields stay/become
+     * null — nothing is zero-filled or fabricated. Called under [stateMutex].
      */
     private fun refreshParity(symbol: String, force: Boolean = false) {
         val now = nowMillis()
         if (!force && now - lastParityFetchMs < PARITY_FETCH_INTERVAL_MS) return
         lastParityFetchMs = now
+        val atrPct = lastAtrPct
+        val direction = lastDirection
         parityJob?.cancel()
         parityJob = viewModelScope.launch(Dispatchers.Default) {
             val bundle = try {
-                container.repository.panelParity(symbol, lastAtrPct, lastDirection)
+                container.repository.panelParity(symbol, atrPct, direction)
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Throwable) {
                 null
             }
-            _ui.update { st ->
+            updateFor(symbol, null) { st ->
                 if (bundle == null) {
                     // Full unavailability — only flip fields that had values.
                     if (st.basisBlock == null && st.fundingLens == null && st.cone == null && st.planning == null) st
@@ -325,12 +392,16 @@ class PanelViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
-    /** Cheap fingerprint to decide whether the chart series actually moved. */    private fun chartChanged(st: PanelUiState, chart: ChartSeries): Boolean {
+    /** Cheap fingerprint to decide whether the chart series actually moved. */
+    private fun chartChanged(st: PanelUiState, chart: ChartSeries): Boolean {
         val oldLast = st.chartCandles.lastOrNull()
         val newLast = chart.candles.lastOrNull()
         return st.chartCandles.size != chart.candles.size ||
             oldLast?.openTime != newLast?.openTime ||
             oldLast?.close != newLast?.close ||
+            oldLast?.high != newLast?.high ||
+            oldLast?.low != newLast?.low ||
+            oldLast?.volume != newLast?.volume ||
             st.ema20.size != chart.ema20.size ||
             st.ema20.lastOrNull() != chart.ema20.lastOrNull() ||
             st.bbUpper.size != chart.bbUpper.size ||
@@ -353,7 +424,7 @@ class PanelViewModel(private val container: AppContainer) : ViewModel() {
                                 logError("PanelVM", "multiTfJob: futuresHistory failed for $tf", e)
                                 emptyList()
                             }
-                            if (cs.size < 50) {
+                            if (cs.size < MIN_CANDLES_FOR_VERDICT) {
                                 TfSignal(tf = tf, signal = "N/A", confidence = 0)
                             } else {
                                 try {
@@ -361,7 +432,10 @@ class PanelViewModel(private val container: AppContainer) : ViewModel() {
                                         val res = it.calculate(cs)
                                         res
                                     }
-                                    val out = container.consensus.evaluate(indResults)
+                                    val out = container.consensus.evaluate(
+                                        indResults,
+                                        com.diveintocrypto.android.ui.i18n.consensusLabelsFor(container.language.value),
+                                    )
                                     TfSignal(tf = tf, signal = out.finalSignal.name, confidence = out.confidence)
                                 } catch (e: CancellationException) {
                                     throw e
@@ -373,7 +447,7 @@ class PanelViewModel(private val container: AppContainer) : ViewModel() {
                         }
                     }.awaitAll()
                 }
-                _ui.update { it.copy(multiTf = results) }
+                updateFor(symbol, null) { it.copy(multiTf = results) }
             } catch (e: CancellationException) {
                 throw e
             } catch (t: Throwable) {
@@ -382,16 +456,40 @@ class PanelViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
-    private fun recomputeMultimodal(
-        oi: List<OpenInterestPoint>,
-        accountRatio: List<LongShortRatioPoint>,
-        positionRatio: List<LongShortRatioPoint>,
-        taker: List<TakerLongShortRatioPoint>,
-        globalRatio: List<LongShortRatioPoint>,
-        fundingRate: List<FundingRatePoint>
-    ) {
+    /**
+     * Reruns the multimodal consensus + overlays over the CACHED candles/series for
+     * [symbol]/[timeframe]. Called only under [stateMutex] and only while [loadedKey] names
+     * that symbol/timeframe.
+     */
+    private fun recomputeMultimodal(symbol: String, timeframe: String) {
+        val oi = lastOi
+        val accountRatio = lastAcc
+        val positionRatio = lastPos
+        val taker = lastTaker
+        val globalRatio = lastGlob
+        val fundingRate = lastFunding
         logDebug("PanelVM", "recomputeMultimodal: candles=${candles.size}, oi=${oi.size}, acc=${accountRatio.size}, pos=${positionRatio.size}, taker=${taker.size}, global=${globalRatio.size}, funding=${fundingRate.size}")
-        if (candles.isEmpty()) return
+        val s = strings()
+        if (candles.isEmpty()) {
+            updateFor(symbol, timeframe) { it.copy(isLoading = false, errorMessage = s.panelNoCandles(symbol, timeframe)) }
+            return
+        }
+        if (candles.size < MIN_CANDLES_FOR_VERDICT) {
+            // Too little real history for an honest verdict: say so instead of computing one.
+            updateFor(symbol, timeframe) {
+                it.copy(isLoading = false, errorMessage = s.panelNotEnoughCandles(symbol, timeframe, candles.size))
+            }
+            return
+        }
+        // HONESTY: an endpoint with no history (for example a new listing without ratio data) must not
+        // produce a verdict. The engine would fill the empty series with neutral placeholders and score
+        // them, so the Panel says what is missing and computes nothing.
+        if (oi.isEmpty() || accountRatio.isEmpty() || positionRatio.isEmpty() ||
+            taker.isEmpty() || globalRatio.isEmpty() || fundingRate.isEmpty()
+        ) {
+            updateFor(symbol, timeframe) { it.copy(isLoading = false, errorMessage = s.panelNoSeriesData(symbol, timeframe)) }
+            return
+        }
         val consensusList = container.consensus.evaluateMultimodal(
             candles = candles,
             rawOi = oi,
@@ -399,13 +497,14 @@ class PanelViewModel(private val container: AppContainer) : ViewModel() {
             rawPos = positionRatio,
             rawGlobal = globalRatio,
             rawTaker = taker,
-            rawFunding = fundingRate
+            rawFunding = fundingRate,
+            labels = com.diveintocrypto.android.ui.i18n.consensusLabelsFor(container.language.value),
         )
         logDebug("PanelVM", "recomputeMultimodal: consensusList count=${consensusList.size}")
         val consensus = consensusList.lastOrNull()
         if (consensus == null) {
             logError("PanelVM", "recomputeMultimodal: consensusList is empty!")
-            _ui.update { it.copy(isLoading = false, errorMessage = "Consensus could not be computed") }
+            updateFor(symbol, timeframe) { it.copy(isLoading = false, errorMessage = s.panelConsensusFailed) }
             return
         }
 
@@ -423,16 +522,16 @@ class PanelViewModel(private val container: AppContainer) : ViewModel() {
             else -> null // NEUTRAL gets no plan (honest)
         }
         val regimeEval = Regime.evaluate(indResults, container.settingsStore.getSettings().weights)
-        // MICROSTRUCTURE (domain/overlay/Microstructure.kt): directed bundle over
-        // the REAL aligned series (OI/price/funding/taker/global/whale L-S).
+        // MICROSTRUCTURE (domain/overlay/Microstructure.kt): directed bundle over the
+        // REST series aligned to the candle timeline.
         val micro = Microstructure.evaluate(
-            Microstructure.Series(
-                oi = oi.map { it.sumOpenInterestValue },
-                price = candles.map { it.close },
-                funding = fundingRate.map { it.fundingRate },
-                taker = taker.map { it.buySellRatio },
-                glob = globalRatio.map { it.longShortRatio },
-                pos = positionRatio.map { it.longShortRatio },
+            alignMicrostructure(
+                candles = candles,
+                oi = oi.map { it.timestamp to it.sumOpenInterestValue },
+                pos = positionRatio.map { it.timestamp to it.longShortRatio },
+                taker = taker.map { it.timestamp to it.buySellRatio },
+                glob = globalRatio.map { it.timestamp to it.longShortRatio },
+                funding = fundingRate.map { it.timestamp to it.fundingRate },
             )
         )
         // MTF-CONFLUENCE (domain/overlay/MtfConfluence.kt): agreement across the
@@ -441,7 +540,7 @@ class PanelViewModel(private val container: AppContainer) : ViewModel() {
             _ui.value.multiTf.map { MtfConfluence.TfVerdict(it.tf, it.signal, it.confidence) }
         )
 
-        val action = if (consensus.shouldTrade) "OPEN_${consensus.finalSignal.name}" else "HOLD"
+        val action = PanelAction.of(consensus.finalSignal, consensus.shouldTrade)
         val lastClose = candles.last().close
 
         // CHART SERIES: computed FROM THE SAME cached candles via the indicator
@@ -450,7 +549,7 @@ class PanelViewModel(private val container: AppContainer) : ViewModel() {
         val chart = computeChartSeries(candles)
 
         // Emit ONLY when a displayed value actually changed (bounded recomposition).
-        _ui.update { st ->
+        updateFor(symbol, timeframe) { st ->
             val changed = st.isLoading ||
                 st.currentPrice != lastClose ||
                 st.latestSignal != consensus.finalSignal.name ||
@@ -471,6 +570,7 @@ class PanelViewModel(private val container: AppContainer) : ViewModel() {
                 st.microLabel != micro.label ||
                 st.microActive != micro.active ||
                 chartChanged(st, chart)
+            // NOTE: errorMessage is NOT cleared here — only a successful bootstrap clears it.
             if (!changed) st else st.copy(
                 currentPrice = lastClose,
                 latestSignal = consensus.finalSignal.name,
@@ -496,11 +596,10 @@ class PanelViewModel(private val container: AppContainer) : ViewModel() {
                 bbUpper = chart.bbUpper,
                 bbLower = chart.bbLower,
                 isLoading = false,
-                errorMessage = null,
                 lastUpdateMs = nowMillis(),
             )
         }
-        logDebug("PanelVM", "recomputeMultimodal: UI state checked/updated. Signal=${consensus.finalSignal.name}, Reason=${consensus.reason}")
+        logDebug("PanelVM", "recomputeMultimodal: UI state checked/updated. Signal=${consensus.finalSignal.name}")
     }
 
     fun refresh() {
@@ -516,16 +615,10 @@ class PanelViewModel(private val container: AppContainer) : ViewModel() {
     }
 
     fun setSearchQuery(query: String) {
-        val uppercaseQuery = query.uppercase()
         _ui.update { state ->
-            val filtered = if (uppercaseQuery.isEmpty()) {
-                state.allSymbols
-            } else {
-                state.allSymbols.filter { it.contains(uppercaseQuery) }
-            }
             state.copy(
                 searchQuery = query,
-                filteredSymbols = filtered
+                filteredSymbols = filterSymbols(state.allSymbols, query)
             )
         }
     }
@@ -562,17 +655,84 @@ class PanelViewModel(private val container: AppContainer) : ViewModel() {
         /** WS-quiet threshold after which the UI state is flagged stale (nothing is fabricated). */
         const val STALE_AFTER_MS = 3_000L
 
-        /** Minimum interval between staleness-age state pushes (bounds recomposition). */
-        const val STALE_AGE_PUSH_MS = 5_000L
-
         /** Local guard for CVD REST fetches (the engine adds its own 10s cache). */
         const val CVD_FETCH_INTERVAL_MS = 10_000L
 
         /** Local guard for parity REST fetches (engine caches: premium 15s, candles 30s+). */
         const val PARITY_FETCH_INTERVAL_MS = 15_000L
 
+        /** Fewest candles that give an honest verdict and TF cell (matches the 12-TF grid). */
+        const val MIN_CANDLES_FOR_VERDICT = 50
+
         private fun maskWarmup(values: List<Double>, warmup: Int): List<Double?> =
             values.mapIndexed { i, v -> if (i < warmup) null else v }
+
+        /** Symbol filter for the coin search (case-insensitive substring; empty = everything). */
+        internal fun filterSymbols(all: List<String>, query: String): List<String> {
+            val q = query.uppercase()
+            return if (q.isEmpty()) all else all.filter { it.contains(q) }
+        }
+
+        /** Tick-to-tick direction for the status price colour; equal prices keep the previous direction. */
+        internal fun priceDirection(previous: Double?, now: Double, keep: String): String = when {
+            previous == null -> "NONE"
+            now > previous -> "UP"
+            now < previous -> "DOWN"
+            else -> keep
+        }
+
+        /** Human-readable load error: region block, upstream HTTP status, or a generic network failure. */
+        internal fun errorText(t: Throwable, s: DiveStrings): String {
+            if (t.isRegionBlocked()) return s.errRegionBlockedBody
+            var cause: Throwable? = t
+            var depth = 0
+            while (cause != null && depth < 8) {
+                if (cause is UpstreamHttpException && cause.forbidden) return s.errForbiddenBody
+                if (cause is UpstreamHttpException) return s.errUpstreamGeneric
+                cause = cause.cause
+                depth++
+            }
+            return s.errNetwork
+        }
+
+        /**
+         * Aligns the REST series to the candle timeline (each candle takes the last point at or
+         * before its openTime). Candles older than the newest series' first point are dropped so
+         * every list stays index-aligned, as [Microstructure.Series] requires. Empty series stay empty.
+         */
+        internal fun alignMicrostructure(
+            candles: List<Candle>,
+            oi: List<Pair<Long, Double>>,
+            pos: List<Pair<Long, Double>>,
+            taker: List<Pair<Long, Double>>,
+            glob: List<Pair<Long, Double>>,
+            funding: List<Pair<Long, Double>>,
+        ): Microstructure.Series {
+            val sorted = listOf(oi, pos, taker, glob, funding).map { s -> s.sortedBy { it.first } }
+            val startTime = sorted.filter { it.isNotEmpty() }.maxOfOrNull { it.first().first } ?: Long.MIN_VALUE
+            val start = candles.indexOfFirst { it.openTime >= startTime }.let { if (it < 0) candles.size else it }
+            val times = candles.subList(start, candles.size).map { it.openTime }
+
+            fun fill(points: List<Pair<Long, Double>>): List<Double> {
+                if (points.isEmpty()) return emptyList()
+                val out = ArrayList<Double>(times.size)
+                var p = -1
+                for (t in times) {
+                    while (p + 1 < points.size && points[p + 1].first <= t) p++
+                    out.add(points[p.coerceAtLeast(0)].second)
+                }
+                return out
+            }
+
+            return Microstructure.Series(
+                oi = fill(sorted[0]),
+                price = candles.subList(start, candles.size).map { it.close },
+                funding = fill(sorted[4]),
+                taker = fill(sorted[2]),
+                glob = fill(sorted[3]),
+                pos = fill(sorted[1]),
+            )
+        }
 
         /**
          * Computes EMA(20), EMA(50) and Bollinger(20,2) bands over [candles]

@@ -35,6 +35,9 @@ class CmfIndicator(config: IndicatorConfig) : BaseIndicator(config) {
 
         val currentCmf = cmf.lastOrNull()
             ?: return result(Signal.NEUTRAL, "CMF data insufficient")
+        // Zero volume over the window gives 0/0 = NaN; report insufficient data like
+        // cmf.py rather than letting the NaN be rounded to a 0.0 raw value.
+        if (currentCmf.isNaN()) return result(Signal.NEUTRAL, "CMF data insufficient")
 
         val raw = mapOf<String, Double?>("cmf" to round4(currentCmf))
 

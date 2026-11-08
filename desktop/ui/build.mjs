@@ -1,6 +1,8 @@
-/* Build the desktop UI into a single offline bundle (no CDN, no in-browser Babel).
+/* Build the desktop UI into a single JS bundle (no CDN scripts, no in-browser Babel).
    Concatenates the prototype scripts (which rely on global load order, not ES
-   modules) behind a prelude that pins React, then esbuild transpiles the JSX. */
+   modules) behind a prelude that pins React, then esbuild transpiles the JSX.
+   Note: src/index.html still loads Google Fonts stylesheets on start, so the page is
+   not fully offline; the fonts fall back to system monospace when unreachable. */
 import esbuild from "esbuild";
 import { readFileSync, writeFileSync, mkdirSync, copyFileSync } from "fs";
 

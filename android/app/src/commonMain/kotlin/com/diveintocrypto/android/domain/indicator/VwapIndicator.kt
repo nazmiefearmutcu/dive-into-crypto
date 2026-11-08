@@ -20,10 +20,12 @@ class VwapIndicator(config: IndicatorConfig) : BaseIndicator(config) {
         val rollingTpV = rollingSum(tpV, period)
         val rollingV = rollingSum(volume, period)
 
+        // A zero-volume window has no VWAP (mirrors rolling_v.where(rolling_v > 0)
+        // in vwap.py): null, not 0.0, so the insufficient-data branch applies.
         val vwap: List<Double?> = candles.indices.map { i ->
             val t = rollingTpV[i]
             val v = rollingV[i]
-            if (t == null || v == null) null else t / (v + 1e-10)
+            if (t == null || v == null || v <= 0.0) null else t / v
         }
 
         val currentVwap = vwap.lastOrNull()

@@ -1,5 +1,7 @@
 package com.diveintocrypto.android.ui.logs
 
+import com.diveintocrypto.android.ui.i18n.LocalDiveStrings
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -105,7 +107,7 @@ private fun HeaderRow(restCount: Int, wsCount: Int, onClear: () -> Unit) {
                 .clickable(onClick = onClear)
                 .padding(horizontal = 12.dp, vertical = 6.dp),
         ) {
-            Text("Clear", color = DiveColors.Red, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            Text(LocalDiveStrings.current.logClear, color = DiveColors.Red, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
         }
     }
 }
@@ -143,7 +145,7 @@ private fun FilterBar(
                 .padding(horizontal = 12.dp, vertical = 10.dp),
         ) {
             if (text.isEmpty()) {
-                Text("Search host / path / method…", color = DiveColors.TextDim, fontSize = 12.sp)
+                Text(LocalDiveStrings.current.logSearchHint, color = DiveColors.TextDim, fontSize = 12.sp)
             }
             BasicTextField(
                 value = text,
@@ -187,6 +189,7 @@ private fun colorOf(f: StatusFilter): Color = when (f) {
     StatusFilter.CLIENT_ERROR -> DiveColors.Yellow
     StatusFilter.SERVER_ERROR -> DiveColors.Red
     StatusFilter.NETWORK_ERROR -> DiveColors.Orange
+    StatusFilter.OTHER -> DiveColors.Purple
 }
 
 @Composable
@@ -287,7 +290,7 @@ private fun EmptyState(hasAny: Boolean) {
         Text("📡", fontSize = 28.sp)
         Spacer(Modifier.height(8.dp))
         Text(
-            if (hasAny) "No requests match the filter" else "No API requests made yet",
+            if (hasAny) LocalDiveStrings.current.logNoMatch else LocalDiveStrings.current.logNoRequests,
             color = DiveColors.Text,
             fontSize = 14.sp,
             fontWeight = FontWeight.SemiBold,
@@ -295,7 +298,7 @@ private fun EmptyState(hasAny: Boolean) {
         if (!hasAny) {
             Spacer(Modifier.height(4.dp))
             Text(
-                "Open the Scanner, Panel, or Positions tab",
+                LocalDiveStrings.current.logOpenHint,
                 color = DiveColors.TextMuted,
                 fontSize = 11.sp,
             )

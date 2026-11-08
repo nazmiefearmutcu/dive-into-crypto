@@ -1,5 +1,5 @@
 """Binance futures/data long-short ratios — the microstructure series the
-whale-divergence engine needs. Crypcodile does not store these, so they are
+whale-divergence engine needs. Crocodile does not ingest these, so they are
 fetched directly from the public ``/futures/data/*`` endpoints (rate-limited).
 """
 
@@ -61,10 +61,13 @@ async def position_ls_timeseries(symbol: str, period: str, limit: int = 60) -> d
     vs: list[float] = []
     for r in rows:
         try:
-            vs.append(float(r["longShortRatio"]))
-            ts.append(int(r["timestamp"]))
+            # parse both fields before appending either, so t and v stay index-aligned
+            v = float(r["longShortRatio"])
+            t = int(r["timestamp"])
         except (KeyError, TypeError, ValueError):
             continue
+        vs.append(v)
+        ts.append(t)
     return {"t": ts, "v": vs}
 
 
@@ -125,7 +128,7 @@ async def ratio_term_structure(symbol: str, periods: list[str] | None = None,
         row = await asyncio.gather(
             *(cell(_family_fn(name), period) for name in _TERM_FAMILY_NAMES)
         )
-        vals = dict(zip(_TERM_FAMILY_NAMES, row))
+        vals = dict(zip(_TERM_FAMILY_NAMES, row, strict=True))
         unavailable += sum(1 for v in vals.values() if v is None)
         out[period] = vals
     return {"periods": out, "cells_unavailable": unavailable}

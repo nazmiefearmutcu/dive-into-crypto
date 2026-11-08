@@ -24,6 +24,7 @@ stats carry ``gated: true``. Proportions come with a Wilson 95% interval.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import math
@@ -71,6 +72,19 @@ _SIGNAL_SCORES = {"STRONG_BUY": 2, "BUY": 1, "NEUTRAL": 0, "SELL": -1, "STRONG_S
 
 _UNCLASSIFIED = "unclassified"
 
+# Terminal reason written for a verdict that can never be graded from the data
+# that exists (no entry price, or no completed candles covering its horizon).
+_SKIP_REASON = "ungradable: no entry price or no candles covering the horizon"
+
+# One grade() at a time: overlapping calls would grade the same verdicts twice.
+_GRADE_LOCK = asyncio.Lock()
+# Consecutive failed backfills per symbol (in-process). A symbol that keeps failing is
+# tried after the others, so one persistently broken pair cannot hold a grade() slot
+# on every call and starve the rest of the backlog.
+_RECENT_FAILURES: dict[str, int] = {}
+# 1000 hourly candles per Binance request (limit=1000); 999h spans fit inside it.
+_FETCH_PAGE_MS = 999 * _HOUR_MS
+
 
 def _iso(ts: float) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -109,8 +123,10 @@ def weights_hash(weights: dict) -> str:
 def record_from_row(row: dict, ts_ms: int | None = None) -> dict:
     """One archive record per scan row — the engine's verdict at verdict time.
 
-    v2 fields are taken from the row's annotation blocks when present; anything
-    missing stays absent here and is bucketed ``unclassified`` downstream.
+    ``ts`` is the snapshot instant the row's price was taken at (``snapshot_ms``
+    stamped by the scan), not the later archive time. v2 fields are taken from
+    the row's annotation blocks when present; anything missing stays absent here
+    and is bucketed ``unclassified`` downstream.
     """
     verdict = row.get("finalSignal", "NEUTRAL")
     dom = int(row.get("dominantDir") or 0)
@@ -130,8 +146,9 @@ def record_from_row(row: dict, ts_ms: int | None = None) -> dict:
     micro = row.get("microstructure") or {}
     regime_block = row.get("regime") or {}
     mtf_block = row.get("mtfConfluence") or {}
+    ts_src = ts_ms if ts_ms is not None else row.get("snapshot_ms")
     rec = {
-        "ts": int(ts_ms if ts_ms is not None else time.time() * 1000),
+        "ts": int(ts_src if ts_src is not None else time.time() * 1000),
         "symbol": row.get("s", ""),
         "verdict": verdict,
         "confidence": int(row.get("confidence") or 0),
@@ -146,7 +163,9 @@ def record_from_row(row: dict, ts_ms: int | None = None) -> dict:
     }
     # ── schema v2 (additive; old rows simply lack these) ─────────────────────
     rec["regime"] = regime_block.get("regime")
-    rec["micro_score"] = micro.get("score")
+    # scan rows carry no futures series, so the microstructure engine reports
+    # active == 0; that is "no reading", never a neutral 0.0 score
+    rec["micro_score"] = micro.get("score") if micro.get("active") else None
     rec["mtf_gate"] = mtf_block.get("gate") if isinstance(mtf_block.get("gate"), bool) else None
     rec["divergence_score"] = div_score
     rec["divergence_coverage"] = div_block.get("coverage")
@@ -200,24 +219,34 @@ def iter_archive(path: Path | None = None) -> list[dict]:
         except json.JSONDecodeError:
             continue
         if isinstance(obj, dict) and obj.get("symbol") and "ts" in obj:
+            try:
+                int(obj["ts"])
+            except (TypeError, ValueError):
+                continue  # valid JSON with a non-numeric ts: corrupt, skipped like the rest
             out.append(obj)
     return out
 
 
 def decisions(symbol: str | None = None, from_ms: int | None = None,
               to_ms: int | None = None, limit: int = 500) -> list[dict]:
-    """Thin archive reader for the UI: records for one symbol in a ts window."""
+    """Thin archive reader for the UI: records for one symbol in a ts window.
+
+    Returns the NEWEST ``limit`` matching records, oldest first (the previous
+    behaviour dropped the newest rows silently once the window exceeded limit).
+    """
     rows = [r for r in iter_archive()
             if (symbol is None or r.get("symbol") == symbol)
             and (from_ms is None or int(r["ts"]) >= int(from_ms))
             and (to_ms is None or int(r["ts"]) <= int(to_ms))]
     rows.sort(key=lambda r: int(r["ts"]))
-    return rows[: max(1, limit)]
+    return rows[-max(1, limit):]
 
 
 # ── grading ───────────────────────────────────────────────────────────────────
-def load_grades(path: Path | None = None) -> list[dict]:
-    """Read grade lines; corrupt lines skipped."""
+def load_grades(path: Path | None = None, include_skipped: bool = False) -> list[dict]:
+    """Read grade lines; corrupt lines skipped, duplicate (symbol, ts, horizon)
+    lines collapsed to their first occurrence. Terminal ``skipped`` lines (verdicts
+    that can never be graded) are excluded unless ``include_skipped``."""
     path = path or grades_path()
     try:
         with open(path, encoding="utf-8") as f:
@@ -225,6 +254,7 @@ def load_grades(path: Path | None = None) -> list[dict]:
     except (FileNotFoundError, OSError):
         return []
     out: list[dict] = []
+    seen: set[tuple] = set()
     for line in lines:
         line = line.strip()
         if not line:
@@ -234,29 +264,43 @@ def load_grades(path: Path | None = None) -> list[dict]:
         except json.JSONDecodeError:
             continue
         if isinstance(obj, dict) and obj.get("symbol") and "ts" in obj:
+            try:
+                key = (obj["symbol"], int(obj["ts"]), obj.get("horizon"))
+            except (TypeError, ValueError):
+                continue  # valid JSON with a non-numeric ts: corrupt, skipped (never fatal)
+            if key in seen:
+                continue  # a concurrent double-grade wrote the same verdict twice
+            seen.add(key)
+            if obj.get("skipped") and not include_skipped:
+                continue
             out.append(obj)
     return out
 
 
-def _horizon_exit(window: list[dict], horizon_ms: int) -> dict | None:
-    """The last candle with open time inside the grading horizon."""
-    end_ts = window[0]["t"] + horizon_ms
-    exit_c = None
-    for c in window:
-        if c["t"] > end_ts:
-            break
-        exit_c = c
-    return exit_c
+def _horizon_path(candles: list[dict], ts: int, horizon_ms: int) -> list[dict]:
+    """Completed 1h candles inside the verdict's horizon ``[ts, ts + H]``.
+
+    A candle is used only when it opens at or after the verdict instant and closes
+    by the horizon end. The candle that contains ``ts`` opens BEFORE the verdict
+    and holds pre-verdict prices, so it is never used (its high/low would count
+    moves the verdict could not have seen). A candle still open at the horizon end
+    is excluded too. An hour-aligned verdict's own candle opens exactly at ``ts``,
+    so all of its prices are post-verdict and it stays in the path. For a
+    non-aligned ``ts`` the first usable candle is the first full hour after ``ts``."""
+    end_ts = ts + horizon_ms
+    return [c for c in candles if ts <= c["t"] and c["t"] + _HOUR_MS <= end_ts]
 
 
-def _walk_hit(entry: float, dir: int, window: list[dict], horizon_ms: int) -> bool:
+def _horizon_exit(path: list[dict]) -> dict | None:
+    """The last completed candle on the horizon path (its close is the exit)."""
+    return path[-1] if path else None
+
+
+def _walk_hit(entry: float, dir: int, path: list[dict]) -> bool:
     """Walk candles chronologically: did price move ≥ FORWARD_THRESHOLD in ``dir``
     before the opposite move? Both thresholds inside ONE candle → conservative
     miss (the order is unknowable from OHLC). No breach at all → miss."""
-    end_ts = window[0]["t"] + horizon_ms
-    for c in window:
-        if c["t"] > end_ts:
-            break
+    for c in path:
         fav = ((c["h"] - entry) / entry if dir > 0 else (entry - c["l"]) / entry) >= FORWARD_THRESHOLD
         adv = ((entry - c["l"]) / entry if dir > 0 else (c["h"] - entry) / entry) >= FORWARD_THRESHOLD
         if adv and not fav:
@@ -269,13 +313,14 @@ def _walk_hit(entry: float, dir: int, window: list[dict], horizon_ms: int) -> bo
 def _momentum_hit(rec: dict, candles: list[dict]) -> bool | None:
     """Did the trailing-24h return sign (at the verdict's timestamp) agree with
     the verdict direction? ``None`` when the pre-window is absent (short
-    archives) or the verdict is NEUTRAL — never guessed."""
+    archives) or the verdict is NEUTRAL — never guessed. Only candles whose close
+    is known at ``ts`` are used (a candle that opens before ``ts`` closes after it)."""
     dir = int(rec.get("dominant_dir") or 0)
     if dir == 0:
         return None
     ts = int(rec["ts"])
-    before = [c for c in candles if c["t"] <= ts - _MOMENTUM_LOOKBACK_MS]
-    at = [c for c in candles if c["t"] <= ts]
+    before = [c for c in candles if c["t"] + _HOUR_MS <= ts - _MOMENTUM_LOOKBACK_MS]
+    at = [c for c in candles if c["t"] + _HOUR_MS <= ts]
     if not before or not at:
         return None
     base = before[-1]["c"]
@@ -295,15 +340,15 @@ def _grade_one(rec: dict, candles: list[dict], horizon: str, now_ms: int) -> dic
     if entry <= 0:
         return None
     horizon_ms = HORIZONS[horizon]
-    window = [c for c in candles if c["t"] >= ts]
-    if not window:
+    path = _horizon_path(candles, ts, horizon_ms)
+    if not path:
         return None
-    exit_c = _horizon_exit(window, horizon_ms)
+    exit_c = _horizon_exit(path)
     if exit_c is None:
         return None
     dir = int(rec.get("dominant_dir") or 0)
     if dir != 0:
-        hit = _walk_hit(entry, dir, window, horizon_ms)
+        hit = _walk_hit(entry, dir, path)
         forward = dir * (exit_c["c"] - entry) / entry
     else:
         # NEUTRAL: "correct" = no decisive move in EITHER direction by horizon end
@@ -311,16 +356,15 @@ def _grade_one(rec: dict, candles: list[dict], horizon: str, now_ms: int) -> dic
         forward = (exit_c["c"] - entry) / entry
 
     # ── v2 per-event extras (additive) ───────────────────────────────────────
-    hz_window = [c for c in window if c["t"] <= window[0]["t"] + horizon_ms]
     signed_close = dir * (exit_c["c"] - entry) / entry if dir != 0 else (exit_c["c"] - entry) / entry
     if dir != 0:
         hit_close = signed_close >= FORWARD_THRESHOLD
-        mfe = max(((c["h"] - entry) / entry if dir > 0 else (entry - c["l"]) / entry) for c in hz_window)
-        mae = max(((entry - c["l"]) / entry if dir > 0 else (c["h"] - entry) / entry) for c in hz_window)
+        mfe = max(((c["h"] - entry) / entry if dir > 0 else (entry - c["l"]) / entry) for c in path)
+        mae = max(((entry - c["l"]) / entry if dir > 0 else (c["h"] - entry) / entry) for c in path)
     else:
         hit_close = abs(signed_close) < FORWARD_THRESHOLD
-        mfe = max((c["h"] - entry) / entry for c in hz_window)
-        mae = max((entry - c["l"]) / entry for c in hz_window)
+        mfe = max((c["h"] - entry) / entry for c in path)
+        mae = max((entry - c["l"]) / entry for c in path)
 
     return {
         "ts": ts,
@@ -344,10 +388,18 @@ def _grade_one(rec: dict, candles: list[dict], horizon: str, now_ms: int) -> dic
 
 
 async def _default_fetcher(symbol: str, start_ms: int, end_ms: int) -> list[dict]:
+    """Completed 1h candles over ``[start_ms, end_ms]``, paged so a long backlog is
+    never silently truncated to Binance's first 1000 candles."""
     from diveintocrypto_desktop.data import binance_klines as kl
 
-    candles = await kl.fetch_klines_range(symbol, "1h", start_ms, end_ms)
-    return [{"t": c["t"] // 1_000_000, "h": c["h"], "l": c["l"], "c": c["c"]} for c in candles]
+    out: list[dict] = []
+    cur = start_ms
+    while cur <= end_ms:
+        page_end = min(end_ms, cur + _FETCH_PAGE_MS)
+        candles = await kl.fetch_klines_range(symbol, "1h", cur, page_end)
+        out.extend({"t": c["t"] // 1_000_000, "h": c["h"], "l": c["l"], "c": c["c"]} for c in candles)
+        cur = page_end + 1
+    return out
 
 
 async def grade(
@@ -358,10 +410,15 @@ async def grade(
 ) -> dict:
     """Backfill outcomes for matured, not-yet-graded verdicts (resumable, capped).
 
-    Returns ``{horizon, archived, graded, symbols_graded, failed, remaining}``.
-    The fetch window reaches 24h BEFORE each verdict so the momentum baseline
-    (trailing-24h return sign) is computable; when the window has no pre-history
-    the grade stores ``momentum_hit: null`` honestly.
+    Returns ``{horizon, archived, gradable, graded, skipped, symbols_graded,
+    failed, remaining}``. A verdict that can never be graded (no entry price, or
+    candles that do not cover its horizon) gets a terminal ``skipped`` line so it
+    leaves the backlog instead of starving it; a fetch failure (or an empty answer)
+    stays retryable, and a symbol that keeps failing is tried after the others so it
+    cannot starve the backlog. The fetch window reaches 25h BEFORE the oldest verdict
+    so the momentum baseline (the last candle closed by ``ts - 24h``) is fetched for
+    every verdict; when the window has no pre-history the grade stores
+    ``momentum_hit: null`` honestly.
     """
     if horizon not in HORIZONS:
         raise ValueError(f"horizon must be one of {sorted(HORIZONS)}")
@@ -369,45 +426,71 @@ async def grade(
     now_ms = int(now_ms if now_ms is not None else time.time() * 1000)
     horizon_ms = HORIZONS[horizon]
 
-    records = iter_archive()
-    done = {(g["symbol"], int(g["ts"])) for g in load_grades() if g.get("horizon") == horizon}
-    mature = [r for r in records if int(r["ts"]) <= now_ms - horizon_ms]
-    todo: dict[str, list[dict]] = {}
-    for r in mature:
-        if (r["symbol"], int(r["ts"])) in done:
-            continue
-        todo.setdefault(r["symbol"], []).append(r)
-    # oldest verdicts first — the archive grades forward in time
-    symbols = sorted(todo, key=lambda s: min(int(r["ts"]) for r in todo[s]))[: max(1, cap)]
-
-    graded = 0
-    failed: list[dict] = []
-    new_lines: list[dict] = []
-    for s in symbols:
-        recs = todo[s]
-        start = min(int(r["ts"]) for r in recs) - _MOMENTUM_LOOKBACK_MS
-        end = max(int(r["ts"]) for r in recs) + horizon_ms + 2 * _HOUR_MS
-        try:
-            candles = await fetcher(s, start, end)
-        except Exception as e:
-            failed.append({"symbol": s, "reason": str(e)[:100]})
-            continue
-        for rec in recs:
-            g = _grade_one(rec, candles, horizon, now_ms)
-            if g is None:
+    async with _GRADE_LOCK:
+        # blocking file I/O stays off the event loop
+        records = await asyncio.to_thread(iter_archive)
+        done = {(g["symbol"], int(g["ts"]))
+                for g in await asyncio.to_thread(load_grades, include_skipped=True)
+                if g.get("horizon") == horizon}
+        mature = [r for r in records if int(r["ts"]) <= now_ms - horizon_ms]
+        todo: dict[str, list[dict]] = {}
+        for r in mature:
+            if (r["symbol"], int(r["ts"])) in done:
                 continue
-            new_lines.append(g)
-            graded += 1
+            todo.setdefault(r["symbol"], []).append(r)
+        # oldest verdicts first — the archive grades forward in time; symbols that failed
+        # on the previous attempts go to the back so they cannot hold every slot
+        symbols = sorted(
+            todo,
+            key=lambda s: (_RECENT_FAILURES.get(s, 0) > 0, min(int(r["ts"]) for r in todo[s])),
+        )[: max(1, cap)]
 
-    append_lines(grades_path(), new_lines)
+        graded = 0
+        skipped = 0
+        failed: list[dict] = []
+        new_lines: list[dict] = []
+        for s in symbols:
+            recs = todo[s]
+            # 25h before the oldest verdict: the momentum baseline needs the last candle
+            # that closed by ts - 24h, which opens 25h before ts
+            start = min(int(r["ts"]) for r in recs) - _MOMENTUM_LOOKBACK_MS - _HOUR_MS
+            end = max(int(r["ts"]) for r in recs) + horizon_ms + 2 * _HOUR_MS
+            try:
+                candles = await fetcher(s, start, end)
+            except Exception as e:
+                _RECENT_FAILURES[s] = _RECENT_FAILURES.get(s, 0) + 1
+                failed.append({"symbol": s, "reason": str(e)[:100]})
+                continue
+            if not candles:  # empty response: retryable, deprioritised on later calls
+                _RECENT_FAILURES[s] = _RECENT_FAILURES.get(s, 0) + 1
+                failed.append({"symbol": s, "reason": "no candles returned"})
+                continue
+            _RECENT_FAILURES.pop(s, None)
+            for rec in recs:
+                g = _grade_one(rec, candles, horizon, now_ms)
+                if g is None:  # candles exist but cannot grade this verdict: terminal
+                    new_lines.append({
+                        "ts": int(rec["ts"]), "symbol": rec["symbol"], "horizon": horizon,
+                        "skipped": _SKIP_REASON, "graded_at": now_ms,
+                        "engine_version": ENGINE_VERSION,
+                    })
+                    skipped += 1
+                    continue
+                new_lines.append(g)
+                graded += 1
 
-    done_after = {(g["symbol"], int(g["ts"])) for g in load_grades() if g.get("horizon") == horizon}
+        await asyncio.to_thread(append_lines, grades_path(), new_lines)
+
+        done_after = {(g["symbol"], int(g["ts"]))
+                      for g in await asyncio.to_thread(load_grades, include_skipped=True)
+                      if g.get("horizon") == horizon}
     remaining = sum(1 for r in mature if (r["symbol"], int(r["ts"])) not in done_after)
     return {
         "horizon": horizon,
         "archived": len(records),
         "gradable": len(mature),
         "graded": graded,
+        "skipped": skipped,
         "symbols_graded": len(symbols) - len(failed),
         "failed": failed,
         "remaining": remaining,
@@ -562,7 +645,7 @@ def brier(joined: list[tuple[dict, dict]]) -> dict:
     hits = [1.0 if g.get("hit") else 0.0 for _, g in joined]
     confs = [min(max(int(r.get("confidence") or 0), 0), 100) / 100.0 for r, _ in joined]
     n = len(hits)
-    score = sum((p - y) ** 2 for p, y in zip(confs, hits)) / n
+    score = sum((p - y) ** 2 for p, y in zip(confs, hits, strict=True)) / n
     base = sum(hits) / n
     ref = sum((base - y) ** 2 for y in hits) / n
     skill = round(1.0 - score / ref, 4) if ref > 0 else None
@@ -579,10 +662,14 @@ def baselines(joined: list[tuple[dict, dict]]) -> dict:
     p-value is a category error: the observed statistic is always one of the
     permutation outcomes). Deterministic via a fixed seed (printed alongside).
     """
-    forwards = [float(g["forward"]) for _, g in joined if g.get("forward") is not None]
+    # Only DIRECTIONAL verdicts: their forward is dir-signed, so a random sign flip
+    # is a valid null. NEUTRAL forwards are unsigned raw returns and would mix conventions.
+    forwards = [float(g["forward"]) for r, g in joined
+                if g.get("forward") is not None and int(r.get("dominant_dir") or 0) != 0]
     if not forwards:
         return {"coin_mean": None, "coin_sd": None, "p_value": None,
                 "momentum_hit_rate": None, "bnh_forward_mean": None,
+                "n_directional": 0,
                 "permutations": PERMUTATION_K, "seed": PERMUTATION_SEED}
     n = len(forwards)
     coin_sd = math.sqrt(sum(f * f for f in forwards)) / n
@@ -605,6 +692,7 @@ def baselines(joined: list[tuple[dict, dict]]) -> dict:
         "momentum_hit_rate": round(sum(momentum) / len(momentum), 4) if momentum else None,
         "momentum_n": len(momentum),
         "bnh_forward_mean": round(sum(bnh) / len(bnh), 6) if bnh else None,
+        "n_directional": n,
         "permutations": PERMUTATION_K,
         "seed": PERMUTATION_SEED,
     }
@@ -623,10 +711,17 @@ def summary(horizon: str = DEFAULT_HORIZON, now_ms: int | None = None) -> dict:
     horizon_ms = HORIZONS[horizon]
 
     records = iter_archive()
-    grades = load_grades()
+    all_grades = load_grades(include_skipped=True)
+    # terminal skips leave the backlog: they are neither graded nor "failed grades"
+    skipped_keys = {(g["symbol"], int(g["ts"])) for g in all_grades
+                    if g.get("horizon") == horizon and g.get("skipped")}
+    grades = [g for g in all_grades if not g.get("skipped")]
     by_key = {(r["symbol"], int(r["ts"])): r for r in records}
 
-    mature = [r for r in records if int(r["ts"]) <= now_ms - horizon_ms]
+    mature = [r for r in records if int(r["ts"]) <= now_ms - horizon_ms
+              and (r["symbol"], int(r["ts"])) not in skipped_keys]
+    ungradable = sum(1 for r in records if int(r["ts"]) <= now_ms - horizon_ms
+                     and (r["symbol"], int(r["ts"])) in skipped_keys)
 
     joined: list[tuple[dict, dict]] = []
     for g in grades:
@@ -704,6 +799,7 @@ def summary(horizon: str = DEFAULT_HORIZON, now_ms: int | None = None) -> dict:
         "horizon": horizon,
         "archived_count": len(records),
         "gradable_count": gradable,
+        "ungradable_count": ungradable,
         "graded_count": graded_count,
         "coverage": round(graded_count / gradable, 4) if gradable else 0.0,
         "stale": graded_count < gradable,
@@ -735,6 +831,10 @@ def provenance_last(records: list[dict]) -> str:
     return _iso(ts / 1000) if ts is not None else "—"
 
 
+def _sign_of(x: int) -> int:
+    return (x > 0) - (x < 0)
+
+
 def stability(limit_per_symbol: int = 8) -> list[dict]:
     """Per-symbol verdict self-agreement over the last ``limit_per_symbol`` archived
     records — DIRECTIONAL rows only: the majority side is computed over, and
@@ -752,7 +852,8 @@ def stability(limit_per_symbol: int = 8) -> list[dict]:
     for sym, rows in sorted(by_symbol.items()):
         rows.sort(key=lambda r: int(r["ts"]))
         tail = rows[-limit_per_symbol:]
-        dirs = [_SIGNAL_SCORES.get(r.get("verdict", "NEUTRAL"), 0) for r in tail]
+        # sign, not score: STRONG_BUY/STRONG_SELL are the same side as BUY/SELL
+        dirs = [_sign_of(_SIGNAL_SCORES.get(r.get("verdict", "NEUTRAL"), 0)) for r in tail]
         directional = [d for d in dirs if d != 0]
         k = len(directional)
         if directional:
@@ -761,7 +862,7 @@ def stability(limit_per_symbol: int = 8) -> list[dict]:
             agree_frac = round(agree / k, 3)
         else:
             agree_frac = None  # nothing directional to agree with — honest null
-        gaps = [(int(b["ts"]) - int(a["ts"])) / 60_000.0 for a, b in zip(tail, tail[1:])]
+        gaps = [(int(b["ts"]) - int(a["ts"])) / 60_000.0 for a, b in zip(tail, tail[1:], strict=False)]
         out.append({
             "s": sym,
             "agree_frac": agree_frac,

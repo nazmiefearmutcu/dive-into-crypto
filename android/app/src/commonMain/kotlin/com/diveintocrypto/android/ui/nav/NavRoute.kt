@@ -24,7 +24,7 @@ import androidx.compose.material.icons.rounded.Search
 import androidx.compose.ui.graphics.vector.ImageVector
 
 /**
- * 8 routes — paper-trading bindings stripped; each screen now consumes real
+ * 10 routes — paper-trading bindings stripped; each screen now consumes real
  * Binance public APIs. `inBottomBar = true` for the 4 primary
  * destinations; the rest live behind the "More" overflow sheet.
  *
@@ -41,7 +41,7 @@ enum class NavRoute(
     PANEL("panel", "Panel", Icons.Outlined.Dashboard, Icons.Rounded.Dashboard, inBottomBar = true),
     SCANNER("scanner", "Scanner", Icons.Outlined.Search, Icons.Rounded.Search, inBottomBar = true),
     POSITIONS("positions", "OI · L/S", Icons.Outlined.PieChart, Icons.Rounded.PieChart, inBottomBar = true),
-    SIGNALS("signals", "Signals", Icons.Outlined.Notifications, Icons.Rounded.Notifications, inBottomBar = true),
+    SIGNALS("signals", "Bias", Icons.Outlined.Notifications, Icons.Rounded.Notifications, inBottomBar = true),
     ALERTS("alerts", "Alarmlar", Icons.Outlined.AddAlert, Icons.Rounded.AddAlert, inBottomBar = false),
     PORTFOLIO("portfolio", "Portföy", Icons.Outlined.AccountBalanceWallet, Icons.Rounded.AccountBalanceWallet, inBottomBar = false),
     PERFORMANCE("performance", "Leaders", Icons.Outlined.QueryStats, Icons.Rounded.QueryStats, inBottomBar = false),

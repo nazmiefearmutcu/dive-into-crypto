@@ -65,26 +65,64 @@ def test_pulse_rows_and_cache(monkeypatch, client):
         calls["oi"] += 1
         return [{"t": 0, "oi": 100.0}, {"t": 1, "oi": 105.0}]  # +5%
 
+    universe_calls = {"n": 0}
+
+    async def fake_list_universe(limit=None):
+        # Stubbed so /api/pulse never reaches exchangeInfo / ticker over the wire.
+        universe_calls["n"] += 1
+        return [
+            {"s": "BTCUSDT", "name": "BTC", "price": 50000.0, "ch": 2.5, "quote_volume": 1.0},
+            {"s": "ETHUSDT", "name": "ETH", "price": 3000.0, "ch": -1.0, "quote_volume": 1.0},
+        ]
+
     monkeypatch.setattr(app_mod.fnd, "premium_index_all", fake_premium_index_all)
     monkeypatch.setattr(app_mod.oi_mod, "fetch_oi_hist", fake_oi_hist)
+    monkeypatch.setattr(app_mod.uni, "list_universe", fake_list_universe)
 
     r = client.get("/api/pulse?symbols=BTC,ETH")
     assert r.status_code == 200
     rows = r.json()
     assert [row["s"] for row in rows] == ["BTCUSDT", "ETHUSDT"]
     assert rows[0]["price"] == 50000.0
+    assert rows[0]["ch"] == 2.5
+    assert rows[1]["ch"] == -1.0
     assert rows[0]["funding_rate"] == 0.0001
     assert rows[0]["next_funding_time_ms"] == 1_700_000_000_000
     assert rows[0]["oi_delta_pct"] == pytest.approx(5.0)
     assert rows[1]["next_funding_time_ms"] is None  # 0/absent → null, never a fake 0 countdown
 
     client.get("/api/pulse?symbols=BTC,ETH")  # 10s cache: no new upstream calls
-    assert calls["prem"] == 1 and calls["oi"] == 2
+    assert calls["prem"] == 1 and calls["oi"] == 2 and universe_calls["n"] == 1
 
     too_many = client.get("/api/pulse?symbols=" + ",".join(["BTC"] * 21))
     assert too_many.status_code == 422
     missing = client.get("/api/pulse")
     assert missing.status_code == 422
+
+
+def test_pulse_ch_is_null_when_universe_lookup_fails(monkeypatch, client):
+    from diveintocrypto_desktop.api import app as app_mod
+
+    async def fake_premium_index_all():
+        return {"SOLUSDT": {"mark_price": 150.0, "last_funding_rate": 0.0002,
+                            "next_funding_time": 1_700_000_000_000}}
+
+    async def fake_oi_hist(symbol, period="5m", limit=24):
+        return []
+
+    async def universe_down(limit=None):
+        raise RuntimeError("binance unreachable")
+
+    monkeypatch.setattr(app_mod.fnd, "premium_index_all", fake_premium_index_all)
+    monkeypatch.setattr(app_mod.oi_mod, "fetch_oi_hist", fake_oi_hist)
+    monkeypatch.setattr(app_mod.uni, "list_universe", universe_down)
+
+    r = client.get("/api/pulse?symbols=SOL")
+    assert r.status_code == 200
+    row = r.json()[0]
+    assert row["s"] == "SOLUSDT"
+    assert row["ch"] is None  # honest null, never a fabricated 0% move
+    assert row["price"] == 150.0
 
 
 # ── /api/macro + /api/options ─────────────────────────────────────────────────
@@ -219,5 +257,6 @@ def test_symbol_tf_validation_and_passthrough(monkeypatch, client):
     assert bad.status_code == 422
 
 
-def test_universe_and_scan_unaffected(client):
+def test_logs_endpoint_reachable(client):
+    # Only the logs route is checked here; universe and scan behaviour have their own tests.
     assert client.get("/api/logs").status_code == 200

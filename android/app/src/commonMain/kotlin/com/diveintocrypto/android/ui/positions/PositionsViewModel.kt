@@ -11,6 +11,8 @@ import com.diveintocrypto.android.domain.model.Candle
 import com.diveintocrypto.android.platform.logDebug
 import com.diveintocrypto.android.platform.nowMillis
 import com.diveintocrypto.android.platform.synchronized
+import com.diveintocrypto.android.ui.performance.MarketDataFailure
+import com.diveintocrypto.android.ui.performance.toMarketDataFailure
 import kotlinx.atomicfu.locks.SynchronizedObject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -32,8 +34,9 @@ import kotlin.math.abs
  *
  * NOTHING IS SYNTHESISED ("Nothing is synthesised" doctrine): when the WebSocket is
  * quiet the last REAL data is kept and the UI state is flagged via [PositionsUiState.isStale]
- * / [PositionsUiState.dataAgeMs]. The previous random price/OI/ratio fabrication
- * ("fallback ticker" + "simulated series") was deleted — never invent market data.
+ * / [PositionsUiState.dataAgeMs]. An endpoint that returns nothing empties the aligned
+ * series (the UI shows "no data") instead of being filled with neutral constants, and no
+ * quant bias is computed from incomplete inputs.
  */
 class PositionsViewModel(private val container: AppContainer) : ViewModel() {
 
@@ -92,15 +95,28 @@ class PositionsViewModel(private val container: AppContainer) : ViewModel() {
         loadJob = viewModelScope.launch(Dispatchers.Default) {
             try {
                 fetchInitialData(symbol, period)
-
-                // Start live updates
-                startPolling(symbol, period)
-                startTicker(symbol, period)
+            } catch (e: CancellationException) {
+                throw e
             } catch (t: Throwable) {
-                _ui.update { it.copy(isLoading = false, error = t.message ?: "Network error") }
+                val failure = t.toMarketDataFailure()
+                _ui.update { s ->
+                    if (s.activeSymbol != symbol || s.period != period) s
+                    else s.copy(isLoading = false, error = failure)
+                }
+                // A regional block cannot be fixed by retrying: stop here, never poll in a loop.
+                if (failure == MarketDataFailure.RegionBlocked) return@launch
             }
+
+            // Live polling and the ticker start even when the first load failed, so the
+            // screen recovers by itself once the source answers again.
+            startPolling(symbol, period)
+            startTicker(symbol, period)
         }
     }
+
+    /** True while [symbol]/[period] are still the ones on screen (a switch cancels older work). */
+    private fun isCurrent(symbol: String, period: String): Boolean =
+        _ui.value.let { it.activeSymbol == symbol && it.period == period }
 
     private suspend fun fetchInitialData(symbol: String, period: String) {
         coroutineScope {
@@ -122,13 +138,18 @@ class PositionsViewModel(private val container: AppContainer) : ViewModel() {
             val candles = candlesDeferred.await()
 
             synchronized(lock) {
-                cachedCandles = candles
+                if (isCurrent(symbol, period)) {
+                    cachedCandles = candles
+                }
             }
             val aligned = alignData(candles, oi, accountRatio, positionRatio, taker, globalRatio, fundingRate)
-            val bias = calculateQuantBias(candles, aligned.oi, aligned.acc, aligned.pos, aligned.taker, aligned.global, aligned.funding)
+            // The verdict uses the RAW series (the engine aligns them causally, like the Panel does).
+            val bias = calculateQuantBias(candles, oi, accountRatio, positionRatio, taker, globalRatio, fundingRate)
 
-            _ui.update {
-                it.copy(
+            // Publish only if the symbol/period is still the one on screen (atomic check + write).
+            _ui.update { s ->
+                if (s.activeSymbol != symbol || s.period != period) s
+                else s.copy(
                     openInterest = aligned.oi,
                     accountRatio = aligned.acc,
                     positionRatio = aligned.pos,
@@ -173,14 +194,18 @@ class PositionsViewModel(private val container: AppContainer) : ViewModel() {
 
                         val merged = synchronized(lock) {
                             val m = mergeCandles(candles, cachedCandles, limit)
-                            cachedCandles = m
+                            if (isCurrent(symbol, period)) {
+                                cachedCandles = m
+                            }
                             m
                         }
                         val aligned = alignData(merged, oi, accountRatio, positionRatio, taker, globalRatio, fundingRate, _ui.value)
-                        val bias = calculateQuantBias(merged, aligned.oi, aligned.acc, aligned.pos, aligned.taker, aligned.global, aligned.funding)
+                        // The verdict uses the RAW series (the engine aligns them causally, like the Panel does).
+                        val bias = calculateQuantBias(merged, oi, accountRatio, positionRatio, taker, globalRatio, fundingRate)
 
-                        _ui.update {
-                            it.copy(
+                        _ui.update { s ->
+                            if (s.activeSymbol != symbol || s.period != period) s
+                            else s.copy(
                                 openInterest = aligned.oi,
                                 accountRatio = aligned.acc,
                                 positionRatio = aligned.pos,
@@ -191,6 +216,7 @@ class PositionsViewModel(private val container: AppContainer) : ViewModel() {
                                 quantBias = bias,
                                 closePrices = merged.map { c -> c.close },
                                 candles = merged,
+                                isLoading = false,
                                 error = null,
                                 lastUpdateMs = nowMillis(),
                             )
@@ -199,6 +225,18 @@ class PositionsViewModel(private val container: AppContainer) : ViewModel() {
                 } catch (e: CancellationException) {
                     throw e
                 } catch (t: Throwable) {
+                    val failure = t.toMarketDataFailure()
+                    _ui.update { s ->
+                        when {
+                            s.activeSymbol != symbol || s.period != period -> s
+                            // Show the failure when nothing is on screen to keep, or when polling cannot fix it.
+                            s.closePrices.isEmpty() || failure == MarketDataFailure.RegionBlocked ->
+                                s.copy(isLoading = false, error = failure)
+                            else -> s
+                        }
+                    }
+                    // Never retry a regional block in a loop.
+                    if (failure == MarketDataFailure.RegionBlocked) return@launch
                     delay(5000)
                 }
             }
@@ -219,7 +257,7 @@ class PositionsViewModel(private val container: AppContainer) : ViewModel() {
                 container.repository.liveKlines(symbol, period).collect { update ->
                     lastWsMessageTime = nowMillis()
                     _ui.update { it.copy(isStale = false, dataAgeMs = 0L) }
-                    processTick(update.candle.close, update.candle.openTime)
+                    processTick(symbol, period, update.candle.close, update.candle.openTime)
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -251,13 +289,15 @@ class PositionsViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
-    private fun processTick(newPrice: Double, openTime: Long) {
+    private fun processTick(symbol: String, period: String, newPrice: Double, openTime: Long) {
         val direction: String
         val isNewCandle: Boolean
         val updatedCandles: List<Candle>
         val limit = container.settingsStore.getSettings().chartCandleCount
 
         synchronized(lock) {
+            // A tick from a symbol/period that is no longer on screen must not touch the cache.
+            if (!isCurrent(symbol, period)) return
             val currentCandles = cachedCandles.toMutableList()
             if (currentCandles.isEmpty()) {
                 logDebug("PositionsVM", "processTick: cachedCandles is empty, skipping tick price=$newPrice")
@@ -282,7 +322,7 @@ class PositionsViewModel(private val container: AppContainer) : ViewModel() {
                     low = minOf(lastCandle.close, newPrice),
                     close = newPrice,
                     volume = 0.0,
-                    closeTime = openTime + getPeriodDurationMs(_ui.value.period) - 1
+                    closeTime = openTime + getPeriodDurationMs(period) - 1
                 )
                 currentCandles.add(newCandle)
                 while (currentCandles.size > limit) {
@@ -304,28 +344,38 @@ class PositionsViewModel(private val container: AppContainer) : ViewModel() {
 
         // HONESTY: only the CANDLES follow the live WebSocket price (real ticks).
         // The OI / L/S / taker / funding series are NEVER extrapolated or simulated —
-        // they refresh solely from the REST polling loop; while the REST refresh is
-        // in flight the displayed series keep their last REAL points and the staleness
-        // fields in the UI state say so. (The previous per-tick random series
-        // fabrication was removed — "Nothing is synthesised".)
-        val state = _ui.value
+        // they refresh from the REST polling loop. A new candle appends one entry to each
+        // series that repeats the newest REAL value (re-stamped), so the series keep the
+        // candle index; the UI's STALE fields say the REST refresh is pending.
+        val snapshot = _ui.value
+        val fromSnapshot = carrySeries(snapshot, isNewCandle, openTime, updatedCandles.size)
         val bias = calculateQuantBias(
             updatedCandles,
-            state.openInterest,
-            state.accountRatio,
-            state.positionRatio,
-            state.takerRatio,
-            state.globalRatio,
-            state.fundingRate,
+            fromSnapshot.oi,
+            fromSnapshot.acc,
+            fromSnapshot.pos,
+            fromSnapshot.taker,
+            fromSnapshot.global,
+            fromSnapshot.funding,
         )
 
-        _ui.update {
-            it.copy(
+        _ui.update { s ->
+            if (s.activeSymbol != symbol || s.period != period) return@update s
+            // Carry from the CURRENT state, so a REST poll that landed meanwhile is not overwritten.
+            val series = carrySeries(s, isNewCandle, openTime, updatedCandles.size)
+            s.copy(
                 closePrices = updatedCandles.map { c -> c.close },
                 candles = updatedCandles,
+                openInterest = series.oi,
+                accountRatio = series.acc,
+                positionRatio = series.pos,
+                takerRatio = series.taker,
+                globalRatio = series.global,
+                fundingRate = series.funding,
+                netTakerVolume = series.taker.map { t -> t.buyVol - t.sellVol },
                 quantBias = bias,
                 priceChangeDirection = direction,
-                lastUpdateMs = nowMillis()
+                lastUpdateMs = nowMillis(),
             )
         }
 
@@ -375,6 +425,15 @@ class PositionsViewModel(private val container: AppContainer) : ViewModel() {
         rawFunding: List<FundingRatePoint>,
         currentState: PositionsUiState? = null
     ): AlignedData {
+        // HONESTY: an endpoint that returns NOTHING (for example a new listing with no ratio
+        // history) is never filled with neutral constants. Any empty raw series empties the
+        // aligned set, so the UI shows its honest "no data" state and no bias is computed.
+        if (rawOi.isEmpty() || rawAcc.isEmpty() || rawPos.isEmpty() ||
+            rawTaker.isEmpty() || rawGlobal.isEmpty() || rawFunding.isEmpty()
+        ) {
+            return AlignedData(emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList())
+        }
+
         val alignedOi = ArrayList<OpenInterestPoint>(candles.size)
         val alignedAcc = ArrayList<LongShortRatioPoint>(candles.size)
         val alignedPos = ArrayList<LongShortRatioPoint>(candles.size)
@@ -403,6 +462,9 @@ class PositionsViewModel(private val container: AppContainer) : ViewModel() {
         val existingGlobal = currentState?.globalRatio ?: emptyList()
         val existingFunding = currentState?.fundingRate ?: emptyList()
 
+        // Nearest-neighbour fills relabel a REAL raw point onto the candle time (the same
+        // bucket in practice); they never invent a value. Exact raw points win, then the
+        // previously aligned exact point, then the nearest real raw point.
         for (candle in candles) {
             val t = candle.openTime
 
@@ -419,13 +481,11 @@ class PositionsViewModel(private val container: AppContainer) : ViewModel() {
                     existingOiIdx++
                 }
                 val exactExistingOi = if (existingOiIdx < existingOi.size && existingOi[existingOiIdx].timestamp == t) existingOi[existingOiIdx] else null
-                
+
                 if (exactExistingOi != null) {
                     exactExistingOi
                 } else {
-                    val p = if (rawOi.isEmpty()) {
-                        OpenInterestPoint(t, 0.0, 0.0)
-                    } else if (oiIdx == rawOi.size) {
+                    val p = if (oiIdx == rawOi.size) {
                         rawOi.last()
                     } else if (oiIdx == 0) {
                         rawOi.first()
@@ -452,13 +512,11 @@ class PositionsViewModel(private val container: AppContainer) : ViewModel() {
                     existingAccIdx++
                 }
                 val exactExistingAcc = if (existingAccIdx < existingAcc.size && existingAcc[existingAccIdx].timestamp == t) existingAcc[existingAccIdx] else null
-                
+
                 if (exactExistingAcc != null) {
                     exactExistingAcc
                 } else {
-                    val p = if (rawAcc.isEmpty()) {
-                        LongShortRatioPoint(t, 0.5, 0.5, 1.0)
-                    } else if (accIdx == rawAcc.size) {
+                    val p = if (accIdx == rawAcc.size) {
                         rawAcc.last()
                     } else if (accIdx == 0) {
                         rawAcc.first()
@@ -485,13 +543,11 @@ class PositionsViewModel(private val container: AppContainer) : ViewModel() {
                     existingPosIdx++
                 }
                 val exactExistingPos = if (existingPosIdx < existingPos.size && existingPos[existingPosIdx].timestamp == t) existingPos[existingPosIdx] else null
-                
+
                 if (exactExistingPos != null) {
                     exactExistingPos
                 } else {
-                    val p = if (rawPos.isEmpty()) {
-                        LongShortRatioPoint(t, 0.5, 0.5, 1.0)
-                    } else if (posIdx == rawPos.size) {
+                    val p = if (posIdx == rawPos.size) {
                         rawPos.last()
                     } else if (posIdx == 0) {
                         rawPos.first()
@@ -518,13 +574,11 @@ class PositionsViewModel(private val container: AppContainer) : ViewModel() {
                     existingTakerIdx++
                 }
                 val exactExistingTaker = if (existingTakerIdx < existingTaker.size && existingTaker[existingTakerIdx].timestamp == t) existingTaker[existingTakerIdx] else null
-                
+
                 if (exactExistingTaker != null) {
                     exactExistingTaker
                 } else {
-                    val p = if (rawTaker.isEmpty()) {
-                        TakerLongShortRatioPoint(t, 1.0, 0.0, 0.0)
-                    } else if (takerIdx == rawTaker.size) {
+                    val p = if (takerIdx == rawTaker.size) {
                         rawTaker.last()
                     } else if (takerIdx == 0) {
                         rawTaker.first()
@@ -551,13 +605,11 @@ class PositionsViewModel(private val container: AppContainer) : ViewModel() {
                     existingGlobalIdx++
                 }
                 val exactExistingGlobal = if (existingGlobalIdx < existingGlobal.size && existingGlobal[existingGlobalIdx].timestamp == t) existingGlobal[existingGlobalIdx] else null
-                
+
                 if (exactExistingGlobal != null) {
                     exactExistingGlobal
                 } else {
-                    val p = if (rawGlobal.isEmpty()) {
-                        LongShortRatioPoint(t, 0.5, 0.5, 1.0)
-                    } else if (globalIdx == rawGlobal.size) {
+                    val p = if (globalIdx == rawGlobal.size) {
                         rawGlobal.last()
                     } else if (globalIdx == 0) {
                         rawGlobal.first()
@@ -571,26 +623,28 @@ class PositionsViewModel(private val container: AppContainer) : ViewModel() {
             }
             alignedGlobal.add(globalPoint)
 
-            // 6. Funding Rate
-            while (existingFundingIdx < existingFunding.size && existingFunding[existingFundingIdx].timestamp < t) {
-                existingFundingIdx++
+            // 6. Funding Rate — exact raw settlement first, then the previously aligned exact
+            //    point, then the latest real raw point at or before the candle (same precedence
+            //    as the other series).
+            while (fundingIdx < rawFunding.size && rawFunding[fundingIdx].timestamp <= t) {
+                fundingIdx++
             }
-            val exactExistingFunding = if (existingFundingIdx < existingFunding.size && existingFunding[existingFundingIdx].timestamp == t) existingFunding[existingFundingIdx] else null
+            val exactRawFunding = if (fundingIdx > 0 && rawFunding[fundingIdx - 1].timestamp == t) rawFunding[fundingIdx - 1] else null
 
-            val fundingPoint = if (exactExistingFunding != null) {
-                exactExistingFunding
+            val fundingPoint = if (exactRawFunding != null) {
+                exactRawFunding
             } else {
-                while (fundingIdx < rawFunding.size && rawFunding[fundingIdx].timestamp <= t) {
-                    fundingIdx++
+                while (existingFundingIdx < existingFunding.size && existingFunding[existingFundingIdx].timestamp < t) {
+                    existingFundingIdx++
                 }
-                val p = if (rawFunding.isEmpty()) {
-                    FundingRatePoint(t, 0.0)
-                } else if (fundingIdx > 0) {
-                    rawFunding[fundingIdx - 1]
+                val exactExistingFunding = if (existingFundingIdx < existingFunding.size && existingFunding[existingFundingIdx].timestamp == t) existingFunding[existingFundingIdx] else null
+
+                if (exactExistingFunding != null) {
+                    exactExistingFunding
                 } else {
-                    rawFunding[0]
+                    val p = if (fundingIdx > 0) rawFunding[fundingIdx - 1] else rawFunding[0]
+                    p.copy(timestamp = t)
                 }
-                p.copy(timestamp = t)
             }
             alignedFunding.add(fundingPoint)
         }
@@ -607,6 +661,13 @@ class PositionsViewModel(private val container: AppContainer) : ViewModel() {
         globalList: List<LongShortRatioPoint>,
         fundingList: List<FundingRatePoint>
     ): List<Double> {
+        // HONESTY: with any input series missing no bias is computed. The engine would
+        // otherwise fill the gap with neutral placeholders and score them.
+        if (candles.isEmpty() || oiList.isEmpty() || accList.isEmpty() || posList.isEmpty() ||
+            takerList.isEmpty() || globalList.isEmpty() || fundingList.isEmpty()
+        ) {
+            return emptyList()
+        }
         val outputs = container.consensus.evaluateMultimodal(
             candles = candles,
             rawOi = oiList,
@@ -614,7 +675,8 @@ class PositionsViewModel(private val container: AppContainer) : ViewModel() {
             rawPos = posList,
             rawGlobal = globalList,
             rawTaker = takerList,
-            rawFunding = fundingList
+            rawFunding = fundingList,
+            labels = com.diveintocrypto.android.ui.i18n.consensusLabelsFor(container.language.value),
         )
         return outputs.map { it.weightedScore }
     }
@@ -659,6 +721,39 @@ private data class AlignedData(
     val funding: List<FundingRatePoint>
 )
 
+/** The six REST-aligned series, index-matched to the candles. */
+private data class SeriesSet(
+    val oi: List<OpenInterestPoint>,
+    val acc: List<LongShortRatioPoint>,
+    val pos: List<LongShortRatioPoint>,
+    val taker: List<TakerLongShortRatioPoint>,
+    val global: List<LongShortRatioPoint>,
+    val funding: List<FundingRatePoint>,
+)
+
+/**
+ * Series for a live tick. Unchanged, or — on a new candle — grown by one entry that
+ * repeats the newest REAL value re-stamped to the new candle, trimmed to the candle count.
+ */
+private fun carrySeries(src: PositionsUiState, grow: Boolean, openTime: Long, candleCount: Int): SeriesSet {
+    if (!grow) {
+        return SeriesSet(src.openInterest, src.accountRatio, src.positionRatio, src.takerRatio, src.globalRatio, src.fundingRate)
+    }
+    return SeriesSet(
+        oi = carryNewest(src.openInterest, candleCount) { it.copy(timestamp = openTime) },
+        acc = carryNewest(src.accountRatio, candleCount) { it.copy(timestamp = openTime) },
+        pos = carryNewest(src.positionRatio, candleCount) { it.copy(timestamp = openTime) },
+        taker = carryNewest(src.takerRatio, candleCount) { it.copy(timestamp = openTime) },
+        global = carryNewest(src.globalRatio, candleCount) { it.copy(timestamp = openTime) },
+        funding = carryNewest(src.fundingRate, candleCount) { it.copy(timestamp = openTime) },
+    )
+}
+
+private fun <T> carryNewest(series: List<T>, candleCount: Int, restamp: (T) -> T): List<T> {
+    if (series.isEmpty()) return series
+    return (series + restamp(series.last())).takeLast(candleCount)
+}
+
 data class PositionsUiState(
     val activeSymbol: String = "BTCUSDT",
     val period: String = "1h",
@@ -673,7 +768,8 @@ data class PositionsUiState(
     val closePrices: List<Double> = emptyList(),
     val candles: List<Candle> = emptyList(),
     val isLoading: Boolean = true,
-    val error: String? = null,
+    /** Classified load failure (localized by the screen); null when the data is current. */
+    val error: MarketDataFailure? = null,
     val lastUpdateMs: Long? = null,
     val priceChangeDirection: String = "NONE",
     /**
